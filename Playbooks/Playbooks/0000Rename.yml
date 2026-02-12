@@ -1,0 +1,10 @@
+---
+- hosts: my_servers
+  become: true
+  become_method: runas
+  become_user: Administrator
+  gather_facts: no
+  
+  tasks:
+    - name: Reboot
+      ansible.windows.win_reboot:
