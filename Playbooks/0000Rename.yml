@@ -4,11 +4,13 @@
   become_method: runas
   become_user: Administrator
   gather_facts: no
-  
-  tasks:
-    - name: Reboot
-      ansible.windows.win_reboot:
 
+
+  tasks:
+    - block:
+        - name: Reboot
+          ansible.windows.win_reboot:
+            reboot_timeout: 600
 
       rescue:
         - ansible.builtin.debug:
@@ -16,7 +18,7 @@
 
       always:
         - name: Export Semaphore UI log
-          ansible.builtin.include_tasks: "../task/export_semaphore_ui_txt.yml"
+          ansible.builtin.include_tasks: "../tasks/export_semaphore_ui_txt.yml"
           vars:
             playbook_name_for_report: "0000Rename"
             semaphore_project_id: "4"
