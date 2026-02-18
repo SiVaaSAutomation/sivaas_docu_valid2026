@@ -23,7 +23,7 @@
 
     # Pass/User als Ansible-Variablen übergeben (robuster als env in Semaphore)
     USER="{{ semaphore_user | default('testadmin') }}"
-    PASS="{{ semaphore_pass | default('') }}"
+    PASS="{{ semaphore_pass | default('Test1234!') }}"
 
     if [ -z "$PASS" ]; then
       echo "ERROR: semaphore_pass fehlt. Bitte als Semaphore Variable/Secret setzen." >&2
@@ -33,7 +33,7 @@
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht gefunden"; exit 127; }
     command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 nicht gefunden"; exit 127; }
 
-    # ✅ Fixer, immer auffindbarer Speicherort
+    # Fixer, immer auffindbarer Speicherort
     # Snap common exists usually in /var/snap/... (lesbar per sudo auch für ansible user)
     if [ -d "/var/snap/semaphore/common" ]; then
       REPORT_ROOT="/var/snap/semaphore/common/reports"
