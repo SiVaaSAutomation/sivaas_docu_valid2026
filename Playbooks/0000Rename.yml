@@ -16,7 +16,7 @@
             msg: "Playbook failed – exporting Semaphore UI log anyway."
 
       always:
-        - name: Export Semaphore UI log via bash script (runs on Semaphore VM)
+        - name: Export Semaphore UI log via temporary script (runs on Semaphore VM)
           delegate_to: localhost
           run_once: true
           become: false
@@ -25,15 +25,62 @@
           ansible.builtin.shell: |
             set -euo pipefail
 
-            # In Repo-Root wechseln (Semaphore checkt dein Repo irgendwo aus)
-            cd "$(git rev-parse --show-toplevel)"
+            TASK_ID="{{ semaphore_vars.task_details.id }}"
+            BASE_URL="http://localhost:3000"
+            PROJECT_ID="4"
 
-            # Optional Debug:
-            pwd
-            ls -lah
-            ls -lah tools || true
+            SEMA_USER="${SEMA_USER:-testadmin}"
+            SEMA_PASS="${SEMA_PASS:-Test1234!}"
 
-            bash tools/export_tasklog.sh "{{ semaphore_vars.task_details.id }}"
+            if [ -z "$SEMA_PASS" ]; then
+              echo "ERROR: SEMA_PASS not set"
+              exit 2
+            fi
+
+            REPORT_ROOT="/var/snap/semaphore/common/reports"
+            mkdir -p "$REPORT_ROOT"
+
+            TS=$(date +%Y%m%d_%H%M%S)
+            OUTDIR="${REPORT_ROOT}/${TS}_task${TASK_ID}"
+            mkdir -p "$OUTDIR"
+
+            COOKIE_FILE="${OUTDIR}/cookies.txt"
+            META_JSON="${OUTDIR}/task.json"
+            OUTPUT_TXT="${OUTDIR}/output.txt"
+            FINAL_TXT="${OUTDIR}/${TS}_task${TASK_ID}_semaphore_ui.txt"
+
+            # 1) Login (cookie erzeugen)
+            curl -s -c "$COOKIE_FILE" -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"auth\":\"${SEMA_USER}\",\"password\":\"${SEMA_PASS}\"}" \
+              "${BASE_URL}/api/auth/login" > /dev/null
+
+            # 2) Task Meta holen
+            curl -s -b "$COOKIE_FILE" \
+              "${BASE_URL}/api/project/${PROJECT_ID}/tasks/${TASK_ID}" > "$META_JSON"
+
+            # 3) Output holen (wie du es händisch gemacht hast)
+            curl -s -b "$COOKIE_FILE" \
+              "${BASE_URL}/api/project/${PROJECT_ID}/tasks/${TASK_ID}/output" > "$OUTPUT_TXT"
+
+            # 4) Header bauen
+            STATUS=$(python3 -c 'import json; d=json.load(open("'"$META_JSON"'")); print(d.get("status",""))')
+            CREATED=$(python3 -c 'import json; d=json.load(open("'"$META_JSON"'")); print(d.get("created",""))')
+            STARTED=$(python3 -c 'import json; d=json.load(open("'"$META_JSON"'")); print(d.get("start",""))')
+            ENDED=$(python3 -c 'import json; d=json.load(open("'"$META_JSON"'")); print(d.get("end",""))')
+
+            {
+              echo "Task #${TASK_ID}"
+              echo "Status: ${STATUS}"
+              echo "Created: ${CREATED}"
+              echo "Started: ${STARTED}"
+              echo "Ended: ${ENDED}"
+              echo ""
+              cat "$OUTPUT_TXT"
+              echo ""
+            } > "$FINAL_TXT"
+
+            echo "Export complete:"
+            echo "$FINAL_TXT"
           args:
             executable: /bin/bash
-
