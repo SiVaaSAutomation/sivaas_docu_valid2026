@@ -1,0 +1,69 @@
+---
+- name: Timestamp + TaskID vorbereiten
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.set_fact:
+    report_ts: "{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
+    semaphore_task_id: "{{ semaphore_vars.task_details.id | default('unknown') | string }}"
+
+- name: Report-Ordner anlegen
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.file:
+    path: "reports"
+    state: directory
+    mode: "0755"
+
+- name: Semaphore UI Output als TXT exportieren (UI-like)
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    BASE="http://localhost:3000"
+    PROJECT_ID="{{ semaphore_project_id | default('4') }}"
+    TASK_ID="{{ semaphore_task_id }}"
+    TS="{{ report_ts }}"
+    PB="{{ playbook_name_for_report | default('playbook') | regex_replace('[^A-Za-z0-9._-]', '_') }}"
+
+    USER="${SEMA_USER:-testadmin}"
+    PASS="${SEMA_PASS:-}"
+
+    if [ -z "$PASS" ]; then
+      echo "SEMA_PASS fehlt. Bitte in Semaphore als Environment Variable setzen." >&2
+      exit 2
+    fi
+
+    # Login -> Cookie
+    curl -s -c /tmp/sema_cookies.txt -X POST \
+      -H "Content-Type: application/json" \
+      -d "{\"auth\":\"$USER\",\"password\":\"$PASS\"}" \
+      "$BASE/api/auth/login" > /dev/null
+
+    # Metadaten + Output holen
+    META="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
+    OUT="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
+
+    # Header-Felder aus META lesen (robust mit python, aber nur inline)
+    STATUS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status",""))' "$META")"
+    AUTHOR="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("username",""))' "$META")"
+    STARTED="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("start",""))' "$META")"
+    DURATION="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("duration",""))' "$META")"
+
+    OUTFILE="reports/${TS}_task${TASK_ID}_${PB}_semaphore_ui.txt"
+
+    {
+      echo "${PB} > Task #${TASK_ID}"
+      echo "Status: ${STATUS}"
+      echo "Author: ${AUTHOR}"
+      echo "Started: ${STARTED}"
+      echo "Duration: ${DURATION}"
+      echo ""
+      echo "$OUT"
+      echo ""
+    } > "$OUTFILE"
+
+    echo "Wrote: $OUTFILE"
+  args:
+    executable: /bin/bash

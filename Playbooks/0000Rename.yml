@@ -8,3 +8,15 @@
   tasks:
     - name: Reboot
       ansible.windows.win_reboot:
+
+
+      rescue:
+        - ansible.builtin.debug:
+            msg: "Playbook failed – exporting Semaphore UI log anyway."
+
+      always:
+        - name: Export Semaphore UI log
+          ansible.builtin.include_tasks: "../task/export_semaphore_ui_txt.yml"
+          vars:
+            playbook_name_for_report: "0000Rename"
+            semaphore_project_id: "4"
