@@ -14,7 +14,7 @@
 
       rescue:
         - ansible.builtin.debug:
-            msg: "Playbook failed – exporting Semaphore UI log anyway."
+            msg: "Playbook failed - exporting Semaphore UI log anyway."
 
       always:
         - name: Export Semaphore UI log
