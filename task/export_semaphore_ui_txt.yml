@@ -2,6 +2,9 @@
 - name: Timestamp + TaskID vorbereiten
   delegate_to: localhost
   run_once: true
+  become: false
+  vars:
+    ansible_connection: local
   ansible.builtin.set_fact:
     report_ts: "{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
     semaphore_task_id: "{{ semaphore_vars.task_details.id | default('unknown') | string }}"
@@ -9,6 +12,9 @@
 - name: Report-Ordner anlegen
   delegate_to: localhost
   run_once: true
+  become: false
+  vars:
+    ansible_connection: local
   ansible.builtin.file:
     path: "reports"
     state: directory
@@ -17,10 +23,12 @@
 - name: Semaphore UI Output als TXT exportieren (UI-like)
   delegate_to: localhost
   run_once: true
+  become: false
+  vars:
+    ansible_connection: local
   no_log: true
   ansible.builtin.shell: |
     set -euo pipefail
-
     BASE="http://localhost:3000"
     PROJECT_ID="{{ semaphore_project_id | default('4') }}"
     TASK_ID="{{ semaphore_task_id }}"
@@ -35,17 +43,14 @@
       exit 2
     fi
 
-    # Login -> Cookie
     curl -s -c /tmp/sema_cookies.txt -X POST \
       -H "Content-Type: application/json" \
       -d "{\"auth\":\"$USER\",\"password\":\"$PASS\"}" \
       "$BASE/api/auth/login" > /dev/null
 
-    # Metadaten + Output holen
     META="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
     OUT="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
 
-    # Header-Felder aus META lesen (robust mit python, aber nur inline)
     STATUS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status",""))' "$META")"
     AUTHOR="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("username",""))' "$META")"
     STARTED="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("start",""))' "$META")"

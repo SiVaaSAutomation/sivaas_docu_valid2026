@@ -1,14 +1,13 @@
 ---
 - hosts: my_servers
-  become: true
-  become_method: runas
-  become_user: Administrator
   gather_facts: no
-
 
   tasks:
     - block:
         - name: Reboot
+          become: true
+          become_method: runas
+          become_user: Administrator
           ansible.windows.win_reboot:
             reboot_timeout: 600
 
@@ -22,3 +21,7 @@
           vars:
             playbook_name_for_report: "0000Rename"
             semaphore_project_id: "4"
+            ansible_connection: local   # <<< wichtig: Export läuft lokal
+          delegate_to: localhost
+          run_once: true
+          become: false                # <<< wichtig: kein runas/sudo auf localhost
