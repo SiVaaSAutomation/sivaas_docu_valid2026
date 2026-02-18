@@ -1,29 +1,31 @@
 ---
 - hosts: my_servers
+  become: true
+  become_method: runas
+  become_user: Administrator
   gather_facts: no
 
   tasks:
     - block:
         - name: Reboot
-          become: true
-          become_method: runas
-          become_user: Administrator
           ansible.windows.win_reboot:
             reboot_timeout: 600
 
       rescue:
-        - name: Playbook failed - exporting Semaphore UI log anyway
-          ansible.builtin.debug:
-            msg: "Playbook failed - exporting Semaphore UI log anyway."
+        - ansible.builtin.debug:
+            msg: "Playbook failed – exporting Semaphore UI log anyway."
 
       always:
-        - name: Export Semaphore UI log
-          ansible.builtin.include_tasks: "../task/export_semaphore_ui_txt.yml"
+        - name: Export Semaphore UI log via bash script (runs on Semaphore VM)
+          delegate_to: localhost
+          run_once: true
+          become: false
           vars:
-            playbook_name_for_report: "0000Rename"
-            semaphore_project_id: "4"
-            semaphore_base_url: "http://localhost:3000"
-            report_base_dir: "reports"
-            semaphore_user: "testadmin"
-            semaphore_pass: "Test1234!"
+            ansible_connection: local
+          ansible.builtin.shell: |
+            set -euo pipefail
 
+            # Export-Script liegt im Repo
+            bash tools/export_tasklog.sh "{{ semaphore_vars.task_details.id }}"
+          args:
+            executable: /bin/bash
