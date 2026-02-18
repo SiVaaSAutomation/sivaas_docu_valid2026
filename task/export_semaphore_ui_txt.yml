@@ -1,5 +1,5 @@
 ---
-- name: Prepare timestamp + task id
+- name: Prepare timestamp + task id (Semaphore vars)
   delegate_to: localhost
   run_once: true
   become: false
@@ -7,20 +7,11 @@
     report_ts: "{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
     semaphore_task_id: "{{ semaphore_vars.task_details.id | default('unknown') | string }}"
 
-- name: Ensure reports directory exists
+- name: Export Semaphore task meta + output via cookies.txt into fixed report folder
   delegate_to: localhost
   run_once: true
   become: false
-  ansible.builtin.file:
-    path: "reports"
-    state: directory
-    mode: "0755"
-
-- name: Login via cookie and export Semaphore UI log
-  delegate_to: localhost
-  run_once: true
-  become: false
-  no_log: false   # wenn alles läuft → true setzen
+  no_log: false   # sobald es läuft -> true (wegen Passwort)
   ansible.builtin.shell: |
     set -euo pipefail
 
@@ -30,54 +21,70 @@
     TS="{{ report_ts }}"
     PB="{{ playbook_name_for_report | default('playbook') | regex_replace('[^A-Za-z0-9._-]', '_') }}"
 
+    # Pass/User als Ansible-Variablen übergeben (robuster als env in Semaphore)
     USER="{{ semaphore_user | default('testadmin') }}"
     PASS="{{ semaphore_pass | default('') }}"
 
     if [ -z "$PASS" ]; then
-      echo "ERROR: semaphore_pass fehlt."
+      echo "ERROR: semaphore_pass fehlt. Bitte als Semaphore Variable/Secret setzen." >&2
       exit 2
     fi
 
-    # === 1) Cookie-Datei erzeugen ===
-    COOKIE_FILE="cookies.txt"
+    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht gefunden"; exit 127; }
+    command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 nicht gefunden"; exit 127; }
 
+    # ✅ Fixer, immer auffindbarer Speicherort
+    # Snap common exists usually in /var/snap/... (lesbar per sudo auch für ansible user)
+    if [ -d "/var/snap/semaphore/common" ]; then
+      REPORT_ROOT="/var/snap/semaphore/common/reports"
+    elif [ -d "/root/snap/semaphore/common" ]; then
+      REPORT_ROOT="/root/snap/semaphore/common/reports"
+    else
+      # Fallback: current dir
+      REPORT_ROOT="./reports"
+    fi
+
+    mkdir -p "$REPORT_ROOT"
+
+    COOKIE_FILE="/tmp/semaphore_cookies_${TASK_ID}.txt"
+    META_FILE="/tmp/semaphore_task_${TASK_ID}.json"
+    OUT_FILE="/tmp/semaphore_task_${TASK_ID}_output.txt"
+
+    # 1) Login -> Cookie-Datei (so wie bei dir händisch)
     curl -s -c "$COOKIE_FILE" -X POST \
       -H "Content-Type: application/json" \
       -d "{\"auth\":\"$USER\",\"password\":\"$PASS\"}" \
       "$BASE/api/auth/login" > /dev/null
 
-    if [ ! -f "$COOKIE_FILE" ]; then
-      echo "ERROR: Cookie file not created"
-      exit 3
-    fi
+    # 2) Task Meta holen
+    curl -s -b "$COOKIE_FILE" \
+      "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID" > "$META_FILE"
 
-    # === 2) Task-Meta abrufen ===
-    META="$(curl -s -b "$COOKIE_FILE" \
-      "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
+    # 3) Task Output holen (wie händisch > output.txt)
+    curl -s -b "$COOKIE_FILE" \
+      "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output" > "$OUT_FILE"
 
-    # === 3) UI-Output abrufen ===
-    OUT="$(curl -s -b "$COOKIE_FILE" \
-      "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
+    # 4) Header-Felder aus JSON ziehen (ohne jq, nur python)
+    STATUS="$(python3 -c 'import json; d=json.load(open("'"$META_FILE"'")); print(d.get("status",""))')"
+    CREATED="$(python3 -c 'import json; d=json.load(open("'"$META_FILE"'")); print(d.get("created",""))')"
+    STARTED="$(python3 -c 'import json; d=json.load(open("'"$META_FILE"'")); print(d.get("start",""))')"
+    ENDED="$(python3 -c 'import json; d=json.load(open("'"$META_FILE"'")); print(d.get("end",""))')"
 
-    # === 4) Meta-Felder extrahieren ===
-    STATUS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status",""))' "$META")"
-    AUTHOR="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("username",""))' "$META")"
-    STARTED="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("start",""))' "$META")"
-    DURATION="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("duration",""))' "$META")"
-
-    OUTFILE="reports/${TS}_task${TASK_ID}_${PB}_semaphore_ui.txt"
+    # 5) TXT im UI-Stil schreiben (Header + dann 1:1 Output)
+    FINAL_TXT="${REPORT_ROOT}/${TS}_task${TASK_ID}_${PB}_semaphore_ui.txt"
 
     {
-      echo "${PB} > Task #${TASK_ID}"
+      echo "${PB} Task #${TASK_ID}"
       echo "Status: ${STATUS}"
-      echo "Author: ${AUTHOR}"
+      echo "Author: {{ semaphore_vars.task_details.username | default('') }}"
+      echo "Created: ${CREATED}"
       echo "Started: ${STARTED}"
-      echo "Duration: ${DURATION}"
+      echo "Ended: ${ENDED}"
       echo ""
-      echo "$OUT"
+      cat "$OUT_FILE"
       echo ""
-    } > "$OUTFILE"
+    } > "$FINAL_TXT"
 
-    echo "Wrote: $OUTFILE"
+    echo "Wrote: $FINAL_TXT"
   args:
     executable: /bin/bash
