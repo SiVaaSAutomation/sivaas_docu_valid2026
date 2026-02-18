@@ -1,15 +1,13 @@
 ---
-- name: Ensure curl is installed on Semaphore VM (local)
+- name: Ensure curl is installed on Semaphore VM (local, OS-agnostic)
   delegate_to: localhost
   run_once: true
   vars:
     ansible_connection: local
   become: true
-  become_method: sudo
-  ansible.builtin.apt:
+  ansible.builtin.package:
     name: curl
     state: present
-    update_cache: true
 
 - name: Timestamp + TaskID vorbereiten
   delegate_to: localhost
@@ -21,24 +19,13 @@
     report_ts: "{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
     semaphore_task_id: "{{ semaphore_vars.task_details.id | default('unknown') | string }}"
 
-- name: Report-Ordner anlegen (relativ, wird gleich auf Repo-Root korrigiert)
-  delegate_to: localhost
-  run_once: true
-  become: false
-  vars:
-    ansible_connection: local
-  ansible.builtin.file:
-    path: "reports"
-    state: directory
-    mode: "0755"
-
 - name: Semaphore UI Output als TXT exportieren (UI-like) + Git commit/push
   delegate_to: localhost
   run_once: true
   become: false
   vars:
     ansible_connection: local
-  no_log: false   # <<< wenn alles läuft: auf true setzen (Passwort!)
+  no_log: false   # wenn es läuft: auf true setzen (SEMA_PASS!)
   ansible.builtin.shell: |
     set -euo pipefail
 
@@ -51,29 +38,23 @@
     USER="${SEMA_USER:-testadmin}"
     PASS="${SEMA_PASS:-}"
 
-    echo "DEBUG pwd(before)=$(pwd)"
-    echo "DEBUG BASE=$BASE PROJECT_ID=$PROJECT_ID TASK_ID=$TASK_ID TS=$TS PB=$PB"
-
     if [ -z "$PASS" ]; then
       echo "ERROR: SEMA_PASS fehlt. Bitte in Semaphore als Environment Variable setzen." >&2
       exit 2
     fi
 
-    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht installiert (apt task should have installed it)"; exit 127; }
+    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht verfügbar (package install fehlgeschlagen?)"; exit 127; }
     command -v git  >/dev/null 2>&1 || { echo "ERROR: git nicht installiert"; exit 127; }
     command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 nicht installiert"; exit 127; }
 
-    # In Repo-Root wechseln
+    # In Repo-Root wechseln (damit reports/ wirklich im Git-Checkout liegt)
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      REPO_ROOT="$(git rev-parse --show-toplevel)"
-      cd "$REPO_ROOT"
+      cd "$(git rev-parse --show-toplevel)"
     else
-      echo "ERROR: Nicht in einem Git-Working-Tree. Semaphore working dir ist unerwartet." >&2
-      echo "DEBUG pwd(after)=$(pwd)"
+      echo "ERROR: Nicht in einem Git-Working-Tree (Semaphore working dir unerwartet)." >&2
       exit 3
     fi
 
-    echo "DEBUG repo_root=$(pwd)"
     mkdir -p reports
 
     # Login -> Cookie
@@ -104,25 +85,20 @@
     } > "$OUTFILE"
 
     echo "Wrote: $OUTFILE"
-    ls -lah reports | tail -n 20
 
+    # Git commit & push
     git config user.email "semaphore@local"
     git config user.name "Semaphore Bot"
 
     git add "$OUTFILE"
 
     if git diff --cached --quiet; then
-      echo "DEBUG: Keine Änderungen zum committen."
+      echo "No changes to commit."
       exit 0
     fi
 
     git commit -m "Add Semaphore UI report: task ${TASK_ID} (${PB})" >/dev/null
-
-    echo "DEBUG: pushing..."
     git push
-
     echo "DONE: pushed report to remote."
   args:
     executable: /bin/bash
-  environment:
-    DEBIAN_FRONTEND: noninteractive
