@@ -2,9 +2,10 @@
 - name: Ensure curl is installed on Semaphore VM (local)
   delegate_to: localhost
   run_once: true
-  become: true
   vars:
     ansible_connection: local
+  become: true
+  become_method: sudo
   ansible.builtin.apt:
     name: curl
     state: present
@@ -41,7 +42,6 @@
   ansible.builtin.shell: |
     set -euo pipefail
 
-    # ---- Konfiguration ----
     BASE="http://localhost:3000"
     PROJECT_ID="{{ semaphore_project_id | default('4') }}"
     TASK_ID="{{ semaphore_task_id }}"
@@ -51,7 +51,6 @@
     USER="${SEMA_USER:-testadmin}"
     PASS="${SEMA_PASS:-}"
 
-    # ---- Debug Basisinfos ----
     echo "DEBUG pwd(before)=$(pwd)"
     echo "DEBUG BASE=$BASE PROJECT_ID=$PROJECT_ID TASK_ID=$TASK_ID TS=$TS PB=$PB"
 
@@ -60,12 +59,11 @@
       exit 2
     fi
 
-    # ---- Tools prüfen (damit Export nicht still scheitert) ----
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht installiert (apt task should have installed it)"; exit 127; }
     command -v git  >/dev/null 2>&1 || { echo "ERROR: git nicht installiert"; exit 127; }
     command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 nicht installiert"; exit 127; }
 
-    # ---- In Repo-Root wechseln (damit reports/ wirklich im Git-Checkout liegt) ----
+    # In Repo-Root wechseln
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       REPO_ROOT="$(git rev-parse --show-toplevel)"
       cd "$REPO_ROOT"
@@ -78,17 +76,15 @@
     echo "DEBUG repo_root=$(pwd)"
     mkdir -p reports
 
-    # ---- Semaphore Login -> Cookie ----
+    # Login -> Cookie
     curl -s -c /tmp/sema_cookies.txt -X POST \
       -H "Content-Type: application/json" \
       -d "{\"auth\":\"$USER\",\"password\":\"$PASS\"}" \
       "$BASE/api/auth/login" > /dev/null
 
-    # ---- Metadaten + Output holen ----
     META="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
     OUT="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
 
-    # Wenn META kein JSON ist (z.B. 401/404 HTML), bricht json.loads ab -> klarer Fehler
     STATUS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status",""))' "$META")"
     AUTHOR="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("username",""))' "$META")"
     STARTED="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("start",""))' "$META")"
@@ -108,10 +104,8 @@
     } > "$OUTFILE"
 
     echo "Wrote: $OUTFILE"
-    echo "DEBUG ls reports:"
     ls -lah reports | tail -n 20
 
-    # ---- Git commit & push ----
     git config user.email "semaphore@local"
     git config user.name "Semaphore Bot"
 
@@ -130,3 +124,5 @@
     echo "DONE: pushed report to remote."
   args:
     executable: /bin/bash
+  environment:
+    DEBIAN_FRONTEND: noninteractive
