@@ -25,7 +25,15 @@
           ansible.builtin.shell: |
             set -euo pipefail
 
-            # Export-Script liegt im Repo
+            # In Repo-Root wechseln (Semaphore checkt dein Repo irgendwo aus)
+            cd "$(git rev-parse --show-toplevel)"
+
+            # Optional Debug:
+            pwd
+            ls -lah
+            ls -lah tools || true
+
             bash tools/export_tasklog.sh "{{ semaphore_vars.task_details.id }}"
           args:
             executable: /bin/bash
+
