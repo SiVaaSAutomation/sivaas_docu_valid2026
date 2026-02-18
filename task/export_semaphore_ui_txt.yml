@@ -1,4 +1,15 @@
 ---
+- name: Ensure curl is installed on Semaphore VM (local)
+  delegate_to: localhost
+  run_once: true
+  become: true
+  vars:
+    ansible_connection: local
+  ansible.builtin.apt:
+    name: curl
+    state: present
+    update_cache: true
+
 - name: Timestamp + TaskID vorbereiten
   delegate_to: localhost
   run_once: true
@@ -50,7 +61,7 @@
     fi
 
     # ---- Tools prüfen (damit Export nicht still scheitert) ----
-    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht installiert (apt install curl)"; exit 127; }
+    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht installiert (apt task should have installed it)"; exit 127; }
     command -v git  >/dev/null 2>&1 || { echo "ERROR: git nicht installiert"; exit 127; }
     command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 nicht installiert"; exit 127; }
 
@@ -101,11 +112,9 @@
     ls -lah reports | tail -n 20
 
     # ---- Git commit & push ----
-    # Git Identity setzen (lokal im Repo)
     git config user.email "semaphore@local"
     git config user.name "Semaphore Bot"
 
-    # Nur committen, wenn wirklich etwas geändert/neu ist
     git add "$OUTFILE"
 
     if git diff --cached --quiet; then
