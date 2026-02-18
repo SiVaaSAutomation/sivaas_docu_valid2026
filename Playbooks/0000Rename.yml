@@ -12,7 +12,8 @@
             reboot_timeout: 600
 
       rescue:
-        - ansible.builtin.debug:
+        - name: Playbook failed - exporting Semaphore UI log anyway
+          ansible.builtin.debug:
             msg: "Playbook failed - exporting Semaphore UI log anyway."
 
       always:
@@ -21,7 +22,3 @@
           vars:
             playbook_name_for_report: "0000Rename"
             semaphore_project_id: "4"
-            ansible_connection: local   # <<< wichtig: Export läuft lokal
-          delegate_to: localhost
-          run_once: true
-          become: false                # <<< wichtig: kein runas/sudo auf localhost
