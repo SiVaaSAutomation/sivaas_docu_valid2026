@@ -20,36 +20,45 @@
     state: directory
     mode: "0755"
 
+
 - name: Semaphore UI Output als TXT exportieren (UI-like)
   delegate_to: localhost
   run_once: true
   become: false
   vars:
     ansible_connection: local
-  no_log: true
+  no_log: false
   ansible.builtin.shell: |
-    set -euo pipefail
+    set -euxo pipefail
+
     BASE="http://localhost:3000"
     PROJECT_ID="{{ semaphore_project_id | default('4') }}"
     TASK_ID="{{ semaphore_task_id }}"
     TS="{{ report_ts }}"
     PB="{{ playbook_name_for_report | default('playbook') | regex_replace('[^A-Za-z0-9._-]', '_') }}"
 
+    echo "DEBUG BASE=$BASE PROJECT_ID=$PROJECT_ID TASK_ID=$TASK_ID TS=$TS PB=$PB"
+    echo "DEBUG SEMA_USER=${SEMA_USER:-<unset>}"
+    echo "DEBUG SEMA_PASS length=${#SEMA_PASS}"
+
     USER="${SEMA_USER:-testadmin}"
     PASS="${SEMA_PASS:-}"
 
     if [ -z "$PASS" ]; then
-      echo "SEMA_PASS fehlt. Bitte in Semaphore als Environment Variable setzen." >&2
+      echo "ERROR: SEMA_PASS fehlt (Environment Variable ist leer/nicht gesetzt)" >&2
       exit 2
     fi
 
     curl -s -c /tmp/sema_cookies.txt -X POST \
       -H "Content-Type: application/json" \
       -d "{\"auth\":\"$USER\",\"password\":\"$PASS\"}" \
-      "$BASE/api/auth/login" > /dev/null
+      "$BASE/api/auth/login" | head -c 200; echo
 
     META="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
+    echo "DEBUG META first 200 chars: $(echo "$META" | head -c 200)"
+
     OUT="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
+    echo "DEBUG OUT first 200 chars: $(echo "$OUT" | head -c 200)"
 
     STATUS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status",""))' "$META")"
     AUTHOR="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("username",""))' "$META")"
