@@ -29,8 +29,8 @@
             BASE_URL="http://localhost:3000"
             PROJECT_ID="4"
 
-            SEMA_USER="${SEMA_USER:-testadmin}"
-            SEMA_PASS="${SEMA_PASS:-Test1234!}"
+            SEMA_USER="testadmin"
+            SEMA_PASS="Test1234!"
 
             if [ -z "$SEMA_PASS" ]; then
               echo "ERROR: SEMA_PASS not set"
@@ -50,10 +50,10 @@
             FINAL_TXT="${OUTDIR}/${TS}_task${TASK_ID}_semaphore_ui.txt"
 
             # 1) Login (cookie erzeugen)
-            curl -s -c "$COOKIE_FILE" -X POST \
+            curl -c "$COOKIE_FILE" -X POST \
               -H "Content-Type: application/json" \
-              -d "{\"auth\":\"${SEMA_USER}\",\"password\":\"${SEMA_PASS}\"}" \
-              "${BASE_URL}/api/auth/login" > /dev/null
+              -d '{"auth":"testadmin","password":"Test1234!"}'' \
+              http://localhost:3000/api/auth/login 
 
             # 2) Task Meta holen
             curl -s -b "$COOKIE_FILE" \
