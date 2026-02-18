@@ -9,7 +9,7 @@
     report_ts: "{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
     semaphore_task_id: "{{ semaphore_vars.task_details.id | default('unknown') | string }}"
 
-- name: Report-Ordner anlegen
+- name: Report-Ordner anlegen (relativ, wird gleich auf Repo-Root korrigiert)
   delegate_to: localhost
   run_once: true
   become: false
@@ -20,46 +20,64 @@
     state: directory
     mode: "0755"
 
-
-- name: Semaphore UI Output als TXT exportieren (UI-like)
+- name: Semaphore UI Output als TXT exportieren (UI-like) + Git commit/push
   delegate_to: localhost
   run_once: true
   become: false
   vars:
     ansible_connection: local
-  no_log: false
+  no_log: false   # <<< wenn alles läuft: auf true setzen (Passwort!)
   ansible.builtin.shell: |
-    set -euxo pipefail
+    set -euo pipefail
 
+    # ---- Konfiguration ----
     BASE="http://localhost:3000"
     PROJECT_ID="{{ semaphore_project_id | default('4') }}"
     TASK_ID="{{ semaphore_task_id }}"
     TS="{{ report_ts }}"
     PB="{{ playbook_name_for_report | default('playbook') | regex_replace('[^A-Za-z0-9._-]', '_') }}"
 
-    echo "DEBUG BASE=$BASE PROJECT_ID=$PROJECT_ID TASK_ID=$TASK_ID TS=$TS PB=$PB"
-    echo "DEBUG SEMA_USER=${SEMA_USER:-<unset>}"
-    echo "DEBUG SEMA_PASS length=$(printf %s "${SEMA_PASS:-}" | wc -c)"
-
     USER="${SEMA_USER:-testadmin}"
     PASS="${SEMA_PASS:-}"
 
+    # ---- Debug Basisinfos ----
+    echo "DEBUG pwd(before)=$(pwd)"
+    echo "DEBUG BASE=$BASE PROJECT_ID=$PROJECT_ID TASK_ID=$TASK_ID TS=$TS PB=$PB"
+
     if [ -z "$PASS" ]; then
-      echo "ERROR: SEMA_PASS fehlt (Environment Variable ist leer/nicht gesetzt)" >&2
+      echo "ERROR: SEMA_PASS fehlt. Bitte in Semaphore als Environment Variable setzen." >&2
       exit 2
     fi
 
+    # ---- Tools prüfen (damit Export nicht still scheitert) ----
+    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl nicht installiert (apt install curl)"; exit 127; }
+    command -v git  >/dev/null 2>&1 || { echo "ERROR: git nicht installiert"; exit 127; }
+    command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 nicht installiert"; exit 127; }
+
+    # ---- In Repo-Root wechseln (damit reports/ wirklich im Git-Checkout liegt) ----
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      REPO_ROOT="$(git rev-parse --show-toplevel)"
+      cd "$REPO_ROOT"
+    else
+      echo "ERROR: Nicht in einem Git-Working-Tree. Semaphore working dir ist unerwartet." >&2
+      echo "DEBUG pwd(after)=$(pwd)"
+      exit 3
+    fi
+
+    echo "DEBUG repo_root=$(pwd)"
+    mkdir -p reports
+
+    # ---- Semaphore Login -> Cookie ----
     curl -s -c /tmp/sema_cookies.txt -X POST \
       -H "Content-Type: application/json" \
       -d "{\"auth\":\"$USER\",\"password\":\"$PASS\"}" \
-      "$BASE/api/auth/login" | head -c 200; echo
+      "$BASE/api/auth/login" > /dev/null
 
+    # ---- Metadaten + Output holen ----
     META="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
-    echo "DEBUG META first 200 chars: $(echo "$META" | head -c 200)"
-
     OUT="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
-    echo "DEBUG OUT first 200 chars: $(echo "$OUT" | head -c 200)"
 
+    # Wenn META kein JSON ist (z.B. 401/404 HTML), bricht json.loads ab -> klarer Fehler
     STATUS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status",""))' "$META")"
     AUTHOR="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("username",""))' "$META")"
     STARTED="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("start",""))' "$META")"
@@ -79,5 +97,27 @@
     } > "$OUTFILE"
 
     echo "Wrote: $OUTFILE"
+    echo "DEBUG ls reports:"
+    ls -lah reports | tail -n 20
+
+    # ---- Git commit & push ----
+    # Git Identity setzen (lokal im Repo)
+    git config user.email "semaphore@local"
+    git config user.name "Semaphore Bot"
+
+    # Nur committen, wenn wirklich etwas geändert/neu ist
+    git add "$OUTFILE"
+
+    if git diff --cached --quiet; then
+      echo "DEBUG: Keine Änderungen zum committen."
+      exit 0
+    fi
+
+    git commit -m "Add Semaphore UI report: task ${TASK_ID} (${PB})" >/dev/null
+
+    echo "DEBUG: pushing..."
+    git push
+
+    echo "DONE: pushed report to remote."
   args:
     executable: /bin/bash
