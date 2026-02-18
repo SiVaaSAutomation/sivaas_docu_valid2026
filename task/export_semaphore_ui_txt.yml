@@ -1,16 +1,5 @@
 ---
-# File: tasks/export_semaphore_ui_txt.yml
-# Usage (in your playbook, in always):
-# - include_tasks: "../tasks/export_semaphore_ui_txt.yml"
-#   vars:
-#     playbook_name_for_report: "0000Rename"
-#     semaphore_project_id: "4"
-#     semaphore_base_url: "http://localhost:3000"
-#     report_base_dir: "reports"
-#     semaphore_user: "testadmin"
-#     semaphore_pass: "<PASSWORD>"   # better: from Semaphore variable/secret
-
-- name: Ensure report vars (timestamp + task id)
+- name: Prepare timestamp + task id
   delegate_to: localhost
   run_once: true
   become: false
@@ -18,21 +7,20 @@
     report_ts: "{{ lookup('pipe','date +%Y%m%d_%H%M%S') }}"
     semaphore_task_id: "{{ semaphore_vars.task_details.id | default('unknown') | string }}"
 
-- name: Ensure report directory exists (local)
+- name: Ensure reports directory exists
   delegate_to: localhost
   run_once: true
   become: false
   ansible.builtin.file:
-    path: "{{ report_base_dir | default('reports') }}"
+    path: "reports"
     state: directory
     mode: "0755"
 
-- name: Export Semaphore UI task output as structured TXT (local)
+- name: Login via cookie and export Semaphore UI log
   delegate_to: localhost
   run_once: true
   become: false
-  # Sobald es läuft: auf true setzen, damit Passwort nicht im Log landet
-  no_log: false
+  no_log: false   # wenn alles läuft → true setzen
   ansible.builtin.shell: |
     set -euo pipefail
 
@@ -40,40 +28,44 @@
     PROJECT_ID="{{ semaphore_project_id | default('4') }}"
     TASK_ID="{{ semaphore_task_id }}"
     TS="{{ report_ts }}"
-    OUTDIR="{{ report_base_dir | default('reports') }}"
+    PB="{{ playbook_name_for_report | default('playbook') | regex_replace('[^A-Za-z0-9._-]', '_') }}"
 
-    # These should be passed as vars from Semaphore/Template
     USER="{{ semaphore_user | default('testadmin') }}"
     PASS="{{ semaphore_pass | default('') }}"
 
-    PB="{{ playbook_name_for_report | default('playbook') | regex_replace('[^A-Za-z0-9._-]', '_') }}"
-
     if [ -z "$PASS" ]; then
-      echo "ERROR: semaphore_pass is empty. Provide it via Semaphore variables/secrets." >&2
+      echo "ERROR: semaphore_pass fehlt."
       exit 2
     fi
 
-    # Basic tool checks (curl + python3 required)
-    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl not found"; exit 127; }
-    command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found"; exit 127; }
+    # === 1) Cookie-Datei erzeugen ===
+    COOKIE_FILE="cookies.txt"
 
-    # Login -> cookie
-    curl -s -c /tmp/sema_cookies.txt -X POST \
+    curl -s -c "$COOKIE_FILE" -X POST \
       -H "Content-Type: application/json" \
       -d "{\"auth\":\"$USER\",\"password\":\"$PASS\"}" \
       "$BASE/api/auth/login" > /dev/null
 
-    # Get meta + output (UI log)
-    META="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
-    OUT="$(curl -s -b /tmp/sema_cookies.txt "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
+    if [ ! -f "$COOKIE_FILE" ]; then
+      echo "ERROR: Cookie file not created"
+      exit 3
+    fi
 
-    # Extract header fields from META (robust)
+    # === 2) Task-Meta abrufen ===
+    META="$(curl -s -b "$COOKIE_FILE" \
+      "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID")"
+
+    # === 3) UI-Output abrufen ===
+    OUT="$(curl -s -b "$COOKIE_FILE" \
+      "$BASE/api/project/$PROJECT_ID/tasks/$TASK_ID/output")"
+
+    # === 4) Meta-Felder extrahieren ===
     STATUS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status",""))' "$META")"
     AUTHOR="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("username",""))' "$META")"
     STARTED="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("start",""))' "$META")"
     DURATION="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("duration",""))' "$META")"
 
-    OUTFILE="${OUTDIR}/${TS}_task${TASK_ID}_${PB}_semaphore_ui.txt"
+    OUTFILE="reports/${TS}_task${TASK_ID}_${PB}_semaphore_ui.txt"
 
     {
       echo "${PB} > Task #${TASK_ID}"
@@ -82,7 +74,6 @@
       echo "Started: ${STARTED}"
       echo "Duration: ${DURATION}"
       echo ""
-      # 1:1 the log lines you see in Semaphore UI
       echo "$OUT"
       echo ""
     } > "$OUTFILE"
