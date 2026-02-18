@@ -39,7 +39,7 @@
 
     echo "DEBUG BASE=$BASE PROJECT_ID=$PROJECT_ID TASK_ID=$TASK_ID TS=$TS PB=$PB"
     echo "DEBUG SEMA_USER=${SEMA_USER:-<unset>}"
-    echo "DEBUG SEMA_PASS length=${#SEMA_PASS}"
+    echo "DEBUG SEMA_PASS length=$(printf %s "${SEMA_PASS:-}" | wc -c)"
 
     USER="${SEMA_USER:-testadmin}"
     PASS="${SEMA_PASS:-}"
