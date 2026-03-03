@@ -1,0 +1,130 @@
+---
+- name: Enable global Ansible logging + higher verbosity + YAML callback formatting  # Was dieses Playbook insgesamt tut
+  hosts: localhost                                                              # Zielhost-Gruppe: deine Ansible-VM (Controller)
+  become: true                                                                    # Wir brauchen Root-Rechte für /etc/ansible und /var/log
+  gather_facts: false                                                             # Spart Zeit; wir brauchen keine Facts für reine File/Config-Änderungen
+
+  vars:
+    # ---- Pfade / Dateien (anpassbar) ----
+    ansible_cfg_path: /etc/ansible/ansible.cfg                                    # Globale Ansible-Konfigurationsdatei (laut Doku Suchpfade)
+    ansible_log_path: /var/log/ansible/ansible.log                                # Zentrale Logdatei auf dem Controller (log_path)
+
+    # ---- Detailgrad (anpassbar) ----
+    ansible_default_verbosity: 2                                                  # Entspricht -vv als Default-Verbosity (0..n)
+    ansible_log_verbosity: 3                                                      # Erhöht Verbosity NUR fürs Logfile (wenn höher als Display-Verbosity)
+    ansible_display_args_to_stdout: false                                         # Wenn true: Task-Argumente im Header (Achtung: Secrets möglich)
+
+    # ---- Callback / Ausgabeformat (anpassbar) ----
+    ansible_stdout_callback: default                                              # Haupt-stdout-callback (nur einer möglich)
+    ansible_callback_result_format: yaml                                          # Moderne YAML-Formatierung im default callback (ansible-core >= 2.13)
+    ansible_callback_format_pretty: true                                          # Pretty-Print für JSON/YAML Ergebnisse (Human-readability)
+
+  tasks:
+    - name: Ensure /etc/ansible directory exists                                  # Stellt sicher, dass /etc/ansible existiert
+      ansible.builtin.file:                                                      # Nutzt das file-Modul, weil es idempotent ist
+        path: /etc/ansible                                                       # Zielpfad
+        state: directory                                                         # Verzeichniszustand erzwingen
+        mode: "0755"                                                             # Standardrechte: root/alle lesbar, owner schreibbar
+
+    - name: Ensure global ansible.cfg exists                                      # Legt ansible.cfg an, falls noch nicht vorhanden
+      ansible.builtin.file:
+        path: "{{ ansible_cfg_path }}"                                            # Pfad zur Konfigurationsdatei
+        state: touch                                                             # "touch" erzeugt Datei, wenn sie fehlt, ohne Inhalt zu überschreiben
+        mode: "0644"                                                             # Lesbar für alle, schreibbar nur für root
+
+    - name: Ensure [defaults] section header exists                              # Ohne [defaults] kann man config-Keys nicht sauber einfügen
+      ansible.builtin.lineinfile:                                                # lineinfile ist robust und braucht keine Extra-Collections
+        path: "{{ ansible_cfg_path }}"                                            # Datei, die bearbeitet wird
+        line: "[defaults]"                                                       # Abschnittsheader
+        insertafter: EOF                                                         # Falls nicht vorhanden: ans Ende hängen
+        state: present                                                           # Sicherstellen, dass die Zeile existiert
+
+    # ----------------------------
+    # 1) Globales Logging aktivieren
+    # ----------------------------
+    - name: Set log_path (enable file logging globally)                          # Aktiviert Logging in eine Datei (wenn gesetzt; sonst disabled)
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"                                            # ansible.cfg bearbeiten
+        regexp: '^\s*log_path\s*='                                                # Falls log_path schon existiert: ersetzen
+        line: "log_path = {{ ansible_log_path }}"                                 # Zielwert
+        insertafter: '^\[defaults\]\s*$'                                          # Direkt nach [defaults] einfügen, falls neu
+        state: present                                                           # Muss vorhanden sein
+        backup: true                                                             # Backup erstellen (Audit/Recovery-freundlich)
+
+    - name: Ensure log file exists (so Ansible can write immediately)            # Ansible loggt nur, wenn Datei beschreibbar ist
+      ansible.builtin.file:
+        path: "{{ ansible_log_path }}"                                            # Logdatei-Pfad
+        state: touch                                                             # Datei anlegen, falls fehlt
+        mode: "0664"                                                             # Group-writable; sinnvoll wenn Ansible unter anderem User läuft
+        owner: root                                                              # Owner root (konservativ)
+        group: adm                                                               # Gruppe adm (Ubuntu/Debian üblich für Log-Leser) – bei Bedarf anpassen
+      ignore_errors: true                                                        # Falls Gruppe 'adm' nicht existiert, soll Play nicht hart failen
+
+    # ----------------------------
+    # 2) Detailgrad erhöhen
+    # ----------------------------
+    - name: Set default verbosity (equivalent to number of -v)                   # Legt Standard-Verbosity fest (Display-Ausgabe)
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"
+        regexp: '^\s*verbosity\s*='                                               # Key: verbosity (DEFAULT_VERBOSITY)
+        line: "verbosity = {{ ansible_default_verbosity }}"                       # z.B. 2 => -vv
+        insertafter: '^\[defaults\]\s*$'
+        state: present
+        backup: true
+
+    - name: Set log_verbosity (more detail in log file if higher than display)   # Erhöht Detailgrad speziell fürs Logfile (wenn höher als Display)
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"
+        regexp: '^\s*log_verbosity\s*='                                           # Key: log_verbosity (LOG_VERBOSITY)
+        line: "log_verbosity = {{ ansible_log_verbosity }}"                       # z.B. 3 => -vvv im Log
+        insertafter: '^\[defaults\]\s*$'
+        state: present
+        backup: true
+
+    - name: Control display_args_to_stdout (optional; may expose secrets)        # Optional: Task-Argumente im Header zur Unterscheidung ähnlicher Tasks
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"
+        regexp: '^\s*display_args_to_stdout\s*='                                  # Key: display_args_to_stdout
+        line: "display_args_to_stdout = {{ ansible_display_args_to_stdout | ternary('True','False') }}"
+        insertafter: '^\[defaults\]\s*$'
+        state: present
+        backup: true
+
+    # ----------------------------
+    # 3) Callback/Output-Format (modern)
+    # ----------------------------
+    - name: Set stdout_callback (main output callback)                           # Nur ein stdout-callback ist möglich (default/…)
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"
+        regexp: '^\s*stdout_callback\s*='                                         # Key: stdout_callback (DEFAULT_STDOUT_CALLBACK)
+        line: "stdout_callback = {{ ansible_stdout_callback }}"                   # 'default' ist Standard; wir nutzen default + result_format
+        insertafter: '^\[defaults\]\s*$'
+        state: present
+        backup: true
+
+    - name: Set callback_result_format for default callback (yaml/json)          # Modern: result_format über default callback steuern
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"
+        regexp: '^\s*callback_result_format\s*='                                  # INI entry aus default callback plugin docs
+        line: "callback_result_format = {{ ansible_callback_result_format }}"     # yaml oder json
+        insertafter: '^\[defaults\]\s*$'
+        state: present
+        backup: true
+
+    - name: Set callback_format_pretty (pretty print results)                    # Option für menschlich besser lesbare Ergebnisse
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"
+        regexp: '^\s*callback_format_pretty\s*='                                  # INI entry aus default callback plugin docs
+        line: "callback_format_pretty = {{ ansible_callback_format_pretty | ternary('True','False') }}"
+        insertafter: '^\[defaults\]\s*$'
+        state: present
+        backup: true
+
+    - name: Enable callbacks for ad-hoc 'ansible' command (optional)             # Aktiviert Callback-Loading für /usr/bin/ansible (nicht nötig für playbook)
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_cfg_path }}"
+        regexp: '^\s*bin_ansible_callbacks\s*='                                   # Key: bin_ansible_callbacks (DEFAULT_LOAD_CALLBACK_PLUGINS)
+        line: "bin_ansible_callbacks = True"
+        insertafter: '^\[defaults\]\s*$'
+        state: present
+        backup: true
