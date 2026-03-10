@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1100">
+  <!-- Hintergrund -->
+  <rect width="800" height="1100" fill="#ffffff" />
+  
+  <!-- Definition für Pfeilspitzen -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50" />
+    </marker>
+  </defs>
+
+  <!-- PRESENTATION LAYER -->
+  <rect x="50" y="20" width="700" height="100" fill="#e1e8ed" stroke="#999999" stroke-width="1" stroke-dasharray="4" />
+  <text x="400" y="45" fill="#333333" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">PRESENTATION LAYER</text>
+  
+  <rect x="325" y="60" width="150" height="40" fill="#ffffff" stroke="#003d5b" stroke-width="1.5" rx="5" />
+  <text x="335" y="85" fill="#333333" font-family="sans-serif" font-size="12">Web Access (HTTPS)</text>
+
+  <!-- ORCHESTRATION LAYER -->
+  <rect x="50" y="140" width="700" height="150" fill="#e1e8ed" stroke="#999999" stroke-width="1" stroke-dasharray="4" />
+  <text x="400" y="165" fill="#333333" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">ORCHESTRATION LAYER</text>
+  
+  <rect x="70" y="180" width="250" height="90" fill="#ffffff" stroke="#003d5b" stroke-width="1.5" rx="5" />
+  <text x="80" y="200" fill="#003d5b" font-family="sans-serif" font-size="14" font-weight="bold">Semaphore</text>
+  <text x="80" y="220" fill="#333333" font-family="sans-serif" font-size="12">• Job Scheduling</text>
+  <text x="80" y="240" fill="#333333" font-family="sans-serif" font-size="12">• Inventory Management</text>
+  
+  <rect x="450" y="180" width="200" height="90" fill="#d0e0f0" stroke="#003d5b" stroke-width="1.5" rx="5" />
+  <text x="460" y="205" fill="#333333" font-family="sans-serif" font-size="12">Job Scheduling</text>
+  <text x="460" y="225" fill="#333333" font-family="sans-serif" font-size="12">Inventory &amp; Secrets</text>
+
+  <!-- AUTOMATION LAYER -->
+  <rect x="50" y="310" width="700" height="130" fill="#e1e8ed" stroke="#999999" stroke-width="1" stroke-dasharray="4" />
+  <text x="400" y="335" fill="#333333" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">AUTOMATION LAYER</text>
+  
+  <rect x="70" y="350" width="300" height="70" fill="#ffffff" stroke="#003d5b" stroke-width="1.5" rx="5" />
+  <text x="120" y="375" fill="#003d5b" font-family="sans-serif" font-size="14" font-weight="bold">Ansible Engine</text>
+  
+  <rect x="450" y="350" width="200" height="70" fill="#ffffff" stroke="#003d5b" stroke-width="1.5" rx="5" />
+  <text x="460" y="375" fill="#003d5b" font-family="sans-serif" font-size="14" font-weight="bold">Verification Reports</text>
+
+  <!-- PERSISTENCE & SOURCE CODE -->
+  <rect x="50" y="460" width="250" height="130" fill="#fff4e5" stroke="#999999" stroke-width="1" stroke-dasharray="4" />
+  <text x="175" y="485" fill="#333333" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">SOURCE CODE LAYER</text>
+  <rect x="70" y="500" width="210" height="70" fill="#ffffff" stroke="#d4a017" stroke-width="1.5" rx="5" />
+  <text x="110" y="525" fill="#003d5b" font-family="sans-serif" font-size="14" font-weight="bold">Git Repository</text>
+
+  <rect x="320" y="460" width="430" height="130" fill="#f0f5e1" stroke="#999999" stroke-width="1" stroke-dasharray="4" />
+  <text x="535" y="485" fill="#333333" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">PERSISTENCE LAYER</text>
+  <rect x="340" y="500" width="180" height="70" fill="#ffffff" stroke="#2e7d32" stroke-width="1.5" rx="5" />
+  <text x="380" y="525" fill="#003d5b" font-family="sans-serif" font-size="14" font-weight="bold">Git Repository</text>
+  
+  <rect x="550" y="500" width="180" height="70" fill="#ffffff" stroke="#c62828" stroke-width="1.5" rx="5" />
+  <text x="590" y="525" fill="#003d5b" font-family="sans-serif" font-size="14" font-weight="bold">Log Storage</text>
+
+  <!-- INFRASTRUCTURE LAYER -->
+  <rect x="50" y="610" width="700" height="180" fill="#e1e8ed" stroke="#999999" stroke-width="1" stroke-dasharray="4" />
+  <text x="400" y="635" fill="#333333" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">INFRASTRUCTURE LAYER</text>
+  <rect x="70" y="650" width="400" height="120" fill="#ffffff" stroke="#003d5b" stroke-width="1.5" rx="5" />
+  <text x="80" y="730" fill="#333333" font-family="sans-serif" font-size="12">ES / OS Servers, PCS7 Clients, ...</text>
+
+  <!-- VIRTUALIZATION LAYER -->
+  <rect x="50" y="810" width="700" height="150" fill="#e1e8ed" stroke="#999999" stroke-width="1" stroke-dasharray="4" />
+  <text x="400" y="835" fill="#333333" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">VIRTUALIZATION LAYER</text>
+  <rect x="70" y="850" width="660" height="90" fill="#ffffff" stroke="#003d5b" stroke-width="1.5" rx="5" />
+  <text x="150" y="885" fill="#003d5b" font-family="sans-serif" font-size="14" font-weight="bold">VMware ESXi Host</text>
+
+  <!-- PFEILE -->
+  <line x1="400" y1="100" x2="400" y2="140" stroke="#4CAF50" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrowhead)" />
+  <line x1="400" y1="290" x2="400" y2="310" stroke="#4CAF50" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrowhead)" />
+  <line x1="400" y1="440" x2="400" y2="460" stroke="#4CAF50" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrowhead)" />
+</svg>
