@@ -1,10 +1,229 @@
 ---
-- hosts: my_servers
+
+- name: Netzwerkteilnehmer im Zielnetz erkennen und Infos in JSON und CSV exportieren
+  hosts: my_servers
   become: true
   become_method: runas
   become_user: Administrator
   gather_facts: no
   
+  vars:
+    target_network: "192.168.123.0/24"
+    winrm_port: 5985
+    winrm_transport: ntlm
+    result_dir: "./reports"
   tasks:
-    - name: Reboot
-      ansible.windows.win_reboot:
+    - name: Zeitstempel fuer Report setzen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+
+    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+      ansible.builtin.shell: "command -v nmap"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap fehlt
+      ansible.builtin.fail:
+        msg: "nmap ist auf dem Ansible-Controller nicht installiert. Installation z. B.: sudo apt install nmap"
+      when: nmap_check.rc != 0
+
+    - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - win_user is defined
+          - win_password is defined
+        fail_msg: >-
+          Fuer die Detailabfrage muessen win_user und win_password uebergeben werden,
+          z. B. ueber Semaphore Environment/Extra Variables oder Ansible Vault.
+
+    - name: Netzwerk per ICMP/ARP und WinRM-Port scannen
+      ansible.builtin.shell: |
+        set -o pipefail
+        nmap -n -sn -PR -PE -PS{{ winrm_port }},5986 {{ target_network }} -oG - | awk '/Status: Up/{print $2}'
+      args:
+        executable: /bin/bash
+      register: scan_result
+      changed_when: false
+
+    - name: Gefundene IP-Adressen speichern
+      ansible.builtin.set_fact:
+        discovered_ips: "{{ scan_result.stdout_lines | unique | list }}"
+
+    - name: Gefundene Netzwerkteilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_ips
+
+    - name: Gefundene Hosts temporaer in das Inventory aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: discovered_windows
+        ansible_host: "{{ item }}"
+        ansible_connection: winrm
+        ansible_port: "{{ winrm_port }}"
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+      loop: "{{ discovered_ips }}"
+      no_log: true
+
+- name: Windows-Kommunikationsdaten und Domaenenzugehoerigkeit abfragen
+  hosts: discovered_windows
+  gather_facts: false
+  ignore_unreachable: true
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: win_ping_result
+      changed_when: false
+      ignore_errors: true
+
+    - name: Windows-Facts minimal erfassen
+      ansible.windows.setup:
+        gather_subset:
+          - min
+      register: windows_facts_result
+      when: win_ping_result is defined and win_ping_result is succeeded
+      changed_when: false
+
+    - name: Computername, Domaene und Kommunikationseinstellungen auslesen
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "SilentlyContinue"
+
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+        $bios = Get-CimInstance Win32_BIOS
+
+        $fqdn = $null
+        try {
+          $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
+        } catch {}
+
+        $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" | ForEach-Object {
+          [ordered]@{
+            description = $_.Description
+            dns_host_name = $_.DNSHostName
+            dns_domain = $_.DNSDomain
+            mac_address = $_.MACAddress
+            dhcp_enabled = $_.DHCPEnabled
+            dhcp_server = $_.DHCPServer
+            ip_address = @($_.IPAddress)
+            ip_subnet = @($_.IPSubnet)
+            default_gateway = @($_.DefaultIPGateway)
+            dns_server = @($_.DNSServerSearchOrder)
+            wins_primary_server = $_.WINSPrimaryServer
+            wins_secondary_server = $_.WINSSecondaryServer
+            tcpip_netbios_options = $_.TcpipNetbiosOptions
+          }
+        })
+
+        $defaultRoutes = @()
+        try {
+          $defaultRoutes = @(Get-CimInstance Win32_IP4RouteTable |
+            Where-Object { $_.Destination -eq "0.0.0.0" } |
+            ForEach-Object {
+              [ordered]@{
+                gateway = $_.NextHop
+                interface_index = $_.InterfaceIndex
+                metric = $_.Metric1
+              }
+            })
+        } catch {}
+
+        $firewallProfiles = @()
+        try {
+          $firewallProfiles = @(Get-NetFirewallProfile | ForEach-Object {
+            [ordered]@{
+              name = $_.Name
+              enabled = $_.Enabled
+              default_inbound_action = $_.DefaultInboundAction.ToString()
+              default_outbound_action = $_.DefaultOutboundAction.ToString()
+              notify_on_listen = $_.NotifyOnListen
+            }
+          })
+        } catch {}
+
+        $winrmListeners = @()
+        try {
+          $winrmListeners = @(Get-ChildItem WSMan:\localhost\Listener | ForEach-Object {
+            [ordered]@{
+              keys = ($_.Keys -join ";")
+              address = (Get-Item "$($_.PSPath)\Address").Value
+              port = (Get-Item "$($_.PSPath)\Port").Value
+              enabled = (Get-Item "$($_.PSPath)\Enabled").Value
+            }
+          })
+        } catch {}
+
+        $result = [ordered]@{
+          ip = "{{ inventory_hostname }}"
+          ansible_reachable = $true
+          computername = $env:COMPUTERNAME
+          fqdn = $fqdn
+          domain = $cs.Domain
+          part_of_domain = $cs.PartOfDomain
+          workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
+          manufacturer = $cs.Manufacturer
+          model = $cs.Model
+          os_caption = $os.Caption
+          os_version = $os.Version
+          serial_number = $bios.SerialNumber
+          adapters = $adapters
+          default_routes = $defaultRoutes
+          firewall_profiles = $firewallProfiles
+          winrm_listeners = $winrmListeners
+        }
+
+        $result | ConvertTo-Json -Depth 8 -Compress
+      register: communication_raw
+      when: win_ping_result is defined and win_ping_result is succeeded
+      changed_when: false
+
+    - name: Kommunikationsdaten als Host-Fact speichern
+      ansible.builtin.set_fact:
+        communication_info: "{{ communication_raw.stdout | from_json }}"
+      when:
+        - communication_raw is defined
+        - communication_raw.stdout is defined
+        - communication_raw.stdout | length > 0
+
+- name: Report lokal auf dem Ansible-Controller erzeugen
+  hosts: localhost
+  gather_facts: false
+  vars:
+    result_dir: "./reports"
+  tasks:
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: JSON-Report erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.json"
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups['discovered_windows'] | default([]) %}
+          {{ (hostvars[h].communication_info | default({'ip': h, 'ansible_reachable': false, 'error': 'WinRM nicht erreichbar oder Zugriff verweigert'})) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+
+    - name: CSV-Report erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.csv"
+        mode: "0644"
+        content: |
+          IP;Ansible_erreichbar;Computername;FQDN;Domaene;Domaenenmitglied;Workgroup;OS;IPv4;Subnetz;Gateway;DNS_Server;MAC;DHCP;Firewallprofile;WinRM_Listener
+          {% for h in groups['discovered_windows'] | default([]) %}
+          {% set info = hostvars[h].communication_info | default({}) %}
+          {{ h }};{{ info.ansible_reachable | default(false) }};{{ info.computername | default('') }};{{ info.fqdn | default('') }};{{ info.domain | default('') }};{{ info.part_of_domain | default('') }};{{ info.workgroup | default('') }};{{ info.os_caption | default('') }};"{% for a in info.adapters | default([]) %}{{ a.ip_address | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.ip_subnet | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.default_gateway | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dns_server | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.mac_address | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dhcp_enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for f in info.firewall_profiles | default([]) %}{{ f.name | default('') }}={{ f.enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for l in info.winrm_listeners | default([]) %}{{ l.keys | default('') }}:{{ l.port | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}"
+          {% endfor %}
+
+    - name: Pfade der erzeugten Reports anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.csv"
