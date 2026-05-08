@@ -1,0 +1,428 @@
+---
+
+- name: Netzwerkteilnehmer im Zielnetz erkennen und Infos in JSON und CSV exportieren
+  hosts: my_servers
+  become: true
+  become_method: runas
+  become_user: Administrator
+  gather_facts: no
+
+  vars:
+    target_network: "192.168.123.0/24"
+    winrm_port: 5985
+    winrm_transport: ntlm
+    result_dir: "./reports"
+  tasks:
+    - name: Zeitstempel fuer Report setzen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+      ansible.builtin.shell: "command -v nmap"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap fehlt
+      ansible.builtin.fail:
+        msg: "nmap ist auf dem Ansible-Controller nicht installiert. Installation z. B.: sudo apt install nmap"
+      when: nmap_check.rc != 0
+
+    - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - win_user is defined
+          - win_password is defined
+        fail_msg: >-
+          Fuer die PCS7-Installationspruefung muessen win_user und win_password uebergeben werden,
+          z. B. ueber Semaphore Environment/Extra Variables oder Ansible Vault.
+
+    - name: Netzwerk per ICMP/ARP und WinRM-Port scannen
+      ansible.builtin.shell: |
+        set -o pipefail
+        nmap -n -sn -PR -PE -PS{{ winrm_port }},5986 {{ target_network }} -oG - | awk '/Status: Up/{print $2}'
+      args:
+        executable: /bin/bash
+      register: scan_result
+      changed_when: false
+
+    - name: Gefundene IP-Adressen speichern
+      ansible.builtin.set_fact:
+        discovered_ips: "{{ scan_result.stdout_lines | unique | list }}"
+
+    - name: Gefundene Netzwerkteilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_ips
+
+    - name: Gefundene Hosts temporaer in das Inventory aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: pcs7_check_targets
+        ansible_host: "{{ item }}"
+        ansible_connection: winrm
+        ansible_port: "{{ winrm_port }}"
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: 60
+        ansible_winrm_read_timeout_sec: 90
+      loop: "{{ discovered_ips }}"
+      no_log: true
+
+- name: PCS7-Installation auf Windows-Stationen pruefen
+  hosts: pcs7_check_targets
+  gather_facts: false
+  ignore_unreachable: true
+  vars:
+    pcs7_setup_log_path: "C:\\ProgramData\\Siemens\\Automation\\Logfiles\\Setup\\RS"
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: win_ping_result
+      changed_when: false
+      ignore_errors: true
+
+    - name: PCS7-Installationsnachweis, Komponenten und Versionen auslesen
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "SilentlyContinue"
+
+        function Get-UninstallPrograms {
+          $roots = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+          )
+
+          foreach ($root in $roots) {
+            if (Test-Path $root) {
+              Get-ChildItem -Path $root | ForEach-Object {
+                $props = Get-ItemProperty -Path $_.PSPath
+                if ($props.DisplayName) {
+                  [ordered]@{
+                    name = [string]$props.DisplayName
+                    version = [string]$props.DisplayVersion
+                    publisher = [string]$props.Publisher
+                    install_date = [string]$props.InstallDate
+                    install_location = [string]$props.InstallLocation
+                    registry_key = [string]$_.Name
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        function Convert-InstallDate {
+          param([string]$Value)
+          if ($Value -match "^\d{8}$") {
+            return ($Value.Substring(0,4) + "-" + $Value.Substring(4,2) + "-" + $Value.Substring(6,2))
+          }
+          return $Value
+        }
+
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+
+        $fqdn = $null
+        try {
+          $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
+        } catch {}
+
+        $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" | ForEach-Object {
+          $allIps = @($_.IPAddress)
+          [ordered]@{
+            description = $_.Description
+            dns_host_name = $_.DNSHostName
+            dns_domain = $_.DNSDomain
+            mac_address = $_.MACAddress
+            dhcp_enabled = $_.DHCPEnabled
+            dhcp_server = $_.DHCPServer
+            ipv4_address = @($allIps | Where-Object { $_ -match "^\d{1,3}(\.\d{1,3}){3}$" })
+            ipv6_address = @($allIps | Where-Object { $_ -match ":" })
+            ip_subnet = @($_.IPSubnet)
+            default_gateway = @($_.DefaultIPGateway)
+            dns_server = @($_.DNSServerSearchOrder)
+            wins_primary_server = $_.WINSPrimaryServer
+            wins_secondary_server = $_.WINSSecondaryServer
+            tcpip_netbios_options = $_.TcpipNetbiosOptions
+          }
+        })
+
+        $setupLogPath = "{{ pcs7_setup_log_path }}"
+        $pcs7SetupLogs = @()
+        if (Test-Path $setupLogPath) {
+          $pcs7SetupLogs = @(Get-ChildItem -Path $setupLogPath -Filter "*.txt" |
+            Where-Object { $_.Name -match "(?i)(^SIMATIC\s+PCS\s*7\s+V|PCS\s*7|PCS7)" } |
+            Sort-Object LastWriteTime -Descending |
+            ForEach-Object {
+              $versionFromName = $null
+              if ($_.Name -match "(?i)^SIMATIC\s+PCS\s*7\s+(?<ver>V.+)\.txt$") {
+                $versionFromName = $Matches["ver"].Trim()
+              }
+              [ordered]@{
+                file_name = $_.Name
+                full_name = $_.FullName
+                version_from_file_name = $versionFromName
+                last_write_time = $_.LastWriteTime.ToString("yyyy-MM-ddTHH:mm:ss")
+                size_bytes = $_.Length
+              }
+            })
+        }
+
+        $allPrograms = @(Get-UninstallPrograms)
+
+        $siemensComponentPattern = "(?i)(Siemens|SIMATIC|PCS\s*7|PCS7|WinCC|STEP\s*7|Process\s*Historian|Information\s*Server|Automation\s+License\s+Manager|Maintenance\s+Station|Maintenance\s+Functions|PH\s*Ready|Route\s*Control|Batch|S7)"
+        $pcs7SpecificPattern = "(?i)(PCS\s*7|PCS7|SIMATIC\s+PCS|Process\s*Historian|Information\s*Server|Maintenance\s+Station|Maintenance\s+Functions|PH\s*Ready|Route\s*Control|SIMATIC\s+BATCH|WinCC|STEP\s*7)"
+
+        $components = @($allPrograms |
+          Where-Object { ($_.name -match $siemensComponentPattern) -or ($_.publisher -match "(?i)Siemens") } |
+          Sort-Object -Property name, version -Unique |
+          ForEach-Object {
+            [ordered]@{
+              name = $_.name
+              version = $_.version
+              publisher = $_.publisher
+              install_date = Convert-InstallDate $_.install_date
+              install_location = $_.install_location
+              registry_key = $_.registry_key
+            }
+          })
+
+        $pcs7RelatedComponents = @($components | Where-Object { $_.name -match $pcs7SpecificPattern })
+
+        $logProductLines = @()
+        foreach ($logFile in $pcs7SetupLogs | Select-Object -First 3) {
+          try {
+            $matchesInLog = @(Select-String -Path $logFile.full_name -Pattern "(?i)(PCS\s*7|PCS7|SIMATIC|WinCC|STEP\s*7|Process\s*Historian|Information\s*Server|Maintenance|Automation\s+License\s+Manager|Route\s*Control|Batch|Version|Produkt|Product|Paket|Package|Installiert|Installed)" |
+              Select-Object -First 120 |
+              ForEach-Object { $_.Line.Trim() } |
+              Where-Object { $_ -ne "" } |
+              Select-Object -Unique)
+
+            foreach ($line in $matchesInLog) {
+              $logProductLines += [ordered]@{
+                source_file = $logFile.file_name
+                line = $line
+              }
+            }
+          } catch {}
+        }
+
+        $pcs7VersionsFromLogs = @($pcs7SetupLogs |
+          ForEach-Object { $_.version_from_file_name } |
+          Where-Object { $_ -ne $null -and $_ -ne "" } |
+          Select-Object -Unique)
+
+        $pcs7VersionsFromRegistry = @($pcs7RelatedComponents |
+          ForEach-Object { $_.version } |
+          Where-Object { $_ -ne $null -and $_ -ne "" } |
+          Select-Object -Unique)
+
+        $installationPerformed = (($pcs7SetupLogs.Count -gt 0) -or ($pcs7RelatedComponents.Count -gt 0))
+        $evidenceQuality = "nicht_nachgewiesen"
+        if ($pcs7SetupLogs.Count -gt 0 -and $pcs7RelatedComponents.Count -gt 0) {
+          $evidenceQuality = "hoch_Logdatei_und_Registry"
+        } elseif ($pcs7SetupLogs.Count -gt 0) {
+          $evidenceQuality = "hoch_Setup_Logdatei"
+        } elseif ($pcs7RelatedComponents.Count -gt 0) {
+          $evidenceQuality = "mittel_Registry"
+        } elseif ($components.Count -gt 0) {
+          $evidenceQuality = "niedrig_Siemens_Komponenten_ohne_PCS7_Eindeutigkeit"
+        }
+
+        $latestLog = $null
+        if ($pcs7SetupLogs.Count -gt 0) {
+          $latestLog = $pcs7SetupLogs[0]
+        }
+
+        $result = [ordered]@{
+          scan_timestamp = "{{ hostvars['localhost'].report_timestamp_iso }}"
+          target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+          ip = "{{ inventory_hostname }}"
+          ansible_reachable = $true
+          computername = $env:COMPUTERNAME
+          fqdn = $fqdn
+          domain = $cs.Domain
+          part_of_domain = $cs.PartOfDomain
+          workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
+          os_caption = $os.Caption
+          os_version = $os.Version
+          pcs7_installation_performed = $installationPerformed
+          evidence_quality = $evidenceQuality
+          setup_log_path = $setupLogPath
+          setup_log_exists = (Test-Path $setupLogPath)
+          latest_pcs7_setup_log = $latestLog
+          pcs7_versions_from_logs = $pcs7VersionsFromLogs
+          pcs7_versions_from_registry = $pcs7VersionsFromRegistry
+          pcs7_setup_logs = $pcs7SetupLogs
+          pcs7_related_component_count = $pcs7RelatedComponents.Count
+          siemens_component_count = $components.Count
+          pcs7_related_components = $pcs7RelatedComponents
+          siemens_components = $components
+          log_product_lines = $logProductLines
+          adapters = $adapters
+          error = $null
+        }
+
+        $result | ConvertTo-Json -Depth 10 -Compress
+      register: pcs7_raw
+      when: win_ping_result is defined and win_ping_result is succeeded
+      changed_when: false
+
+    - name: PCS7-Pruefergebnis als Host-Fact speichern
+      ansible.builtin.set_fact:
+        pcs7_info: "{{ pcs7_raw.stdout | trim | from_json }}"
+      when:
+        - pcs7_raw is defined
+        - pcs7_raw.stdout is defined
+        - pcs7_raw.stdout | length > 0
+
+- name: PCS7-Report lokal auf dem Ansible-Controller erzeugen
+  hosts: localhost
+  gather_facts: false
+  vars:
+    result_dir: "./reports"
+  tasks:
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: JSON-Report erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.json"
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups['pcs7_check_targets'] | default([]) %}
+          {{ (hostvars[h].pcs7_info | default({'scan_timestamp': hostvars['localhost'].report_timestamp_iso, 'ip': h, 'ansible_reachable': false, 'pcs7_installation_performed': false, 'evidence_quality': 'nicht_pruefbar', 'error': 'WinRM nicht erreichbar oder Zugriff verweigert'})) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+
+    - name: CSV-Report aus JSON erzeugen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import json
+        from pathlib import Path
+
+        json_path = Path("{{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.json")
+        csv_path = Path("{{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.csv")
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        def as_list(value):
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return value
+            return [value]
+
+        def join_values(values, sep=","):
+            return sep.join(str(v) for v in as_list(values) if v not in (None, ""))
+
+        def component_text(components):
+            parts = []
+            for comp in as_list(components):
+                if not isinstance(comp, dict):
+                    continue
+                name = str(comp.get("name") or "").strip()
+                version = str(comp.get("version") or "").strip()
+                install_date = str(comp.get("install_date") or "").strip()
+                if name and version and install_date:
+                    parts.append(f"{name} ({version}, installiert: {install_date})")
+                elif name and version:
+                    parts.append(f"{name} ({version})")
+                elif name:
+                    parts.append(name)
+            return " | ".join(parts)
+
+        def adapter_field(row, key):
+            values = []
+            for adapter in as_list(row.get("adapters")):
+                if isinstance(adapter, dict):
+                    values.extend(as_list(adapter.get(key)))
+            return join_values(values, ",")
+
+        rows = []
+        for item in data:
+            latest_log = item.get("latest_pcs7_setup_log") or {}
+            rows.append({
+                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
+                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
+                "IP": item.get("ip", ""),
+                "Ansible_erreichbar": item.get("ansible_reachable", False),
+                "Computername": item.get("computername", ""),
+                "FQDN": item.get("fqdn", ""),
+                "Domaene_Workgroup": item.get("domain") or item.get("workgroup") or "",
+                "Domaenenmitglied": item.get("part_of_domain", ""),
+                "Betriebssystem": item.get("os_caption", ""),
+                "OS_Version": item.get("os_version", ""),
+                "PCS7_Installation_nachgewiesen": item.get("pcs7_installation_performed", False),
+                "Nachweisqualitaet": item.get("evidence_quality", ""),
+                "PCS7_Versionen_aus_Setup_Log": join_values(item.get("pcs7_versions_from_logs"), " | "),
+                "PCS7_Versionen_aus_Registry": join_values(item.get("pcs7_versions_from_registry"), " | "),
+                "Letzte_PCS7_Setup_Logdatei": latest_log.get("file_name", "") if isinstance(latest_log, dict) else "",
+                "Letzte_Log_Aenderung": latest_log.get("last_write_time", "") if isinstance(latest_log, dict) else "",
+                "Anzahl_PCS7_Bezugskomponenten": item.get("pcs7_related_component_count", ""),
+                "PCS7_Komponenten_mit_Version": component_text(item.get("pcs7_related_components")),
+                "Anzahl_Siemens_Komponenten": item.get("siemens_component_count", ""),
+                "Alle_Siemens_Komponenten_mit_Version": component_text(item.get("siemens_components")),
+                "Setup_Logpfad_vorhanden": item.get("setup_log_exists", ""),
+                "Setup_Logpfad": item.get("setup_log_path", ""),
+                "IPv4_Adressen": adapter_field(item, "ipv4_address"),
+                "Gateway": adapter_field(item, "default_gateway"),
+                "DNS_Server": adapter_field(item, "dns_server"),
+                "MAC_Adressen": adapter_field(item, "mac_address"),
+                "DHCP": adapter_field(item, "dhcp_enabled"),
+                "Fehler": item.get("error", ""),
+            })
+
+        fieldnames = [
+            "Zeitstempel_Pruefung",
+            "Zeitstempel_Zielsystem",
+            "IP",
+            "Ansible_erreichbar",
+            "Computername",
+            "FQDN",
+            "Domaene_Workgroup",
+            "Domaenenmitglied",
+            "Betriebssystem",
+            "OS_Version",
+            "PCS7_Installation_nachgewiesen",
+            "Nachweisqualitaet",
+            "PCS7_Versionen_aus_Setup_Log",
+            "PCS7_Versionen_aus_Registry",
+            "Letzte_PCS7_Setup_Logdatei",
+            "Letzte_Log_Aenderung",
+            "Anzahl_PCS7_Bezugskomponenten",
+            "PCS7_Komponenten_mit_Version",
+            "Anzahl_Siemens_Komponenten",
+            "Alle_Siemens_Komponenten_mit_Version",
+            "Setup_Logpfad_vorhanden",
+            "Setup_Logpfad",
+            "IPv4_Adressen",
+            "Gateway",
+            "DNS_Server",
+            "MAC_Adressen",
+            "DHCP",
+            "Fehler",
+        ]
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter=";")
+            writer.writeheader()
+            writer.writerows(rows)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Pfade der erzeugten Reports anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.csv"
