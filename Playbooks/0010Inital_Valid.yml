@@ -18,16 +18,16 @@
       ansible.builtin.set_fact:
         report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
-    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
-      ansible.builtin.command: "{{ nmap_binary }} --version"
-      register: nmap_check
-      changed_when: false
-      failed_when: false
+    # - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+    #   ansible.builtin.command: "{{ nmap_binary }} --version"
+    #   register: nmap_check
+    #   changed_when: false
+    #   failed_when: false
 
-    - name: Abbrechen, wenn nmap fehlt
-      ansible.builtin.fail:
-        msg: "nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht ausfuehrbar. Installation pruefen: sudo apt install nmap"
-      when: nmap_check.rc != 0
+    # - name: Abbrechen, wenn nmap fehlt
+    #   ansible.builtin.fail:
+    #     msg: "nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht ausfuehrbar. Installation pruefen: sudo apt install nmap"
+    #   when: nmap_check.rc != 0
 
 
     - name: Diagnose nmap auf dem Ansible-Controller
