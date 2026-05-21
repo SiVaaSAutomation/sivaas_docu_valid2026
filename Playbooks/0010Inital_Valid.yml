@@ -29,6 +29,44 @@
         msg: "nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht ausfuehrbar. Installation pruefen: sudo apt install nmap"
       when: nmap_check.rc != 0
 
+
+    - name: Diagnose nmap auf dem Ansible-Controller
+      ansible.builtin.shell: |
+        echo "USER=$(whoami)"
+        echo "PATH=$PATH"
+        echo "nmap_binary={{ nmap_binary }}"
+        echo "--- ls -l {{ nmap_binary }} ---"
+        ls -l {{ nmap_binary }} || true
+        echo "--- file {{ nmap_binary }} ---"
+        file {{ nmap_binary }} || true
+        echo "--- test -x {{ nmap_binary }} ---"
+        test -x {{ nmap_binary }}
+        echo "test_x_rc=$?"
+        echo "--- {{ nmap_binary }} --version ---"
+        {{ nmap_binary }} --version
+        echo "nmap_version_rc=$?"
+      args:
+        executable: /bin/bash
+      register: nmap_diag
+      changed_when: false
+      failed_when: false
+
+    - name: Diagnoseausgabe nmap anzeigen
+      ansible.builtin.debug:
+        var: nmap_diag.stdout_lines
+
+    - name: Diagnosefehler nmap anzeigen
+      ansible.builtin.debug:
+        var: nmap_diag.stderr_lines
+
+    - name: Abbrechen, wenn nmap nicht ausfuehrbar ist
+      ansible.builtin.fail:
+        msg: >-
+          nmap konnte durch Semaphore/Ansible nicht ausgefuehrt werden.
+          Rueckgabecode: {{ nmap_diag.rc }}.
+          Pruefe stdout/stderr der vorherigen Diagnoseausgabe.
+      when: nmap_diag.rc != 0
+
     - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
       ansible.builtin.assert:
         that:
