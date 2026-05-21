@@ -3,34 +3,30 @@
 - name: Netzwerkteilnehmer im Zielnetz erkennen und Infos in JSON und CSV exportieren
   hosts: localhost
   connection: local
-  #hosts: my_servers
-  #become: true
-  #become_method: runas
-  #become_user: Administrator
   gather_facts: no
-  
+
   vars:
-    target_network: "192.168.123.0/24"  #Auf alle Fälle noch Variabeln in Semaphore umgebungsvariabel ändern
-    #winrm_port: 5985
+    target_network: "192.168.123.0/24"  # Kann spaeter ueber Semaphore ueberschrieben werden
     winrm_transport: ntlm
     result_dir: "./reports"
-    win_password: 
-    win_user:
-    
+    nmap_binary: "/usr/bin/nmap"
+    win_user: "Administrator"
+    win_password: "Siemens1234!"
+
   tasks:
     - name: Zeitstempel fuer Report setzen
       ansible.builtin.set_fact:
         report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
-      ansible.builtin.shell: "command -v nmap"
+      ansible.builtin.command: "{{ nmap_binary }} --version"
       register: nmap_check
       changed_when: false
       failed_when: false
 
     - name: Abbrechen, wenn nmap fehlt
       ansible.builtin.fail:
-        msg: "nmap ist auf dem Ansible-Controller nicht installiert. Installation z. B.: sudo apt install nmap"
+        msg: "nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht ausfuehrbar. Installation pruefen: sudo apt install nmap"
       when: nmap_check.rc != 0
 
     - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
@@ -38,6 +34,8 @@
         that:
           - win_user is defined
           - win_password is defined
+          - win_user | string | length > 0
+          - win_password | string | length > 0
         fail_msg: >-
           Fuer die Detailabfrage muessen win_user und win_password uebergeben werden,
           z. B. ueber Semaphore Environment/Extra Variables oder Ansible Vault.
@@ -45,7 +43,7 @@
     - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
       ansible.builtin.shell: |
         set -o pipefail
-        nmap -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
         awk '
           /Ports:/ {
             host=$2
@@ -65,20 +63,16 @@
       register: scan_result
       changed_when: false
 
-    # - name: Netzwerk per ICMP/ARP und WinRM-Port scannen
-    #   ansible.builtin.shell: |
-    #     set -o pipefail
-    #     nmap -n -sn -PR -PE -PS{{ winrm_port }},5986 {{ target_network }} -oG - | awk '/Status: Up/{print $2}'
-    #   args:
-    #     executable: /bin/bash
-    #   register: scan_result
-    #   changed_when: false
-
-    - name: Gefundene IP-Adressen und WinRm Infos speichern
+    - name: Gefundene IP-Adressen und WinRM-Infos speichern
       ansible.builtin.set_fact:
-        discovered_ips: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_winrm_hosts: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_ips: "{{ scan_result.stdout_lines | map('regex_replace', ';.*$', '') | unique | list }}"
 
-    - name: Gefundene Netzwerkteilnehmer anzeigen
+    - name: Gefundene WinRM-Teilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_winrm_hosts
+
+    - name: Gefundene IP-Adressen anzeigen
       ansible.builtin.debug:
         var: discovered_ips
 
@@ -90,33 +84,20 @@
         ansible_connection: winrm
         ansible_user: "{{ win_user }}"
         ansible_password: "{{ win_password }}"
-        ansible_port: "{{ item.split(';')[1] }}"
+        ansible_port: "{{ item.split(';')[1] | int }}"
         ansible_winrm_scheme: "{{ item.split(';')[2] }}"
-        ansible_winrm_transport: ntlm
+        ansible_winrm_transport: "{{ winrm_transport }}"
         ansible_winrm_server_cert_validation: ignore
         discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
       loop: "{{ discovered_winrm_hosts }}"
-      #loop: "{{ scan_result.stdout_lines }}"
       no_log: true
 
-    # - name: Gefundene Hosts temporaer in das Inventory aufnehmen
-    #   ansible.builtin.add_host:
-    #     name: "{{ item }}"
-    #     groups: discovered_windows
-    #     ansible_host: "{{ item }}"
-    #     ansible_connection: winrm
-    #     ansible_port: "{{ winrm_port }}"
-    #     ansible_user: "{{ win_user }}"
-    #     ansible_password: "{{ win_password }}"
-    #     ansible_winrm_transport: "{{ winrm_transport }}"
-    #     ansible_winrm_server_cert_validation: ignore
-    #   loop: "{{ discovered_ips }}"
-    #   no_log: true
 
 - name: Windows-Kommunikationsdaten und Domaenenzugehoerigkeit abfragen
   hosts: discovered_windows
   gather_facts: false
   ignore_unreachable: true
+
   tasks:
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
@@ -233,11 +214,14 @@
         - communication_raw.stdout is defined
         - communication_raw.stdout | length > 0
 
+
 - name: Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
   gather_facts: false
+
   vars:
     result_dir: "./reports"
+
   tasks:
     - name: Report-Verzeichnis erzeugen
       ansible.builtin.file:
