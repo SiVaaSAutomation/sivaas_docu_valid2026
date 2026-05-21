@@ -50,16 +50,16 @@
             FINAL_TXT="${OUTDIR}/${TS}_task${TASK_ID}_semaphore_ui.txt"
 
             # 1) Login (cookie erzeugen)
-            curl -c "$COOKIE_FILE" -X POST \
+            curl -s -c "$COOKIE_FILE" -X POST \
               -H "Content-Type: application/json" \
-              -d '{"auth":"testadmin","password":"Test1234!"}'' \
-              http://localhost:3000/api/auth/login 
+              -d '{"auth":"testadmin","password":"Test1234!"}' \
+              "${BASE_URL}/api/auth/login"
 
             # 2) Task Meta holen
             curl -s -b "$COOKIE_FILE" \
               "${BASE_URL}/api/project/${PROJECT_ID}/tasks/${TASK_ID}" > "$META_JSON"
 
-            # 3) Output holen (wie du es händisch gemacht hast)
+            # 3) Output holen
             curl -s -b "$COOKIE_FILE" \
               "${BASE_URL}/api/project/${PROJECT_ID}/tasks/${TASK_ID}/output" > "$OUTPUT_TXT"
 
