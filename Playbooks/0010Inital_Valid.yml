@@ -5,18 +5,33 @@
   connection: local
   gather_facts: no
 
-  vars:
-    target_network: "192.168.123.0/24"  # Kann spaeter ueber Semaphore ueberschrieben werden
-    winrm_transport: ntlm
-    result_dir: "/home/ansible/Dokumente/semaphore_reports/docu_valid"
-    nmap_binary: "/usr/bin/nmap"
-    win_user: "Administrator"
-    win_password: "Siemens1234!"
+ 
 
   tasks:
     - name: Zeitstempel fuer Report setzen
       ansible.builtin.set_fact:
         report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+
+    - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - nmap_binary is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - nmap_binary | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Es fehlen benoetigte Variablen aus der Semaphore-Variablengruppe.
+          Erforderlich sind: target_network, win_user, win_password,
+          winrm_transport, nmap_binary und result_dir.
+
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
       ansible.builtin.command: "{{ nmap_binary }} --version"
@@ -261,10 +276,28 @@
   hosts: localhost
   gather_facts: false
 
-  vars:
-    result_dir: "/home/ansible/Dokumente/semaphore_reports/docu_valid"
-
   tasks:
+
+    - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - nmap_binary is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - nmap_binary | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Es fehlen benoetigte Variablen aus der Semaphore-Variablengruppe.
+          Erforderlich sind: target_network, win_user, win_password,
+          winrm_transport, nmap_binary und result_dir.
+
     - name: Report-Verzeichnis erzeugen, falls es noch nicht existiert
       become: true
       ansible.builtin.file:
