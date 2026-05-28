@@ -298,14 +298,13 @@
           Erforderlich sind: target_network, win_user, win_password,
           winrm_transport, nmap_binary und result_dir.
 
+
     - name: Report-Verzeichnis erzeugen, falls es noch nicht existiert
-      become: true
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        owner: semaphore
-        group: semaphore
         mode: "0750"
+
 
     - name: JSON-Report erzeugen
       ansible.builtin.copy:
