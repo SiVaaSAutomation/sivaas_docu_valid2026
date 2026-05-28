@@ -273,7 +273,7 @@
 
 #################################### NEW PLAY, weil ich Benutzer wechseln muss um lokal zu speichern###########################################################
 - name: Report lokal auf dem Ansible-Controller erzeugen
-  hosts: localhost
+  hosts: local_controller
   gather_facts: false
 
   tasks:
