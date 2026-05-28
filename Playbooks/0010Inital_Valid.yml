@@ -1,5 +1,5 @@
 ---
-
+##################### Weiter unter neuer Play, weil Benutzerwechsel ############################################
 - name: Netzwerkteilnehmer im Zielnetz erkennen und Infos in JSON und CSV exportieren
   hosts: localhost
   connection: local
@@ -8,7 +8,7 @@
   vars:
     target_network: "192.168.123.0/24"  # Kann spaeter ueber Semaphore ueberschrieben werden
     winrm_transport: ntlm
-    result_dir: "./reports"
+    result_dir: "/home/ansible/Dokumente/semaphore_reports/docu_valid"
     nmap_binary: "/usr/bin/nmap"
     win_user: "Administrator"
     win_password: "Siemens1234!"
@@ -18,54 +18,54 @@
       ansible.builtin.set_fact:
         report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
-    # - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
-    #   ansible.builtin.command: "{{ nmap_binary }} --version"
-    #   register: nmap_check
-    #   changed_when: false
-    #   failed_when: false
-
-    # - name: Abbrechen, wenn nmap fehlt
-    #   ansible.builtin.fail:
-    #     msg: "nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht ausfuehrbar. Installation pruefen: sudo apt install nmap"
-    #   when: nmap_check.rc != 0
-
-
-    - name: Diagnose nmap auf dem Ansible-Controller
-      ansible.builtin.shell: |
-        echo "USER=$(whoami)"
-        echo "PATH=$PATH"
-        echo "nmap_binary={{ nmap_binary }}"
-        echo "--- ls -l {{ nmap_binary }} ---"
-        ls -l {{ nmap_binary }} || true
-        echo "--- file {{ nmap_binary }} ---"
-        file {{ nmap_binary }} || true
-        echo "--- test -x {{ nmap_binary }} ---"
-        test -x {{ nmap_binary }}
-        echo "test_x_rc=$?"
-        echo "--- {{ nmap_binary }} --version ---"
-        {{ nmap_binary }} --version
-        echo "nmap_version_rc=$?"
-      args:
-        executable: /bin/bash
-      register: nmap_diag
+    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+      ansible.builtin.command: "{{ nmap_binary }} --version"
+      register: nmap_check
       changed_when: false
       failed_when: false
 
-    - name: Diagnoseausgabe nmap anzeigen
-      ansible.builtin.debug:
-        var: nmap_diag.stdout_lines
-
-    - name: Diagnosefehler nmap anzeigen
-      ansible.builtin.debug:
-        var: nmap_diag.stderr_lines
-
-    - name: Abbrechen, wenn nmap nicht ausfuehrbar ist
+    - name: Abbrechen, wenn nmap fehlt
       ansible.builtin.fail:
-        msg: >-
-          nmap konnte durch Semaphore/Ansible nicht ausgefuehrt werden.
-          Rueckgabecode: {{ nmap_diag.rc }}.
-          Pruefe stdout/stderr der vorherigen Diagnoseausgabe.
-      when: nmap_diag.rc != 0
+        msg: "nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht ausfuehrbar. Installation pruefen: sudo apt install nmap"
+      when: nmap_check.rc != 0
+
+
+    # - name: Diagnose nmap auf dem Ansible-Controller
+    #   ansible.builtin.shell: |
+    #     echo "USER=$(whoami)"
+    #     echo "PATH=$PATH"
+    #     echo "nmap_binary={{ nmap_binary }}"
+    #     echo "--- ls -l {{ nmap_binary }} ---"
+    #     ls -l {{ nmap_binary }} || true
+    #     echo "--- file {{ nmap_binary }} ---"
+    #     file {{ nmap_binary }} || true
+    #     echo "--- test -x {{ nmap_binary }} ---"
+    #     test -x {{ nmap_binary }}
+    #     echo "test_x_rc=$?"
+    #     echo "--- {{ nmap_binary }} --version ---"
+    #     {{ nmap_binary }} --version
+    #     echo "nmap_version_rc=$?"
+    #   args:
+    #     executable: /bin/bash
+    #   register: nmap_diag
+    #   changed_when: false
+    #   failed_when: false
+
+    # - name: Diagnoseausgabe nmap anzeigen
+    #   ansible.builtin.debug:
+    #     var: nmap_diag.stdout_lines
+
+    # - name: Diagnosefehler nmap anzeigen
+    #   ansible.builtin.debug:
+    #     var: nmap_diag.stderr_lines
+
+    # - name: Abbrechen, wenn nmap nicht ausfuehrbar ist
+    #   ansible.builtin.fail:
+    #     msg: >-
+    #       nmap konnte durch Semaphore/Ansible nicht ausgefuehrt werden.
+    #       Rueckgabecode: {{ nmap_diag.rc }}.
+    #       Pruefe stdout/stderr der vorherigen Diagnoseausgabe.
+    #   when: nmap_diag.rc != 0
 
     - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
       ansible.builtin.assert:
@@ -253,19 +253,26 @@
         - communication_raw.stdout | length > 0
 
 
+
+
+
+#################################### NEW PLAY, weil ich Benutzer wechseln muss um lokal zu speichern###########################################################
 - name: Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
   gather_facts: false
 
   vars:
-    result_dir: "./reports"
+    result_dir: "/home/ansible/Dokumente/semaphore_reports/docu_valid"
 
   tasks:
-    - name: Report-Verzeichnis erzeugen
+    - name: Report-Verzeichnis erzeugen, falls es noch nicht existiert
+      become: true
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        mode: "0755"
+        owner: semaphore
+        group: semaphore
+        mode: "0750"
 
     - name: JSON-Report erzeugen
       ansible.builtin.copy:
