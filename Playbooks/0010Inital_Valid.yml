@@ -254,71 +254,90 @@
 
         $groupMembershipByAccount = @{}
         $localGroups = @()
+
         try {
-          $localGroups = @(Get-LocalGroup | ForEach-Object {
-            $groupName = $_.Name
+          $groupObjects = @(Get-LocalGroup -ErrorAction SilentlyContinue)
+
+          foreach ($group in $groupObjects) {
+            $groupName = [string]$group.Name
             $members = @()
 
             try {
-              $members = @(Get-LocalGroupMember -Group $groupName | ForEach-Object {
-                $memberName = $_.Name
-                $shortName = ($memberName -split '\\')[-1]
+              $memberObjects = @(Get-LocalGroupMember -Group $groupName -ErrorAction SilentlyContinue)
 
-                if ($_.ObjectClass -eq "User") {
+              foreach ($member in $memberObjects) {
+                $memberName = [string]$member.Name
+                $shortName = ($memberName -split '\\')[-1]
+                $objectClass = [string]$member.ObjectClass
+
+                if ($objectClass -eq "User") {
                   foreach ($key in @($memberName, $shortName)) {
                     if (-not $groupMembershipByAccount.ContainsKey($key)) {
                       $groupMembershipByAccount[$key] = @()
                     }
+
                     $groupMembershipByAccount[$key] += $groupName
                   }
                 }
 
                 $principalSource = $null
-                if ($null -ne $_.PrincipalSource) {
-                  $principalSource = $_.PrincipalSource.ToString()
+                if ($null -ne $member.PrincipalSource) {
+                  $principalSource = [string]$member.PrincipalSource
                 }
 
-                [ordered]@{
+                $members += [pscustomobject][ordered]@{
                   name = $memberName
-                  object_class = $_.ObjectClass
+                  object_class = $objectClass
                   principal_source = $principalSource
                 }
-              })
+              }
             } catch {}
 
-            [ordered]@{
+            $localGroups += [pscustomobject][ordered]@{
               name = $groupName
-              description = $_.Description
+              description = $group.Description
               members = $members
             }
-          })
+          }
         } catch {}
 
         $localUsers = @()
+
         try {
-          $localUsers = @(Get-LocalUser | ForEach-Object {
+          $userObjects = @(Get-LocalUser -ErrorAction SilentlyContinue)
+
+          foreach ($user in $userObjects) {
+            $userName = [string]$user.Name
             $groups = @()
-            foreach ($key in @($_.Name, "$env:COMPUTERNAME\$($_.Name)")) {
+
+            foreach ($key in @($userName, "$env:COMPUTERNAME\$userName")) {
               if ($groupMembershipByAccount.ContainsKey($key)) {
                 $groups += @($groupMembershipByAccount[$key])
               }
             }
+
             $groups = @($groups | Sort-Object -Unique)
 
-            [ordered]@{
-              name = $_.Name
-              enabled = $_.Enabled
-              full_name = $_.FullName
-              description = $_.Description
+            $passwordRequired = $user.PasswordRequired
+            $passwordExpires = Convert-DateValueToString -value $user.PasswordExpires
+            $userMayChangePassword = $user.UserMayChangePassword
+            $passwordLastSet = Convert-DateValueToString -value $user.PasswordLastSet
+            $lastLogon = Convert-DateValueToString -value $user.LastLogon
+
+            $localUsers += [pscustomobject][ordered]@{
+              name = $userName
+              enabled = $user.Enabled
+              full_name = $user.FullName
+              description = $user.Description
               groups = $groups
-              password_required = $_.PasswordRequired
-              password_expires = (Convert-DateValueToString $_.PasswordExpires)
-              user_may_change_password = $_.UserMayChangePassword
-              password_last_set = (Convert-DateValueToString $_.PasswordLastSet)
-              last_logon = (Convert-DateValueToString $_.LastLogon)
+              password_required = $passwordRequired
+              password_expires = $passwordExpires
+              user_may_change_password = $userMayChangePassword
+              password_last_set = $passwordLastSet
+              last_logon = $lastLogon
               password_note = "Klartextpasswoerter koennen nicht ausgelesen werden"
             }
-          })
+          }
         } catch {}
 
         $result = [ordered]@{
