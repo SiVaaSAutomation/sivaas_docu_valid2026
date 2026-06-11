@@ -18,11 +18,6 @@
     #     report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
     #     report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
 
-    - name: Zeitstempel fuer Report sicherstellen
-      ansible.builtin.set_fact:
-        report_timestamp: "{{ hostvars['localhost']['report_timestamp'] | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}"
-        report_timestamp_iso: "{{ hostvars['localhost']['report_timestamp_iso'] | default(lookup('pipe', 'date -Iseconds')) }}"
-
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
       ansible.builtin.shell: "command -v nmap"
       register: nmap_check
@@ -242,7 +237,7 @@
         }
 
         $result = [ordered]@{
-          scan_timestamp = "{{ hostvars['localhost'].report_timestamp_iso }}"
+          scan_timestamp = $null 
           target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
           ip = "{{ inventory_hostname }}"
           ansible_reachable = $true
@@ -289,6 +284,12 @@
   vars:
     result_dir: "./reports"
   tasks:
+
+    - name: Zeitstempel fuer Report sicherstellen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ hostvars['localhost']['report_timestamp'] | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}"
+        report_timestamp_iso: "{{ hostvars['localhost']['report_timestamp_iso'] | default(lookup('pipe', 'date -Iseconds')) }}"
+
     - name: Report-Verzeichnis erzeugen
       ansible.builtin.file:
         path: "{{ result_dir }}"
@@ -297,12 +298,12 @@
 
     - name: JSON-Report erzeugen
       ansible.builtin.copy:
-        dest: "{{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.json"
+        dest: "{{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.json"
         mode: "0644"
         content: |
           [
           {% for h in groups['pcs7_check_targets'] | default([]) %}
-          {{ (hostvars[h].pcs7_info | default({'scan_timestamp': hostvars['localhost'].report_timestamp_iso, 'ip': h, 'ansible_reachable': false, 'pcs7_installation_performed': false, 'evidence_quality': 'nicht_pruefbar', 'error': 'WinRM nicht erreichbar oder Zugriff verweigert'})) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {{ (hostvars[h].pcs7_info | default({'scan_timestamp': report_timestamp_iso, 'ip': h, 'ansible_reachable': false, 'pcs7_installation_performed': false, 'evidence_quality': 'nicht_pruefbar', 'error': 'WinRM nicht erreichbar oder Zugriff verweigert'})) | to_nice_json }}{% if not loop.last %},{% endif %}
           {% endfor %}
           ]
 
@@ -314,8 +315,8 @@
         import json
         from pathlib import Path
 
-        json_path = Path("{{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.json")
-        csv_path = Path("{{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.csv")
+        json_path = Path("{{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.json")
+        csv_path = Path("{{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.csv")
 
         data = json.loads(json_path.read_text(encoding="utf-8"))
 
@@ -429,5 +430,5 @@
     - name: Pfade der erzeugten Reports anzeigen
       ansible.builtin.debug:
         msg:
-          - "JSON: {{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.json"
-          - "CSV:  {{ result_dir }}/pcs7_installation_check_{{ hostvars['localhost'].report_timestamp }}.csv"
+          - "JSON: {{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.csv"
