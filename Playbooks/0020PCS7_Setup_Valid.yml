@@ -302,6 +302,11 @@
           $latestLog = $pcs7SetupLogs[0]
         }
 
+        $systemLocale = Get-WinSystemLocale
+        $uiCulture = Get-UICulture
+        $culture = Get-Culture
+
+
         $result = [ordered]@{
           scan_timestamp = $null 
           target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
@@ -328,6 +333,9 @@
           siemens_components = $components
           log_product_lines = $logProductLines
           adapters = $adapters
+          System_Locale = $systemLocale
+          UI_Culture = $uiCulture
+          Culture = $culture
           error = $null
         }
 
