@@ -302,9 +302,15 @@
           $latestLog = $pcs7SetupLogs[0]
         }
 
-        $systemLocale = Get-WinSystemLocale
-        $uiCulture = Get-UICulture
-        $culture = Get-Culture
+        $systemLocale = $null
+        $uiCulture = $null
+        $culture = $null
+        $userLanguageList = @()
+
+        try { $systemLocale = Get-WinSystemLocale } catch {}
+        try { $uiCulture = Get-UICulture } catch {}
+        try { $culture = Get-Culture } catch {}
+        try { $userLanguageList = @((Get-WinUserLanguageList).LanguageTag) } catch {}
 
 
         $result = [ordered]@{
@@ -333,9 +339,13 @@
           siemens_components = $components
           log_product_lines = $logProductLines
           adapters = $adapters
-          System_Locale = $systemLocale
-          UI_Culture = $uiCulture
-          Culture = $culture
+          system_locale = if ($systemLocale) { $systemLocale.Name } else { $null }
+          system_locale_display_name = if ($systemLocale) { $systemLocale.DisplayName } else { $null }
+          ui_culture = if ($uiCulture) { $uiCulture.Name } else { $null }
+          ui_culture_display_name = if ($uiCulture) { $uiCulture.DisplayName } else { $null }
+          culture = if ($culture) { $culture.Name } else { $null }
+          culture_display_name = if ($culture) { $culture.DisplayName } else { $null }
+          user_language_list = $userLanguageList
           error = $null
         }
 
@@ -441,6 +451,13 @@
                 "Domaenenmitglied": item.get("part_of_domain", ""),
                 "Betriebssystem": item.get("os_caption", ""),
                 "OS_Version": item.get("os_version", ""),
+                "System_Locale": item.get("system_locale", ""),
+                "System_Locale_Anzeige": item.get("system_locale_display_name", ""),
+                "UI_Culture": item.get("ui_culture", ""),
+                "UI_Culture_Anzeige": item.get("ui_culture_display_name", ""),
+                "Culture": item.get("culture", ""),
+                "Culture_Anzeige": item.get("culture_display_name", ""),
+                "Benutzer_Sprachenliste": join_values(item.get("user_language_list"), ","),
                 "PCS7_Installation_nachgewiesen": item.get("pcs7_installation_performed", False),
                 "Nachweisqualitaet": item.get("evidence_quality", ""),
                 "PCS7_Versionen_aus_Setup_Log": join_values(item.get("pcs7_versions_from_logs"), " | "),
@@ -453,11 +470,23 @@
                 "Alle_Siemens_Komponenten_mit_Version": component_text(item.get("siemens_components")),
                 "Setup_Logpfad_vorhanden": item.get("setup_log_exists", ""),
                 "Setup_Logpfad": item.get("setup_log_path", ""),
+                "Adapterbeschreibung": adapter_field(item, "description"),
+                "DNS_Hostname": adapter_field(item, "dns_host_name"),
+                "DNS_Domain": adapter_field(item, "dns_domain"),
                 "IPv4_Adressen": adapter_field(item, "ipv4_address"),
+                "IPv6_Adressen": adapter_field(item, "ipv6_address"),
+                "Subnetzmasken": adapter_field(item, "ip_subnet"),
                 "Gateway": adapter_field(item, "default_gateway"),
                 "DNS_Server": adapter_field(item, "dns_server"),
                 "MAC_Adressen": adapter_field(item, "mac_address"),
                 "DHCP": adapter_field(item, "dhcp_enabled"),
+                "DHCP_Server": adapter_field(item, "dhcp_server"),
+                "WINS_Primary": adapter_field(item, "wins_primary_server"),
+                "WINS_Secondary": adapter_field(item, "wins_secondary_server"),
+                "NetBIOS_Optionen": adapter_field(item, "tcpip_netbios_options"),
+                "WinRM_Port": item.get("winrm_port", ""),
+                "WinRM_Schema": item.get("winrm_scheme", ""),
+                "WinRM_Offene_Ports": item.get("winrm_open_ports", ""),
                 "Fehler": item.get("error", ""),
             })
 
@@ -472,6 +501,13 @@
             "Domaenenmitglied",
             "Betriebssystem",
             "OS_Version",
+            "System_Locale",
+            "System_Locale_Anzeige",
+            "UI_Culture",
+            "UI_Culture_Anzeige",
+            "Culture",
+            "Culture_Anzeige",
+            "Benutzer_Sprachenliste",
             "PCS7_Installation_nachgewiesen",
             "Nachweisqualitaet",
             "PCS7_Versionen_aus_Setup_Log",
@@ -484,11 +520,23 @@
             "Alle_Siemens_Komponenten_mit_Version",
             "Setup_Logpfad_vorhanden",
             "Setup_Logpfad",
+            "Adapterbeschreibung",
+            "DNS_Hostname",
+            "DNS_Domain",
             "IPv4_Adressen",
+            "IPv6_Adressen",
+            "Subnetzmasken",
             "Gateway",
             "DNS_Server",
             "MAC_Adressen",
             "DHCP",
+            "DHCP_Server",
+            "WINS_Primary",
+            "WINS_Secondary",
+            "NetBIOS_Optionen",
+            "WinRM_Port",
+            "WinRM_Schema",
+            "WinRM_Offene_Ports",
             "Fehler",
         ]
 
