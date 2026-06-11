@@ -387,10 +387,18 @@
         content: |
           [
           {% for h in groups['pcs7_check_targets'] | default([]) %}
-          {{ (hostvars[h].pcs7_info | default({'scan_timestamp': report_timestamp_iso, 'ip': h, 'ansible_reachable': false, 'pcs7_installation_performed': false, 'evidence_quality': 'nicht_pruefbar', 'error': 'WinRM nicht erreichbar oder Zugriff verweigert'})) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% set fallback = {
+            'scan_timestamp': report_timestamp_iso,
+            'ip': h,
+            'ansible_reachable': false,
+            'pcs7_installation_performed': false,
+            'evidence_quality': 'nicht_pruefbar',
+            'error': 'WinRM nicht erreichbar oder Zugriff verweigert'
+          } %}
+          {{ ((hostvars[h].pcs7_info | default(fallback)) | combine({'scan_timestamp': report_timestamp_iso})) | to_nice_json }}{% if not loop.last %},{% endif %}
           {% endfor %}
           ]
-
+          
     - name: CSV-Report aus JSON erzeugen
       ansible.builtin.shell: |
         set -euo pipefail
