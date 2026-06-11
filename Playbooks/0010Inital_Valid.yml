@@ -169,281 +169,95 @@
     - name: Computername, Domaene und Kommunikationseinstellungen auslesen
       ansible.windows.win_shell: |
         $ErrorActionPreference = "SilentlyContinue"
-        $ProgressPreference = "SilentlyContinue"
 
-
- 
-        trap {
-          $fallback = [ordered]@{
-            ip = "{{ inventory_hostname }}"
-            ansible_reachable = $true
-            computername = $env:COMPUTERNAME
-            error = $_.Exception.Message
-          }
-          $fallback | ConvertTo-Json -Depth 20 -Compress
-          exit 0
-        }
-
-        function Convert-DateValueToString {
-          param($Value)
-
-          if ($null -eq $Value) {
-            return $null
-          }
-
-          if ($Value -is [DateTime]) {
-            return $Value.ToString("s")
-          }
-
-          return $Value.ToString()
-        }
-
-        function Get-PropertyValue {
-          param(
-            [object]$InputObject,
-            [string]$Name
-          )
-
-          if ($null -eq $InputObject) {
-            return $null
-          }
-
-          $property = $InputObject.PSObject.Properties[$Name]
-          if ($null -eq $property) {
-            return $null
-          }
-
-          return $property.Value
-        }
-
-        function Add-GroupMembership {
-          param(
-            [hashtable]$MembershipTable,
-            [string]$AccountName,
-            [string]$GroupName
-          )
-
-          if ([string]::IsNullOrWhiteSpace($AccountName)) {
-            return
-          }
-
-          if (-not $MembershipTable.ContainsKey($AccountName)) {
-            $MembershipTable[$AccountName] = @()
-          }
-
-          $MembershipTable[$AccountName] += $GroupName
-        }
-
-        $cs = $null
-        $os = $null
-        $bios = $null
-
-        try { $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop } catch {}
-        try { $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop } catch {}
-        try { $bios = Get-CimInstance Win32_BIOS -ErrorAction Stop } catch {}
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+        $bios = Get-CimInstance Win32_BIOS
 
         $fqdn = $null
         try {
           $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
         } catch {}
 
-        $workgroup = $null
-        try {
-          $partOfDomain = Get-PropertyValue -InputObject $cs -Name "PartOfDomain"
-          if ($partOfDomain -eq $false) {
-            $workgroup = Get-PropertyValue -InputObject $cs -Name "Workgroup"
+        $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" | ForEach-Object {
+          [ordered]@{
+            description = $_.Description
+            dns_host_name = $_.DNSHostName
+            dns_domain = $_.DNSDomain
+            mac_address = $_.MACAddress
+            dhcp_enabled = $_.DHCPEnabled
+            dhcp_server = $_.DHCPServer
+            ip_address = @($_.IPAddress)
+            ip_subnet = @($_.IPSubnet)
+            default_gateway = @($_.DefaultIPGateway)
+            dns_server = @($_.DNSServerSearchOrder)
+            wins_primary_server = $_.WINSPrimaryServer
+            wins_secondary_server = $_.WINSSecondaryServer
+            tcpip_netbios_options = $_.TcpipNetbiosOptions
           }
-        } catch {}
-
-        $adapters = @()
-        try {
-          $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" -ErrorAction Stop | ForEach-Object {
-            [ordered]@{
-              description = Get-PropertyValue -InputObject $_ -Name "Description"
-              dns_host_name = Get-PropertyValue -InputObject $_ -Name "DNSHostName"
-              dns_domain = Get-PropertyValue -InputObject $_ -Name "DNSDomain"
-              mac_address = Get-PropertyValue -InputObject $_ -Name "MACAddress"
-              dhcp_enabled = Get-PropertyValue -InputObject $_ -Name "DHCPEnabled"
-              dhcp_server = Get-PropertyValue -InputObject $_ -Name "DHCPServer"
-              ip_address = @(Get-PropertyValue -InputObject $_ -Name "IPAddress")
-              ip_subnet = @(Get-PropertyValue -InputObject $_ -Name "IPSubnet")
-              default_gateway = @(Get-PropertyValue -InputObject $_ -Name "DefaultIPGateway")
-              dns_server = @(Get-PropertyValue -InputObject $_ -Name "DNSServerSearchOrder")
-              wins_primary_server = Get-PropertyValue -InputObject $_ -Name "WINSPrimaryServer"
-              wins_secondary_server = Get-PropertyValue -InputObject $_ -Name "WINSSecondaryServer"
-              tcpip_netbios_options = Get-PropertyValue -InputObject $_ -Name "TcpipNetbiosOptions"
-            }
-          })
-        } catch {}
+        })
 
         $defaultRoutes = @()
         try {
-          $defaultRoutes = @(Get-CimInstance Win32_IP4RouteTable -ErrorAction Stop |
+          $defaultRoutes = @(Get-CimInstance Win32_IP4RouteTable |
             Where-Object { $_.Destination -eq "0.0.0.0" } |
             ForEach-Object {
               [ordered]@{
-                gateway = Get-PropertyValue -InputObject $_ -Name "NextHop"
-                interface_index = Get-PropertyValue -InputObject $_ -Name "InterfaceIndex"
-                metric = Get-PropertyValue -InputObject $_ -Name "Metric1"
+                gateway = $_.NextHop
+                interface_index = $_.InterfaceIndex
+                metric = $_.Metric1
               }
             })
         } catch {}
 
         $firewallProfiles = @()
         try {
-          $firewallProfiles = @(Get-NetFirewallProfile -ErrorAction Stop | ForEach-Object {
-            $defaultInboundAction = Get-PropertyValue -InputObject $_ -Name "DefaultInboundAction"
-            $defaultOutboundAction = Get-PropertyValue -InputObject $_ -Name "DefaultOutboundAction"
-
-            if ($null -ne $defaultInboundAction) {
-              $defaultInboundAction = $defaultInboundAction.ToString()
-            }
-
-            if ($null -ne $defaultOutboundAction) {
-              $defaultOutboundAction = $defaultOutboundAction.ToString()
-            }
-
+          $firewallProfiles = @(Get-NetFirewallProfile | ForEach-Object {
             [ordered]@{
-              name = Get-PropertyValue -InputObject $_ -Name "Name"
-              enabled = Get-PropertyValue -InputObject $_ -Name "Enabled"
-              default_inbound_action = $defaultInboundAction
-              default_outbound_action = $defaultOutboundAction
-              notify_on_listen = Get-PropertyValue -InputObject $_ -Name "NotifyOnListen"
+              name = $_.Name
+              enabled = $_.Enabled
+              default_inbound_action = $_.DefaultInboundAction.ToString()
+              default_outbound_action = $_.DefaultOutboundAction.ToString()
+              notify_on_listen = $_.NotifyOnListen
             }
           })
         } catch {}
 
         $winrmListeners = @()
         try {
-          $winrmListeners = @(Get-ChildItem WSMan:\localhost\Listener -ErrorAction Stop | ForEach-Object {
-            $address = $null
-            $port = $null
-            $enabled = $null
-
-            try { $address = (Get-Item "$($_.PSPath)\Address" -ErrorAction Stop).Value } catch {}
-            try { $port = (Get-Item "$($_.PSPath)\Port" -ErrorAction Stop).Value } catch {}
-            try { $enabled = (Get-Item "$($_.PSPath)\Enabled" -ErrorAction Stop).Value } catch {}
-
+          $winrmListeners = @(Get-ChildItem WSMan:\localhost\Listener | ForEach-Object {
             [ordered]@{
               keys = ($_.Keys -join ";")
-              address = $address
-              port = $port
-              enabled = $enabled
+              address = (Get-Item "$($_.PSPath)\Address").Value
+              port = (Get-Item "$($_.PSPath)\Port").Value
+              enabled = (Get-Item "$($_.PSPath)\Enabled").Value
             }
           })
         } catch {}
-
-        $groupMembershipByAccount = @{}
-        $localGroups = @()
-
-        try {
-          $groupObjects = @(Get-LocalGroup -ErrorAction Stop)
-        } catch {
-          $groupObjects = @()
-        }
-
-        foreach ($group in $groupObjects) {
-          $groupName = [string](Get-PropertyValue -InputObject $group -Name "Name")
-          $members = @()
-
-          try {
-            $memberObjects = @(Get-LocalGroupMember -Group $groupName -ErrorAction Stop)
-          } catch {
-            $memberObjects = @()
-          }
-
-          foreach ($member in $memberObjects) {
-            $memberName = [string](Get-PropertyValue -InputObject $member -Name "Name")
-            $shortName = ($memberName -split '\\')[-1]
-            $objectClass = [string](Get-PropertyValue -InputObject $member -Name "ObjectClass")
-            $principalSource = Get-PropertyValue -InputObject $member -Name "PrincipalSource"
-
-            if ($null -ne $principalSource) {
-              $principalSource = [string]$principalSource
-            }
-
-            if ($objectClass -eq "User") {
-              Add-GroupMembership -MembershipTable $groupMembershipByAccount -AccountName $memberName -GroupName $groupName
-              Add-GroupMembership -MembershipTable $groupMembershipByAccount -AccountName $shortName -GroupName $groupName
-              Add-GroupMembership -MembershipTable $groupMembershipByAccount -AccountName "$env:COMPUTERNAME\$shortName" -GroupName $groupName
-            }
-
-            $members += [ordered]@{
-              name = $memberName
-              object_class = $objectClass
-              principal_source = $principalSource
-            }
-          }
-
-          $localGroups += [ordered]@{
-            name = $groupName
-            description = Get-PropertyValue -InputObject $group -Name "Description"
-            members = $members
-          }
-        }
-
-        $localUsers = @()
-
-        try {
-          $userObjects = @(Get-LocalUser -ErrorAction Stop)
-        } catch {
-          $userObjects = @()
-        }
-
-        foreach ($user in $userObjects) {
-          $userName = [string](Get-PropertyValue -InputObject $user -Name "Name")
-          $groups = @()
-
-          foreach ($key in @($userName, "$env:COMPUTERNAME\$userName")) {
-            if ($groupMembershipByAccount.ContainsKey($key)) {
-              $groups += @($groupMembershipByAccount[$key])
-            }
-          }
-
-          $groups = @($groups | Sort-Object -Unique)
-
-          $localUsers += [ordered]@{
-            name = $userName
-            enabled = Get-PropertyValue -InputObject $user -Name "Enabled"
-            full_name = Get-PropertyValue -InputObject $user -Name "FullName"
-            description = Get-PropertyValue -InputObject $user -Name "Description"
-            groups = $groups
-            password_required = Get-PropertyValue -InputObject $user -Name "PasswordRequired"
-            password_expires = Convert-DateValueToString -Value (Get-PropertyValue -InputObject $user -Name "PasswordExpires")
-            user_may_change_password = Get-PropertyValue -InputObject $user -Name "UserMayChangePassword"
-            password_last_set = Convert-DateValueToString -Value (Get-PropertyValue -InputObject $user -Name "PasswordLastSet")
-            last_logon = Convert-DateValueToString -Value (Get-PropertyValue -InputObject $user -Name "LastLogon")
-            password_note = "Klartextpasswoerter koennen nicht ausgelesen werden"
-          }
-        }
 
         $result = [ordered]@{
           ip = "{{ inventory_hostname }}"
           ansible_reachable = $true
           computername = $env:COMPUTERNAME
           fqdn = $fqdn
-          domain = Get-PropertyValue -InputObject $cs -Name "Domain"
-          part_of_domain = Get-PropertyValue -InputObject $cs -Name "PartOfDomain"
-          workgroup = $workgroup
-          manufacturer = Get-PropertyValue -InputObject $cs -Name "Manufacturer"
-          model = Get-PropertyValue -InputObject $cs -Name "Model"
-          os_caption = Get-PropertyValue -InputObject $os -Name "Caption"
-          os_version = Get-PropertyValue -InputObject $os -Name "Version"
-          serial_number = Get-PropertyValue -InputObject $bios -Name "SerialNumber"
+          domain = $cs.Domain
+          part_of_domain = $cs.PartOfDomain
+          workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
+          manufacturer = $cs.Manufacturer
+          model = $cs.Model
+          os_caption = $os.Caption
+          os_version = $os.Version
+          serial_number = $bios.SerialNumber
           adapters = $adapters
           default_routes = $defaultRoutes
           firewall_profiles = $firewallProfiles
           winrm_listeners = $winrmListeners
-          local_users = $localUsers
-          local_groups = $localGroups
         }
 
-        $result | ConvertTo-Json -Depth 20 -Compress
-        exit 0
+        $result | ConvertTo-Json -Depth 8 -Compress
       register: communication_raw
       when: win_ping_result is defined and win_ping_result is succeeded
       changed_when: false
-      failed_when: false
 
     - name: Kommunikationsdaten als Host-Fact speichern
       ansible.builtin.set_fact:
@@ -452,7 +266,6 @@
         - communication_raw is defined
         - communication_raw.stdout is defined
         - communication_raw.stdout | length > 0
-        - communication_raw.stdout | trim is match('^[{]')
 
 
 
@@ -509,10 +322,10 @@
         dest: "{{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.csv"
         mode: "0644"
         content: |
-          IP;Ansible_erreichbar;Computername;FQDN;Domaene;Domaenenmitglied;Workgroup;OS;IPv4;Subnetz;Gateway;DNS_Server;MAC;DHCP;Firewallprofile;WinRM_Listener;Lokale_Benutzer;Passwort_erforderlich;Passwort_laeuft_ab;Benutzer_darf_aendern;Passwort_zuletzt_gesetzt;Letzter_Login;Benutzer_Gruppen
+          IP;Ansible_erreichbar;Computername;FQDN;Domaene;Domaenenmitglied;Workgroup;OS;IPv4;Subnetz;Gateway;DNS_Server;MAC;DHCP;Firewallprofile;WinRM_Listener
           {% for h in groups['discovered_windows'] | default([]) %}
           {% set info = hostvars[h].communication_info | default({}) %}
-          {{ h }};{{ info.ansible_reachable | default(false) }};{{ info.computername | default('') }};{{ info.fqdn | default('') }};{{ info.domain | default('') }};{{ info.part_of_domain | default('') }};{{ info.workgroup | default('') }};{{ info.os_caption | default('') }};"{% for a in info.adapters | default([]) %}{{ a.ip_address | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.ip_subnet | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.default_gateway | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dns_server | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.mac_address | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dhcp_enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for f in info.firewall_profiles | default([]) %}{{ f.name | default('') }}={{ f.enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for l in info.winrm_listeners | default([]) %}{{ l.keys | default('') }}:{{ l.port | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('') }} (aktiv={{ u.enabled | default('') }}){% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('') }}={{ u.password_required | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('') }}={{ u.password_expires | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('') }}={{ u.user_may_change_password | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('') }}={{ u.password_last_set | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('') }}={{ u.last_logon | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('') }}={{ u.groups | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}"
+          {{ h }};{{ info.ansible_reachable | default(false) }};{{ info.computername | default('') }};{{ info.fqdn | default('') }};{{ info.domain | default('') }};{{ info.part_of_domain | default('') }};{{ info.workgroup | default('') }};{{ info.os_caption | default('') }};"{% for a in info.adapters | default([]) %}{{ a.ip_address | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.ip_subnet | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.default_gateway | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dns_server | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.mac_address | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dhcp_enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for f in info.firewall_profiles | default([]) %}{{ f.name | default('') }}={{ f.enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for l in info.winrm_listeners | default([]) %}{{ l.keys | default('') }}:{{ l.port | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}"
           {% endfor %}
 
     - name: Pfade der erzeugten Reports anzeigen
