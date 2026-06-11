@@ -13,10 +13,15 @@
     winrm_transport: ntlm
     result_dir: "./reports"
   tasks:
-    - name: Zeitstempel fuer Report setzen
+    # - name: Zeitstempel fuer Report setzen
+    #   ansible.builtin.set_fact:
+    #     report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+    #     report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+    - name: Zeitstempel fuer Report sicherstellen
       ansible.builtin.set_fact:
-        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+        report_timestamp: "{{ hostvars['localhost']['report_timestamp'] | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}"
+        report_timestamp_iso: "{{ hostvars['localhost']['report_timestamp_iso'] | default(lookup('pipe', 'date -Iseconds')) }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
       ansible.builtin.shell: "command -v nmap"
