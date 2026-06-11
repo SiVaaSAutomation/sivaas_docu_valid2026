@@ -312,10 +312,10 @@
               description = $_.Description
               groups = $groups
               password_required = $_.PasswordRequired
-              password_expires = Convert-DateValueToString $_.PasswordExpires
+              password_expires = (Convert-DateValueToString $_.PasswordExpires)
               user_may_change_password = $_.UserMayChangePassword
-              password_last_set = Convert-DateValueToString $_.PasswordLastSet
-              last_logon = Convert-DateValueToString $_.LastLogon
+              password_last_set = (Convert-DateValueToString $_.PasswordLastSet)
+              last_logon = (Convert-DateValueToString $_.LastLogon)
               password_note = "Klartextpasswoerter koennen nicht ausgelesen werden"
             }
           })
