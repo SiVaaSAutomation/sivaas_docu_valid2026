@@ -169,10 +169,78 @@
     - name: Computername, Domaene und Kommunikationseinstellungen auslesen
       ansible.windows.win_shell: |
         $ErrorActionPreference = "SilentlyContinue"
+        $ProgressPreference = "SilentlyContinue"
 
-        $cs = Get-CimInstance Win32_ComputerSystem
-        $os = Get-CimInstance Win32_OperatingSystem
-        $bios = Get-CimInstance Win32_BIOS
+
+ 
+        trap {
+          $fallback = [ordered]@{
+            ip = "{{ inventory_hostname }}"
+            ansible_reachable = $true
+            computername = $env:COMPUTERNAME
+            error = $_.Exception.Message
+          }
+          $fallback | ConvertTo-Json -Depth 20 -Compress
+          exit 0
+        }
+
+        function Convert-DateValueToString {
+          param($Value)
+
+          if ($null -eq $Value) {
+            return $null
+          }
+
+          if ($Value -is [DateTime]) {
+            return $Value.ToString("s")
+          }
+
+          return $Value.ToString()
+        }
+
+        function Get-PropertyValue {
+          param(
+            [object]$InputObject,
+            [string]$Name
+          )
+
+          if ($null -eq $InputObject) {
+            return $null
+          }
+
+          $property = $InputObject.PSObject.Properties[$Name]
+          if ($null -eq $property) {
+            return $null
+          }
+
+          return $property.Value
+        }
+
+        function Add-GroupMembership {
+          param(
+            [hashtable]$MembershipTable,
+            [string]$AccountName,
+            [string]$GroupName
+          )
+
+          if ([string]::IsNullOrWhiteSpace($AccountName)) {
+            return
+          }
+
+          if (-not $MembershipTable.ContainsKey($AccountName)) {
+            $MembershipTable[$AccountName] = @()
+          }
+
+          $MembershipTable[$AccountName] += $GroupName
+        }
+
+        $cs = $null
+        $os = $null
+        $bios = $null
+
+        try { $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop } catch {}
+        try { $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop } catch {}
+        try { $bios = Get-CimInstance Win32_BIOS -ErrorAction Stop } catch {}
 
         $fqdn = $null
         try {
@@ -180,197 +248,202 @@
         } catch {}
 
         $workgroup = $null
-        if (-not $cs.PartOfDomain) {
-          $workgroup = $cs.Workgroup
-        }
-
-        $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" | ForEach-Object {
-          [ordered]@{
-            description = $_.Description
-            dns_host_name = $_.DNSHostName
-            dns_domain = $_.DNSDomain
-            mac_address = $_.MACAddress
-            dhcp_enabled = $_.DHCPEnabled
-            dhcp_server = $_.DHCPServer
-            ip_address = @($_.IPAddress)
-            ip_subnet = @($_.IPSubnet)
-            default_gateway = @($_.DefaultIPGateway)
-            dns_server = @($_.DNSServerSearchOrder)
-            wins_primary_server = $_.WINSPrimaryServer
-            wins_secondary_server = $_.WINSSecondaryServer
-            tcpip_netbios_options = $_.TcpipNetbiosOptions
+        try {
+          $partOfDomain = Get-PropertyValue -InputObject $cs -Name "PartOfDomain"
+          if ($partOfDomain -eq $false) {
+            $workgroup = Get-PropertyValue -InputObject $cs -Name "Workgroup"
           }
-        })
+        } catch {}
+
+        $adapters = @()
+        try {
+          $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" -ErrorAction Stop | ForEach-Object {
+            [ordered]@{
+              description = Get-PropertyValue -InputObject $_ -Name "Description"
+              dns_host_name = Get-PropertyValue -InputObject $_ -Name "DNSHostName"
+              dns_domain = Get-PropertyValue -InputObject $_ -Name "DNSDomain"
+              mac_address = Get-PropertyValue -InputObject $_ -Name "MACAddress"
+              dhcp_enabled = Get-PropertyValue -InputObject $_ -Name "DHCPEnabled"
+              dhcp_server = Get-PropertyValue -InputObject $_ -Name "DHCPServer"
+              ip_address = @(Get-PropertyValue -InputObject $_ -Name "IPAddress")
+              ip_subnet = @(Get-PropertyValue -InputObject $_ -Name "IPSubnet")
+              default_gateway = @(Get-PropertyValue -InputObject $_ -Name "DefaultIPGateway")
+              dns_server = @(Get-PropertyValue -InputObject $_ -Name "DNSServerSearchOrder")
+              wins_primary_server = Get-PropertyValue -InputObject $_ -Name "WINSPrimaryServer"
+              wins_secondary_server = Get-PropertyValue -InputObject $_ -Name "WINSSecondaryServer"
+              tcpip_netbios_options = Get-PropertyValue -InputObject $_ -Name "TcpipNetbiosOptions"
+            }
+          })
+        } catch {}
 
         $defaultRoutes = @()
         try {
-          $defaultRoutes = @(Get-CimInstance Win32_IP4RouteTable |
+          $defaultRoutes = @(Get-CimInstance Win32_IP4RouteTable -ErrorAction Stop |
             Where-Object { $_.Destination -eq "0.0.0.0" } |
             ForEach-Object {
               [ordered]@{
-                gateway = $_.NextHop
-                interface_index = $_.InterfaceIndex
-                metric = $_.Metric1
+                gateway = Get-PropertyValue -InputObject $_ -Name "NextHop"
+                interface_index = Get-PropertyValue -InputObject $_ -Name "InterfaceIndex"
+                metric = Get-PropertyValue -InputObject $_ -Name "Metric1"
               }
             })
         } catch {}
 
         $firewallProfiles = @()
         try {
-          $firewallProfiles = @(Get-NetFirewallProfile | ForEach-Object {
+          $firewallProfiles = @(Get-NetFirewallProfile -ErrorAction Stop | ForEach-Object {
+            $defaultInboundAction = Get-PropertyValue -InputObject $_ -Name "DefaultInboundAction"
+            $defaultOutboundAction = Get-PropertyValue -InputObject $_ -Name "DefaultOutboundAction"
+
+            if ($null -ne $defaultInboundAction) {
+              $defaultInboundAction = $defaultInboundAction.ToString()
+            }
+
+            if ($null -ne $defaultOutboundAction) {
+              $defaultOutboundAction = $defaultOutboundAction.ToString()
+            }
+
             [ordered]@{
-              name = $_.Name
-              enabled = $_.Enabled
-              default_inbound_action = $_.DefaultInboundAction.ToString()
-              default_outbound_action = $_.DefaultOutboundAction.ToString()
-              notify_on_listen = $_.NotifyOnListen
+              name = Get-PropertyValue -InputObject $_ -Name "Name"
+              enabled = Get-PropertyValue -InputObject $_ -Name "Enabled"
+              default_inbound_action = $defaultInboundAction
+              default_outbound_action = $defaultOutboundAction
+              notify_on_listen = Get-PropertyValue -InputObject $_ -Name "NotifyOnListen"
             }
           })
         } catch {}
 
         $winrmListeners = @()
         try {
-          $winrmListeners = @(Get-ChildItem WSMan:\localhost\Listener | ForEach-Object {
+          $winrmListeners = @(Get-ChildItem WSMan:\localhost\Listener -ErrorAction Stop | ForEach-Object {
+            $address = $null
+            $port = $null
+            $enabled = $null
+
+            try { $address = (Get-Item "$($_.PSPath)\Address" -ErrorAction Stop).Value } catch {}
+            try { $port = (Get-Item "$($_.PSPath)\Port" -ErrorAction Stop).Value } catch {}
+            try { $enabled = (Get-Item "$($_.PSPath)\Enabled" -ErrorAction Stop).Value } catch {}
+
             [ordered]@{
               keys = ($_.Keys -join ";")
-              address = (Get-Item "$($_.PSPath)\Address").Value
-              port = (Get-Item "$($_.PSPath)\Port").Value
-              enabled = (Get-Item "$($_.PSPath)\Enabled").Value
+              address = $address
+              port = $port
+              enabled = $enabled
             }
           })
         } catch {}
-
-        function Convert-DateValueToString($value) {
-          if ($null -eq $value) {
-            return $null
-          }
-
-          if ($value -is [DateTime]) {
-            return $value.ToString("s")
-          }
-
-          return $value.ToString()
-        }
 
         $groupMembershipByAccount = @{}
         $localGroups = @()
 
         try {
-          $groupObjects = @(Get-LocalGroup -ErrorAction SilentlyContinue)
+          $groupObjects = @(Get-LocalGroup -ErrorAction Stop)
+        } catch {
+          $groupObjects = @()
+        }
 
-          foreach ($group in $groupObjects) {
-            $groupName = [string]$group.Name
-            $members = @()
+        foreach ($group in $groupObjects) {
+          $groupName = [string](Get-PropertyValue -InputObject $group -Name "Name")
+          $members = @()
 
-            try {
-              $memberObjects = @(Get-LocalGroupMember -Group $groupName -ErrorAction SilentlyContinue)
-
-              foreach ($member in $memberObjects) {
-                $memberName = [string]$member.Name
-                $shortName = ($memberName -split '\\')[-1]
-                $objectClass = [string]$member.ObjectClass
-
-                if ($objectClass -eq "User") {
-                  foreach ($key in @($memberName, $shortName)) {
-                    if (-not $groupMembershipByAccount.ContainsKey($key)) {
-                      $groupMembershipByAccount[$key] = @()
-                    }
-
-                    $groupMembershipByAccount[$key] += $groupName
-                  }
-                }
-
-                $principalSource = $null
-                if ($null -ne $member.PrincipalSource) {
-                  $principalSource = [string]$member.PrincipalSource
-                }
-
-                $memberInfo = [ordered]@{
-                    name = $memberName
-                    object_class = $objectClass
-                    principal_source = $principalSource
-                  }
-
-                $members += $memberInfo
-              }
-            } catch {}
-
-            $groupInfo = [ordered]@{
-                name = $groupName
-                description = $group.Description
-                members = $members
-              }
-
-              $localGroups += $groupInfo
+          try {
+            $memberObjects = @(Get-LocalGroupMember -Group $groupName -ErrorAction Stop)
+          } catch {
+            $memberObjects = @()
           }
-        } catch {}
+
+          foreach ($member in $memberObjects) {
+            $memberName = [string](Get-PropertyValue -InputObject $member -Name "Name")
+            $shortName = ($memberName -split '\\')[-1]
+            $objectClass = [string](Get-PropertyValue -InputObject $member -Name "ObjectClass")
+            $principalSource = Get-PropertyValue -InputObject $member -Name "PrincipalSource"
+
+            if ($null -ne $principalSource) {
+              $principalSource = [string]$principalSource
+            }
+
+            if ($objectClass -eq "User") {
+              Add-GroupMembership -MembershipTable $groupMembershipByAccount -AccountName $memberName -GroupName $groupName
+              Add-GroupMembership -MembershipTable $groupMembershipByAccount -AccountName $shortName -GroupName $groupName
+              Add-GroupMembership -MembershipTable $groupMembershipByAccount -AccountName "$env:COMPUTERNAME\$shortName" -GroupName $groupName
+            }
+
+            $members += [ordered]@{
+              name = $memberName
+              object_class = $objectClass
+              principal_source = $principalSource
+            }
+          }
+
+          $localGroups += [ordered]@{
+            name = $groupName
+            description = Get-PropertyValue -InputObject $group -Name "Description"
+            members = $members
+          }
+        }
 
         $localUsers = @()
 
         try {
-          $userObjects = @(Get-LocalUser -ErrorAction SilentlyContinue)
+          $userObjects = @(Get-LocalUser -ErrorAction Stop)
+        } catch {
+          $userObjects = @()
+        }
 
-          foreach ($user in $userObjects) {
-            $userName = [string]$user.Name
-            $groups = @()
+        foreach ($user in $userObjects) {
+          $userName = [string](Get-PropertyValue -InputObject $user -Name "Name")
+          $groups = @()
 
-            foreach ($key in @($userName, "$env:COMPUTERNAME\$userName")) {
-              if ($groupMembershipByAccount.ContainsKey($key)) {
-                $groups += @($groupMembershipByAccount[$key])
-              }
+          foreach ($key in @($userName, "$env:COMPUTERNAME\$userName")) {
+            if ($groupMembershipByAccount.ContainsKey($key)) {
+              $groups += @($groupMembershipByAccount[$key])
             }
-
-            $groups = @($groups | Sort-Object -Unique)
-
-            $passwordRequired = $user.PasswordRequired
-            $passwordExpires = Convert-DateValueToString -value $user.PasswordExpires
-            $userMayChangePassword = $user.UserMayChangePassword
-            $passwordLastSet = Convert-DateValueToString -value $user.PasswordLastSet
-            $lastLogon = Convert-DateValueToString -value $user.LastLogon
-
-            $userInfo = [ordered]@{
-              name = $userName
-              enabled = $user.Enabled
-              full_name = $user.FullName
-              description = $user.Description
-              groups = $groups
-              password_required = $passwordRequired
-              password_expires = $passwordExpires
-              user_may_change_password = $userMayChangePassword
-              password_last_set = $passwordLastSet
-              last_logon = $lastLogon
-              password_note = "Klartextpasswoerter koennen nicht ausgelesen werden"
-            }
-
-            $localUsers += $userInfo
           }
-        } catch {}
+
+          $groups = @($groups | Sort-Object -Unique)
+
+          $localUsers += [ordered]@{
+            name = $userName
+            enabled = Get-PropertyValue -InputObject $user -Name "Enabled"
+            full_name = Get-PropertyValue -InputObject $user -Name "FullName"
+            description = Get-PropertyValue -InputObject $user -Name "Description"
+            groups = $groups
+            password_required = Get-PropertyValue -InputObject $user -Name "PasswordRequired"
+            password_expires = Convert-DateValueToString -Value (Get-PropertyValue -InputObject $user -Name "PasswordExpires")
+            user_may_change_password = Get-PropertyValue -InputObject $user -Name "UserMayChangePassword"
+            password_last_set = Convert-DateValueToString -Value (Get-PropertyValue -InputObject $user -Name "PasswordLastSet")
+            last_logon = Convert-DateValueToString -Value (Get-PropertyValue -InputObject $user -Name "LastLogon")
+            password_note = "Klartextpasswoerter koennen nicht ausgelesen werden"
+          }
+        }
 
         $result = [ordered]@{
-                  ip = "{{ inventory_hostname }}"
-                  ansible_reachable = $true
-                  computername = $env:COMPUTERNAME
-                  fqdn = $fqdn
-                  domain = $cs.Domain
-                  part_of_domain = $cs.PartOfDomain
-                  workgroup = $workgroup
-                  manufacturer = $cs.Manufacturer
-                  model = $cs.Model
-                  os_caption = $os.Caption
-                  os_version = $os.Version
-                  serial_number = $bios.SerialNumber
-                  adapters = $adapters
-                  default_routes = $defaultRoutes
-                  firewall_profiles = $firewallProfiles
-                  winrm_listeners = $winrmListeners
-                  local_users = $localUsers
-                  local_groups = $localGroups
-                }               
+          ip = "{{ inventory_hostname }}"
+          ansible_reachable = $true
+          computername = $env:COMPUTERNAME
+          fqdn = $fqdn
+          domain = Get-PropertyValue -InputObject $cs -Name "Domain"
+          part_of_domain = Get-PropertyValue -InputObject $cs -Name "PartOfDomain"
+          workgroup = $workgroup
+          manufacturer = Get-PropertyValue -InputObject $cs -Name "Manufacturer"
+          model = Get-PropertyValue -InputObject $cs -Name "Model"
+          os_caption = Get-PropertyValue -InputObject $os -Name "Caption"
+          os_version = Get-PropertyValue -InputObject $os -Name "Version"
+          serial_number = Get-PropertyValue -InputObject $bios -Name "SerialNumber"
+          adapters = $adapters
+          default_routes = $defaultRoutes
+          firewall_profiles = $firewallProfiles
+          winrm_listeners = $winrmListeners
+          local_users = $localUsers
+          local_groups = $localGroups
+        }
 
-        $result | ConvertTo-Json -Depth 10 -Compress
+        $result | ConvertTo-Json -Depth 20 -Compress
+        exit 0
       register: communication_raw
       when: win_ping_result is defined and win_ping_result is succeeded
       changed_when: false
+      failed_when: false
 
     - name: Kommunikationsdaten als Host-Fact speichern
       ansible.builtin.set_fact:
@@ -379,6 +452,7 @@
         - communication_raw is defined
         - communication_raw.stdout is defined
         - communication_raw.stdout | length > 0
+        - communication_raw.stdout | trim is match('^[{]')
 
 
 
