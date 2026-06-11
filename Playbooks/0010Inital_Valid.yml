@@ -179,6 +179,11 @@
           $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
         } catch {}
 
+        $workgroup = $null
+        if (-not $cs.PartOfDomain) {
+          $workgroup = $cs.Workgroup
+        }
+
         $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" | ForEach-Object {
           [ordered]@{
             description = $_.Description
@@ -268,10 +273,15 @@
                   }
                 }
 
+                $principalSource = $null
+                if ($null -ne $_.PrincipalSource) {
+                  $principalSource = $_.PrincipalSource.ToString()
+                }
+
                 [ordered]@{
                   name = $memberName
                   object_class = $_.ObjectClass
-                  principal_source = if ($_.PrincipalSource) { $_.PrincipalSource.ToString() } else { $null }
+                  principal_source = $principalSource
                 }
               })
             } catch {}
@@ -318,7 +328,7 @@
                   fqdn = $fqdn
                   domain = $cs.Domain
                   part_of_domain = $cs.PartOfDomain
-                  workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
+                  workgroup = $workgroup
                   manufacturer = $cs.Manufacturer
                   model = $cs.Model
                   os_caption = $os.Caption
