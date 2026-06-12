@@ -127,7 +127,7 @@
       no_log: true
 
 - name: OS-Server V10.0 Einstellungen auf Windows-Zielen pruefen
-  hosts: os_server_check_targets
+  hosts: all
   gather_facts: false
   ignore_unreachable: true
 
@@ -197,8 +197,11 @@
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
       register: win_ping_result
+      when: inventory_hostname in (groups['os_server_check_targets'] | default([]))
       changed_when: false
+      failed_when: false
       ignore_errors: true
+      ignore_unreachable: true
 
     - name: OS-Server-V10.0-Konfiguration auslesen und pruefen
       ansible.windows.win_shell: |
@@ -675,16 +678,39 @@
 
         $result | ConvertTo-Json -Depth 20 -Compress
       register: os_server_raw
-      when: win_ping_result is defined and win_ping_result is succeeded
+      when:
+        - inventory_hostname in (groups['os_server_check_targets'] | default([]))
+        - win_ping_result is defined
+        - win_ping_result is succeeded
       changed_when: false
+      failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: PowerShell-Fehler anzeigen, falls OS-Server-Pruefung fehlgeschlagen ist
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "RC: {{ os_server_raw.rc | default('') }}"
+          - "STDERR: {{ os_server_raw.stderr | default('') }}"
+          - "STDOUT: {{ os_server_raw.stdout | default('') }}"
+      when:
+        - inventory_hostname in (groups['os_server_check_targets'] | default([]))
+        - os_server_raw is defined
+        - os_server_raw.rc is defined
+        - os_server_raw.rc != 0
+
 
     - name: OS-Server-Pruefergebnis als Host-Fact speichern
       ansible.builtin.set_fact:
         os_server_validation: "{{ os_server_raw.stdout | trim | from_json }}"
       when:
+        - inventory_hostname in (groups['os_server_check_targets'] | default([]))
         - os_server_raw is defined
+        - os_server_raw.rc is defined
+        - os_server_raw.rc == 0
         - os_server_raw.stdout is defined
-        - os_server_raw.stdout | length > 0
+        - os_server_raw.stdout | trim | regex_search('^\\{')
 
 - name: OS-Server V10.0 CSV-Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
