@@ -15,10 +15,10 @@
     result_dir: "./reports"
 
   tasks:
-    # - name: Zeitstempel fuer Report setzen
-    #   ansible.builtin.set_fact:
-    #     report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-    #     report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+    - name: Zeitstempel fuer Report setzen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
       ansible.builtin.shell: "command -v nmap"
@@ -191,15 +191,15 @@
           return ($Json | ConvertFrom-Json)
         }
 
-        $ExpectedPresentAdapters = @('{{ expected_present_adapters | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $ExpectedAbsentAdapters = @('{{ expected_absent_adapters | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $AllowedEnabledAdapterNames = @('{{ allowed_enabled_adapter_names | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $ExpectedVncIniPaths = @('{{ expected_vnc_ini_paths | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $ExpectedBgInfoPaths = @('{{ expected_bginfo_paths | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $ExpectedPcs7Groups = @('{{ expected_pcs7_groups | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $ExpectedNtpWizardPaths = @('{{ expected_ntp_wizard_paths | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $ExpectedHotfixIds = @('{{ expected_hotfix_ids | to_json | replace("'", "''") }}' | ConvertFrom-Json)
-        $ExpectedHostsLmhostsEntries = @('{{ expected_hosts_lmhosts_entries | to_json | replace("'", "''") }}' | ConvertFrom-Json)
+        $ExpectedPresentAdapters = @(Convert-JsonVar '{{ expected_present_adapters | to_json }}')
+        $ExpectedAbsentAdapters = @(Convert-JsonVar '{{ expected_absent_adapters | to_json }}')
+        $AllowedEnabledAdapterNames = @(Convert-JsonVar '{{ allowed_enabled_adapter_names | to_json }}')
+        $ExpectedVncIniPaths = @(Convert-JsonVar '{{ expected_vnc_ini_paths | to_json }}')
+        $ExpectedBgInfoPaths = @(Convert-JsonVar '{{ expected_bginfo_paths | to_json }}')
+        $ExpectedPcs7Groups = @(Convert-JsonVar '{{ expected_pcs7_groups | to_json }}')
+        $ExpectedNtpWizardPaths = @(Convert-JsonVar '{{ expected_ntp_wizard_paths | to_json }}')
+        $ExpectedHotfixIds = @(Convert-JsonVar '{{ expected_hotfix_ids | to_json }}')
+        $ExpectedHostsLmhostsEntries = @(Convert-JsonVar '{{ expected_hosts_lmhosts_entries | to_json }}')
 
         $ExpectedTimeZoneId = {{ expected_timezone_id | to_json }}
         $ExpectedPasswordComplexity = [int]{{ expected_password_complexity }}
