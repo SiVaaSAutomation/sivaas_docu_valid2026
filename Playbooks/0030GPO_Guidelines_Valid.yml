@@ -10,19 +10,15 @@
     # Mehrere Netze sind moeglich, z. B.: "192.168.123.0/24 192.168.124.0/24"
     target_network: "192.168.123.0/24"
 
-    # Optional: feste Ziele statt Netzscan, z. B.: "192.168.123.10,192.168.123.11"
-    target_ips: ""
-
-    winrm_http_port: 5985
-    winrm_https_port: 5986
+    winrm_port: 5985
     winrm_transport: ntlm
     result_dir: "./reports"
 
   tasks:
-    - name: Zeitstempel fuer Report setzen
-      ansible.builtin.set_fact:
-        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+    # - name: Zeitstempel fuer Report setzen
+    #   ansible.builtin.set_fact:
+    #     report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+    #     report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
       ansible.builtin.shell: "command -v nmap"
@@ -44,69 +40,48 @@
           Fuer die OS-Server-V10.0-Pruefung muessen win_user und win_password uebergeben werden,
           z. B. ueber Semaphore Environment/Extra Variables oder Ansible Vault.
 
-    - name: Manuell gesetzte Ziel-IP-Adressen normalisieren
-      ansible.builtin.set_fact:
-        manual_target_ips: "{{ (target_ips | default('') | string | regex_replace('[,;\\r\\n]+', ' ')).split() | unique | list }}"
-
-    - name: Nmap-Zielausdruck setzen
-      ansible.builtin.set_fact:
-        nmap_targets: "{{ (manual_target_ips | length > 0) | ternary(manual_target_ips | join(' '), target_networks) }}"
-
-    - name: Lebende Netzwerkteilnehmer per ICMP/ARP erkennen
+    - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
       ansible.builtin.shell: |
         set -o pipefail
-        nmap -n -sn -PR -PE {{ target_networks }} -oG - | awk '/Status: Up/{print $2}'
-      args:
-        executable: /bin/bash
-      register: live_scan_result
-      changed_when: false
-      when: manual_target_ips | length == 0
-
-    - name: Alle zu berichtenden IP-Adressen speichern
-      ansible.builtin.set_fact:
-        discovered_all_ips: >-
-          {{ manual_target_ips if (manual_target_ips | length > 0)
-             else (live_scan_result.stdout_lines | default([]) | unique | list) }}
-
-    - name: WinRM-Ports der Ziele scannen
-      ansible.builtin.shell: |
-        set -o pipefail
-        nmap -n -Pn -p {{ winrm_http_port }},{{ winrm_https_port }} --open {{ nmap_targets }} -oG - |
-        awk -v http="{{ winrm_http_port }}" -v https="{{ winrm_https_port }}" '
+        nmap -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        awk '
           /Ports:/ {
             host=$2
-            has_http = ($0 ~ http"/open/tcp")
-            has_https = ($0 ~ https"/open/tcp")
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
 
             if (has_https) {
-              ports = has_http ? http","https : https
-              print host ";" https ";https;" ports
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
             } else if (has_http) {
-              print host ";" http ";http;" http
+              print host ";5985;http;5985"
             }
           }
         '
       args:
         executable: /bin/bash
-      register: winrm_scan_result
+      register: scan_result
       changed_when: false
 
-    - name: Gefundene WinRM-Teilnehmer speichern
+    - name: Gefundene IP-Adressen und WinRM-Infos speichern
       ansible.builtin.set_fact:
-        discovered_winrm_hosts: "{{ winrm_scan_result.stdout_lines | unique | list }}"
+        discovered_winrm_hosts: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_ips: "{{ scan_result.stdout_lines | map('regex_replace', ';.*$', '') | unique | list }}"
 
-    - name: Gefundene Netzwerkteilnehmer anzeigen
+    - name: Gefundene WinRM-Teilnehmer anzeigen
       ansible.builtin.debug:
-        msg:
-          - "Alle IPs im Report: {{ discovered_all_ips }}"
-          - "IPs mit offenem WinRM: {{ discovered_winrm_hosts }}"
+        var: discovered_winrm_hosts
 
-    - name: Hinweis ausgeben, wenn keine Ziele gefunden wurden
+    - name: Gefundene IP-Adressen anzeigen
+      ansible.builtin.debug:
+        var: discovered_ips
+
+    - name: Hinweis ausgeben, wenn keine WinRM-Teilnehmer gefunden wurden
       ansible.builtin.debug:
         msg: >-
-          Es wurden keine Ziele gefunden. Bei automatischem Scan target_networks pruefen,
-          oder target_ips in Semaphore setzen.
-      when: discovered_all_ips | length == 0
+          Es wurden keine Hosts mit offenem WinRM-Port 5985/5986 im Zielnetz {{ target_network }} gefunden.
+          Der Report enthaelt dann nur die Kopfzeile. Pruefe target_network, Firewall und WinRM.
+      when: discovered_winrm_hosts | length == 0
 
     - name: Gefundene WinRM-Hosts temporaer in das Inventory aufnehmen
       ansible.builtin.add_host:
@@ -127,7 +102,7 @@
       no_log: true
 
 - name: OS-Server V10.0 Einstellungen auf Windows-Zielen pruefen
-  hosts: all
+  hosts: os_server_check_targets
   gather_facts: false
   ignore_unreachable: true
 
@@ -197,7 +172,6 @@
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
       register: win_ping_result
-      when: inventory_hostname in (groups['os_server_check_targets'] | default([]))
       changed_when: false
       failed_when: false
       ignore_errors: true
@@ -661,11 +635,12 @@
         $result = [ordered]@{
           scan_timestamp = "{{ hostvars['localhost']['report_timestamp_iso'] | default('') }}"
           target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
-          ip = "{{ ansible_host }}"
+          ip = "{{ inventory_hostname }}"
           ansible_reachable = $true
           computername = $env:COMPUTERNAME
           fqdn = $fqdn
           domain = $cs.Domain
+          workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
           part_of_domain = [bool]$cs.PartOfDomain
           os_caption = $os.Caption
           os_version = $os.Version
@@ -679,7 +654,6 @@
         $result | ConvertTo-Json -Depth 20 -Compress
       register: os_server_raw
       when:
-        - inventory_hostname in (groups['os_server_check_targets'] | default([]))
         - win_ping_result is defined
         - win_ping_result is succeeded
       changed_when: false
@@ -695,7 +669,6 @@
           - "STDERR: {{ os_server_raw.stderr | default('') }}"
           - "STDOUT: {{ os_server_raw.stdout | default('') }}"
       when:
-        - inventory_hostname in (groups['os_server_check_targets'] | default([]))
         - os_server_raw is defined
         - os_server_raw.rc is defined
         - os_server_raw.rc != 0
@@ -705,7 +678,6 @@
       ansible.builtin.set_fact:
         os_server_validation: "{{ os_server_raw.stdout | trim | from_json }}"
       when:
-        - inventory_hostname in (groups['os_server_check_targets'] | default([]))
         - os_server_raw is defined
         - os_server_raw.rc is defined
         - os_server_raw.rc == 0
@@ -735,8 +707,7 @@
         mode: "0644"
         content: |
           [
-          {% set report_ips = hostvars['localhost']['discovered_all_ips'] | default([]) %}
-          {% for h in report_ips %}
+          {% for h in groups['os_server_check_targets'] | default([]) %}
           {% set fallback = {
             'scan_timestamp': report_timestamp_iso,
             'target_timestamp': '',
@@ -745,6 +716,7 @@
             'computername': '',
             'fqdn': '',
             'domain': '',
+            'workgroup': '',
             'part_of_domain': '',
             'os_caption': '',
             'os_version': '',
@@ -832,7 +804,7 @@
             "Zeitstempel_Pruefung",
             "Zeitstempel_Zielsystem",
             "IP",
-            "Erreichbarkeit",
+            "Ansible_erreichbar",
             "Computername",
             "FQDN",
             "Domaene_Workgroup",
@@ -852,7 +824,7 @@
 
         def check_status(checks, key):
             if not checks:
-                return "NICHT_ERREICHBAR"
+                return ""
             value = checks.get(key)
             if not isinstance(value, dict):
                 return "NICHT_PRUEFBAR"
@@ -881,10 +853,10 @@
                 "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
                 "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
                 "IP": item.get("ip", ""),
-                "Erreichbarkeit": "ERREICHBAR" if reachable else "NICHT_ERREICHBAR",
+                "Ansible_erreichbar": item.get("ansible_reachable", False),
                 "Computername": item.get("computername", ""),
                 "FQDN": item.get("fqdn", ""),
-                "Domaene_Workgroup": item.get("domain", ""),
+                "Domaene_Workgroup": item.get("domain") or item.get("workgroup") or "",
                 "Domaenenmitglied": item.get("part_of_domain", ""),
                 "Betriebssystem": item.get("os_caption", ""),
                 "OS_Version": item.get("os_version", ""),
