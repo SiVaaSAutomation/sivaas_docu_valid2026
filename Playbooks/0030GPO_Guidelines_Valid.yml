@@ -636,6 +636,17 @@
         $simaticLogon = @($programs | Where-Object { $_.Name -match "(?i)SIMATIC Logon" })
         Add-Check "ID114_SIMATIC_Logon" 114 "SIMATIC Logon konfigurieren" $(if($simaticLogon.Count -gt 0){"TEILWEISE"}else{"NOK"}) "SIMATIC Logon Installation=$($simaticLogon.Count); konkrete Auto-Abmeldeoption ohne bekannten Siemens-Konfigurationspfad nicht eindeutig bewertet"
 
+        $workgroupValue = $null
+        try {
+          if ($cs -and -not [bool]$cs.PartOfDomain) {
+            $workgroupValue = [string]$cs.Workgroup
+          }
+        } catch {
+          $workgroupValue = $null
+        }
+
+
+
         $result = [ordered]@{
           scan_timestamp = "{{ hostvars['localhost']['report_timestamp_iso'] | default('') }}"
           target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
@@ -644,7 +655,7 @@
           computername = $env:COMPUTERNAME
           fqdn = $fqdn
           domain = $cs.Domain
-          workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
+          workgroup = $workgroupValue
           part_of_domain = [bool]$cs.PartOfDomain
           os_caption = $os.Caption
           os_version = $os.Version
@@ -661,7 +672,8 @@
       register: os_server_raw
       when:
         - win_ping_result is defined
-        - win_ping_result is succeeded
+        #Folgend ist fast das gleiche, nur jetzt nur für erfolgreichen Ping Powershell Block ausführen; - win_ping_result is succeeded für alle 
+        - win_ping_result.ping | default('') == 'pong'
       changed_when: false
       failed_when: false
       ignore_errors: true
