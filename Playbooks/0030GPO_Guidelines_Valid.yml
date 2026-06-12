@@ -655,7 +655,9 @@
           error = $null
         }
 
-        $result | ConvertTo-Json -Depth 20 -Compress
+        $json = $result | ConvertTo-Json -Depth 20 -Compress
+        Write-Output $json
+        exit 0
       register: os_server_raw
       when:
         - win_ping_result is defined
@@ -665,28 +667,33 @@
       ignore_errors: true
       ignore_unreachable: true
 
-    - name: PowerShell-Fehler anzeigen, falls OS-Server-Pruefung fehlgeschlagen ist
+    - name: PowerShell-Ausgabe anzeigen, wenn kein OS-Server-JSON gespeichert wurde
       ansible.builtin.debug:
         msg:
           - "Host: {{ inventory_hostname }}"
-          - "RC: {{ os_server_raw.rc | default('') }}"
-          - "STDERR: {{ os_server_raw.stderr | default('') }}"
-          - "STDOUT: {{ os_server_raw.stdout | default('') }}"
+          - "WinRM-Ping: {{ win_ping_result.ping | default('KEIN_PONG') }}"
+          - "WinRM-Unreachable: {{ win_ping_result.unreachable | default(false) }}"
+          - "WinRM-Message: {{ win_ping_result.msg | default('') }}"
+          - "PowerShell-RC: {{ os_server_raw.rc | default('NICHT_AUSGEFUEHRT') }}"
+          - "PowerShell-STDERR: {{ os_server_raw.stderr | default('') }}"
+          - "PowerShell-STDOUT-Anfang: {{ (os_server_raw.stdout | default(''))[:1000] }}"
+      when:
+        - os_server_validation is not defined
+
+
+    - name: OS-Server-Pruefergebnis-JSON aus PowerShell-Ausgabe extrahieren
+      ansible.builtin.set_fact:
+        os_server_json_text: "{{ (os_server_raw.stdout_lines | default([]) | select('match', '^\\s*\\{') | list | last | default('')) | trim }}"
       when:
         - os_server_raw is defined
-        - os_server_raw.rc is defined
-        - os_server_raw.rc != 0
-
+        - os_server_raw.stdout_lines is defined
 
     - name: OS-Server-Pruefergebnis als Host-Fact speichern
       ansible.builtin.set_fact:
-        os_server_validation: "{{ os_server_raw.stdout | trim | from_json }}"
+        os_server_validation: "{{ os_server_json_text | from_json }}"
       when:
-        - os_server_raw is defined
-        - os_server_raw.rc is defined
-        - os_server_raw.rc == 0
-        - os_server_raw.stdout is defined
-        - os_server_raw.stdout | trim | regex_search('^\\{')
+        - os_server_json_text is defined
+        - os_server_json_text | length > 0
 
 - name: OS-Server V10.0 CSV-Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
