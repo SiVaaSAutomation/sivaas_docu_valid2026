@@ -196,7 +196,7 @@
         - name: OS-Server-V10.0-Pruefskript auf Zielsystem kopieren
           ansible.windows.win_copy:
             dest: "{{ remote_validation_script }}"
-            content: "{{ lookup('template', 'templates/os_server_v10_validation.ps1.j2') }}"
+            content: "{{ lookup('template', 'templates/os_server_v10_validation.ps1') }}"
             force: true
           register: os_server_script_copy
           failed_when: false
