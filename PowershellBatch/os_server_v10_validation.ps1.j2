@@ -1,5 +1,42 @@
 $ErrorActionPreference = "SilentlyContinue"
 
+$ResultJsonPath = {{ remote_validation_json | to_json }}
+$ResultDir = Split-Path -Path $ResultJsonPath -Parent
+
+if (-not (Test-Path $ResultDir)) {
+    New-Item -Path $ResultDir -ItemType Directory -Force | Out-Null
+}
+
+trap {
+    $err = $_
+
+    $fallbackResult = [ordered]@{
+        scan_timestamp = "{{ hostvars['localhost']['report_timestamp_iso'] | default('') }}"
+        target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+        ip = "{{ inventory_hostname }}"
+        ansible_reachable = $true
+        computername = $env:COMPUTERNAME
+        fqdn = ""
+        domain = ""
+        workgroup = ""
+        part_of_domain = $false
+        os_caption = ""
+        os_version = ""
+        winrm_port = "{{ ansible_port | default('') }}"
+        winrm_scheme = "{{ ansible_winrm_scheme | default('') }}"
+        winrm_open_ports = "{{ discovered_winrm_open_ports | default('') }}"
+        checks = [ordered]@{}
+        error = "PowerShell-Pruefskript abgebrochen: $($err.Exception.Message); Zeile=$($err.InvocationInfo.ScriptLineNumber)"
+    }
+
+    $json = $fallbackResult | ConvertTo-Json -Depth 20 -Compress
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($ResultJsonPath, $json, $Utf8NoBom)
+
+    Write-Output "OS_SERVER_ERROR_JSON=$ResultJsonPath"
+    exit 2
+}
+
 function Convert-JsonVar {
 param([string]$Json)
 if ([string]::IsNullOrWhiteSpace($Json)) { return $null }
@@ -481,7 +518,7 @@ checks = $checks
 error = $null
 }
 
-$ResultJsonPath = {{ remote_validation_json | to_json }}
+# $ResultJsonPath = {{ remote_validation_json | to_json }}
 
 $json = $result | ConvertTo-Json -Depth 20 -Compress
 
