@@ -112,9 +112,9 @@
 
   vars:
 
-    remote_validation_dir: "C:\\Windows\\Temp\\ansible_os_server_v10_validation"
-    remote_validation_script: "{{ remote_validation_dir }}\\os_server_v10_validation.ps1"
-    remote_validation_json: "{{ remote_validation_dir }}\\os_server_v10_validation.json"
+    remote_validation_dir: 'C:\Windows\Temp\ansible_os_server_v10_validation'
+    remote_validation_script: '{{ remote_validation_dir }}\os_server_v10_validation.ps1'
+    remote_validation_json: '{{ remote_validation_dir }}\os_server_v10_validation.json'
 
     # Allgemein / Netzwerk
     expected_timezone_id: "W. Europe Standard Time"
@@ -192,24 +192,51 @@
           ansible.windows.win_file:
             path: "{{ remote_validation_dir }}"
             state: directory
-          changed_when: false
-          failed_when: false
-          ignore_errors: true
-          ignore_unreachable: true
 
         - name: OS-Server-V10.0-Pruefskript auf Zielsystem kopieren
-          ansible.windows.win_template:
-            src: "PowershellBatch/os_server_v10_validation.ps1.j2"
+          ansible.windows.win_copy:
             dest: "{{ remote_validation_script }}"
+            content: "{{ lookup('template', 'templates/os_server_v10_validation.ps1.j2') }}"
+            force: true
+          register: os_server_script_copy
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob PowerShell-Pruefskript auf Zielsystem vorhanden ist
+          ansible.windows.win_stat:
+            path: "{{ remote_validation_script }}"
+          register: os_server_script_file
           changed_when: false
           failed_when: false
           ignore_errors: true
           ignore_unreachable: true
 
+        - name: Diagnose nach Kopieren des PowerShell-Pruefskripts anzeigen
+          ansible.builtin.debug:
+            msg:
+              - "Host: {{ inventory_hostname }}"
+              - "Remote-Skriptpfad: {{ remote_validation_script }}"
+              - "Kopier-Task failed: {{ os_server_script_copy.failed | default(false) }}"
+              - "Kopier-Task msg: {{ os_server_script_copy.msg | default('') }}"
+              - "Skriptdatei vorhanden: {{ os_server_script_file.stat.exists | default(false) }}"
+              - "Skriptdatei Groesse: {{ os_server_script_file.stat.size | default('') }}"
+
         - name: OS-Server-V10.0-Pruefskript auf Zielsystem ausfuehren
-          ansible.windows.win_command: >
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{{ remote_validation_script }}"
+          ansible.windows.win_shell: |
+            $ScriptPath = {{ remote_validation_script | to_json }}
+
+            if (-not (Test-Path -LiteralPath $ScriptPath)) {
+                Write-Error "Pruefskript nicht gefunden: $ScriptPath"
+                exit 10
+            }
+
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath
+            exit $LASTEXITCODE
           register: os_server_raw
+          when:
+            - os_server_script_file is defined
+            - os_server_script_file.stat.exists | default(false)
           changed_when: false
           failed_when: false
           ignore_errors: true
@@ -238,7 +265,13 @@
 
         - name: OS-Server-Pruefergebnis-JSON dekodieren
           ansible.builtin.set_fact:
-            os_server_json_text: "{{ os_server_json_slurp.content | b64decode | trim }}"
+            os_server_json_text: >-
+              {{
+                os_server_json_slurp.content
+                | b64decode
+                | regex_replace('^\ufeff', '')
+                | trim
+              }}
           when:
             - os_server_json_slurp is defined
             - os_server_json_slurp.content is defined
@@ -250,7 +283,8 @@
           when:
             - os_server_json_text is defined
             - os_server_json_text | length > 0
-            - os_server_json_text is match('^\\s*\\{')
+          failed_when: false
+          ignore_errors: true
 
       always:
         - name: Temp-Ordner und PowerShell-Pruefskript auf Zielsystem entfernen
