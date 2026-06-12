@@ -101,6 +101,10 @@
       loop: "{{ discovered_winrm_hosts }}"
       no_log: true
 
+    - name: Dynamische PCS7-Zielgruppe anzeigen
+      ansible.builtin.debug:
+        msg: "{{ groups['os_server_check_targets'] | default([]) }}"
+
 - name: OS-Server V10.0 Einstellungen auf Windows-Zielen pruefen
   hosts: os_server_check_targets
   gather_facts: false
