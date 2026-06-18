@@ -1,0 +1,836 @@
+---
+- name: OS-Server V10.0 Systemhardening-Teilnehmer im Zielnetz erkennen
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    # In Semaphore als Environment/Extra Variables ueberschreiben.
+    # Mehrere Netze sind moeglich, z. B.: "192.168.123.0/24 192.168.124.0/24"
+    target_network: "192.168.123.0/24"
+
+    # Windows-Zugangsdaten muessen in Semaphore/Vault uebergeben werden.
+    # win_user: "Administrator"
+    # win_password: "..."
+    winrm_default_port: 5985
+    winrm_transport: ntlm
+    result_dir: "./reports"
+
+  tasks:
+    - name: Zeitstempel fuer Report setzen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+      ansible.builtin.shell: "command -v nmap"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap fehlt
+      ansible.builtin.fail:
+        msg: "nmap ist auf dem Ansible-Controller nicht installiert. Installation z. B.: sudo apt install nmap"
+      when: nmap_check.rc != 0
+
+    - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - win_user is defined
+          - win_password is defined
+        fail_msg: >-
+          Fuer die OS-Server-Systemhardening-Pruefung muessen win_user und win_password uebergeben werden,
+          z. B. ueber Semaphore Environment/Extra Variables oder Ansible Vault.
+
+    - name: Zielnetz nach erreichbaren Teilnehmern und offenen WinRM-Ports scannen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "$tmpdir"' EXIT
+
+        # 1) Alle per Ping/ARP erkannten Teilnehmer aufnehmen.
+        nmap -n -sn {{ target_network }} -oG "$tmpdir/ping.gnmap" >/dev/null
+        awk '/Status: Up/{print $2}' "$tmpdir/ping.gnmap" | sort -u > "$tmpdir/live_ips.txt"
+
+        # 2) Zusaetzlich WinRM-Ports erfassen, auch wenn ein Host auf Ping nicht antwortet.
+        nmap -n -Pn -p 5985,5986 --open {{ target_network }} -oG "$tmpdir/winrm.gnmap" >/dev/null
+        awk '
+          /Ports:/ {
+            host=$2
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
+
+            if (has_https) {
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
+            } else if (has_http) {
+              print host ";5985;http;5985"
+            }
+          }
+        ' "$tmpdir/winrm.gnmap" | sort -u > "$tmpdir/winrm_hosts.txt"
+
+        awk -F';' '{print $1}' "$tmpdir/winrm_hosts.txt" >> "$tmpdir/live_ips.txt"
+        sort -u "$tmpdir/live_ips.txt" > "$tmpdir/all_ips.txt"
+
+        while read -r ip; do
+          [ -z "$ip" ] && continue
+          winrm_line="$(awk -F';' -v ip="$ip" '$1 == ip {print; exit}' "$tmpdir/winrm_hosts.txt")"
+          if [ -n "$winrm_line" ]; then
+            echo "$winrm_line"
+          else
+            echo "$ip;{{ winrm_default_port }};http;"
+          fi
+        done < "$tmpdir/all_ips.txt"
+      args:
+        executable: /bin/bash
+      register: scan_result
+      changed_when: false
+
+    - name: Gefundene IP-Adressen und WinRM-Infos speichern
+      ansible.builtin.set_fact:
+        discovered_systemhardening_hosts: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_ips: "{{ scan_result.stdout_lines | map('regex_replace', ';.*$', '') | unique | list }}"
+
+    - name: Gefundene Teilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_systemhardening_hosts
+
+    - name: Hinweis ausgeben, wenn keine Teilnehmer gefunden wurden
+      ansible.builtin.debug:
+        msg: >-
+          Es wurden keine Teilnehmer im Zielnetz {{ target_network }} gefunden.
+          Der Report enthaelt dann nur die Kopfzeile. Pruefe target_network, VLAN, Firewall und nmap-Rechte.
+      when: discovered_systemhardening_hosts | length == 0
+
+    - name: Gefundene Teilnehmer temporaer in das Inventory aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ item.split(';')[0] }}"
+        groups: os_server_systemhardening_targets
+        ansible_host: "{{ item.split(';')[0] }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ item.split(';')[1] | int }}"
+        ansible_winrm_scheme: "{{ item.split(';')[2] }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: 60
+        ansible_winrm_read_timeout_sec: 120
+        discovered_winrm_open_ports: "{{ item.split(';')[3] | default('') }}"
+      loop: "{{ discovered_systemhardening_hosts }}"
+      no_log: true
+
+    - name: Dynamische Systemhardening-Zielgruppe anzeigen
+      ansible.builtin.debug:
+        msg: "{{ groups['os_server_systemhardening_targets'] | default([]) }}"
+
+- name: OS-Server V10.0 Systemhardening-Tasks pruefen
+  hosts: os_server_systemhardening_targets
+  gather_facts: false
+  ignore_unreachable: true
+
+  vars:
+    remote_validation_dir: 'C:\Windows\Temp\ansible_os_server_systemhardening_validation'
+    remote_validation_script: '{{ remote_validation_dir }}\os_server_systemhardening_validation.ps1'
+    remote_validation_json: '{{ remote_validation_dir }}\os_server_systemhardening_validation.json'
+
+    # Task 19: VMware Tools
+    expected_vmware_tools_min_version: ""
+
+    # Task 39: Terminalbus-Verschluesselung
+    # Ohne bekannten Siemens-/PCS7-Konfigurationspfad wird nur der Terminalbus-Adapter nachgewiesen.
+    expected_terminalbus_adapter_regex: "^Terminalbus$"
+
+    # Task 53: Computerobjekt soll in der OU/Struktur "Server" liegen.
+    expected_computer_ou_regex: "OU=Server"
+
+    # Task 77: nicht benoetigte Windows-Komponenten sollen deaktiviert oder nicht installiert sein.
+    expected_disabled_windows_features:
+      - "SMB1Protocol"
+      - "TelnetClient"
+      - "TFTP"
+      - "WorkFolders-Client"
+      - "Printing-XPSServices-Features"
+      - "WindowsMediaPlayer"
+      - "MicrosoftWindowsPowerShellV2"
+      - "MicrosoftWindowsPowerShellV2Root"
+
+    # Task 78: Dienste, die durch PCS7 System Hardening deaktiviert sein sollen.
+    # Es wird gegen ServiceName ODER DisplayName geprueft. Nicht vorhandene Dienste gelten als OK.
+    expected_disabled_service_patterns:
+      - "^BTAGService$|Bluetooth-Audiogateway"
+      - "^bthserv$|Bluetooth-Unterstuetzung|Bluetooth Support"
+      - "^WdiServiceHost$|Diagnosediensthost|Diagnostic Service Host"
+      - "^DPS$|Diagnoserichtlinien|Diagnostic Policy"
+      - "^RmSvc$|Funkverwaltungsdienst|Radio Management"
+      - "^lfsvc$|Geolocation"
+      - "^pla$|Leistungsprotokolle|Performance Logs"
+      - "^MapsBroker$|heruntergeladene Karten|Downloaded Maps"
+      - "Siemens Telemetry|Telemetry Connector"
+      - "^TapiSrv$|Telefondienst|Telephony"
+      - "^WalletService$|WalletService"
+      - "^WMPNetworkSvc$|Windows Media Player-Netzwerkfreigabe"
+      - "^FontCache3.0.0.0$|Windows Presentation Foundation.*Schriftartcache|WPF.*Font Cache"
+      - "^icssvc$|mobile Hotspots|Mobile Hotspot"
+      - "^WcsPlugInService$|Windows-Farbsystem|Windows Color System"
+      - "^wisvc$|Windows-Insider"
+      - "^Wcncsvc$|Windows-Sofortverbindung|Windows Connect Now"
+      - "^XboxGipSvc$|Xbox Accessory"
+      - "^XblAuthManager$|Xbox Live Authentifizierungs"
+      - "^XboxNetApiSvc$|Xbox Live-Netzwerk"
+      - "^XblGameSave$|Xbox Live-Spiele"
+      - "^SEMgrSvc$|Zahlungs|NFC|SE-Manager"
+      - "^CertPropSvc$|Zertifikatverteilung|Certificate Propagation"
+
+    # Task 82: SSL/TLS-Protokolle
+    expected_disabled_schannel_protocols:
+      - "SSL 2.0"
+      - "SSL 3.0"
+      - "TLS 1.0"
+      - "TLS 1.1"
+    expected_enabled_schannel_protocols:
+      - "TLS 1.2"
+
+    # Task 83: erlaubte sichere Cipher Suites laut Excel-Aufgabe.
+    expected_allowed_tls12_cipher_suites:
+      - "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"
+      - "TLS_DHE_RSA_WITH_AES_128_CBC_SHA256"
+      - "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384"
+      - "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256"
+      - "TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+      - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+      - "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
+      - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+      - "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384"
+      - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+
+    # Task 84: laut Excel-Aufgabe explizit zu deaktivierende Cipher Suites.
+    expected_disabled_cipher_suites:
+      - "TLS_AES_256_GCM_SHA384"
+      - "TLS_AES_128_GCM_SHA256"
+      - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+      - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+      - "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384"
+      - "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256"
+      - "TLS_RSA_WITH_NULL_SHA256"
+      - "TLS_RSA_WITH_NULL_SHA"
+      - "TLS_PSK_WITH_AES_256_GCM_SHA384"
+      - "TLS_PSK_WITH_AES_128_GCM_SHA256"
+      - "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA"
+      - "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA"
+      - "TLS_PSK_WITH_AES_256_CBC_SHA384"
+      - "TLS_PSK_WITH_AES_128_CBC_SHA256"
+      - "TLS_PSK_WITH_NULL_SHA384"
+      - "TLS_PSK_WITH_NULL_SHA256"
+
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: win_ping_result
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: OS-Server-Systemhardening-Pruefung als temporaeres PowerShell-Skript ausfuehren
+      block:
+        - name: Temp-Ordner fuer Systemhardening-Pruefung auf Zielsystem erstellen
+          ansible.windows.win_file:
+            path: "{{ remote_validation_dir }}"
+            state: directory
+
+        - name: OS-Server-Systemhardening-Pruefskript auf Zielsystem kopieren
+          ansible.windows.win_copy:
+            dest: "{{ remote_validation_script }}"
+            force: true
+            content: |
+              $ErrorActionPreference = "SilentlyContinue"
+
+              function Convert-JsonVar {
+              param([string]$Json)
+              if ([string]::IsNullOrWhiteSpace($Json)) { return @() }
+              try { return ($Json | ConvertFrom-Json) } catch { return @() }
+              }
+
+              $ResultJsonPath = {{ remote_validation_json | to_json }}
+              $ResultDir = Split-Path -Path $ResultJsonPath -Parent
+              if (-not (Test-Path -LiteralPath $ResultDir)) {
+                  New-Item -Path $ResultDir -ItemType Directory -Force | Out-Null
+              }
+
+              $ExpectedVmwareToolsMinVersion = {{ expected_vmware_tools_min_version | to_json }}
+              $ExpectedTerminalbusAdapterRegex = {{ expected_terminalbus_adapter_regex | to_json }}
+              $ExpectedComputerOuRegex = {{ expected_computer_ou_regex | to_json }}
+              $ExpectedDisabledFeatures = @(Convert-JsonVar '{{ expected_disabled_windows_features | to_json }}')
+              $ExpectedDisabledServicePatterns = @(Convert-JsonVar '{{ expected_disabled_service_patterns | to_json }}')
+              $ExpectedDisabledProtocols = @(Convert-JsonVar '{{ expected_disabled_schannel_protocols | to_json }}')
+              $ExpectedEnabledProtocols = @(Convert-JsonVar '{{ expected_enabled_schannel_protocols | to_json }}')
+              $ExpectedAllowedCipherSuites = @(Convert-JsonVar '{{ expected_allowed_tls12_cipher_suites | to_json }}')
+              $ExpectedDisabledCipherSuites = @(Convert-JsonVar '{{ expected_disabled_cipher_suites | to_json }}')
+
+              $checks = [ordered]@{}
+
+              function Add-Check {
+              param(
+                  [string]$Key,
+                  [int]$Id,
+                  [string]$Title,
+                  [string]$Status,
+                  [string]$Details,
+                  [object]$Evidence = $null
+              )
+              $script:checks[$Key] = [ordered]@{
+                  id = $Id
+                  title = $Title
+                  status = $Status
+                  details = $Details
+                  evidence = $Evidence
+              }
+              }
+
+              function Join-Text {
+              param([object]$Value, [string]$Sep = ", ")
+              if ($null -eq $Value) { return "" }
+              if ($Value -is [array]) { return (($Value | Where-Object { $_ -ne $null -and "$($_)" -ne "" }) -join $Sep) }
+              return [string]$Value
+              }
+
+              function Get-RegValue {
+              param([string]$Path, [string]$Name)
+              try { return (Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop) } catch { return $null }
+              }
+
+              function Get-UninstallPrograms {
+              $roots = @(
+                  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                  "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+              )
+              foreach ($root in $roots) {
+                  if (Test-Path $root) {
+                  Get-ChildItem -Path $root | ForEach-Object {
+                      $props = Get-ItemProperty -Path $_.PSPath
+                      if ($props.DisplayName) {
+                      [pscustomobject]@{
+                          Name = [string]$props.DisplayName
+                          Version = [string]$props.DisplayVersion
+                          Publisher = [string]$props.Publisher
+                          InstallLocation = [string]$props.InstallLocation
+                      }
+                      }
+                  }
+                  }
+              }
+              }
+
+              function Compare-VersionSafe {
+              param([string]$Current, [string]$Minimum)
+              if ([string]::IsNullOrWhiteSpace($Minimum)) { return $true }
+              try { return ([version]$Current -ge [version]$Minimum) } catch { return $false }
+              }
+
+              function Get-ServiceMatches {
+              param([string]$Pattern)
+              return @(Get-Service -ErrorAction SilentlyContinue | Where-Object {
+                  $_.Name -match $Pattern -or $_.DisplayName -match $Pattern
+              })
+              }
+
+              function Test-SchannelProtocolDisabled {
+              param([string]$Protocol)
+              $roles = @("Client", "Server")
+              $items = @()
+              $ok = $true
+              foreach ($role in $roles) {
+                  $path = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$Protocol\$role"
+                  $enabled = Get-RegValue $path "Enabled"
+                  $disabledByDefault = Get-RegValue $path "DisabledByDefault"
+                  $explicitDisabled = ($enabled -eq 0 -or $disabledByDefault -eq 1)
+                  if (-not $explicitDisabled) { $ok = $false }
+                  $items += [pscustomobject]@{ Protocol=$Protocol; Role=$role; Enabled=$enabled; DisabledByDefault=$disabledByDefault; ExplicitDisabled=$explicitDisabled }
+              }
+              return [pscustomobject]@{ Protocol=$Protocol; Ok=$ok; Items=$items }
+              }
+
+              function Test-SchannelProtocolEnabled {
+              param([string]$Protocol)
+              $roles = @("Client", "Server")
+              $items = @()
+              $ok = $true
+              foreach ($role in $roles) {
+                  $path = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$Protocol\$role"
+                  $enabled = Get-RegValue $path "Enabled"
+                  $disabledByDefault = Get-RegValue $path "DisabledByDefault"
+                  # TLS 1.2 ist auf vielen Windows-Servern aktiv, auch wenn keine expliziten Registry-Werte gesetzt sind.
+                  $notDisabled = ($enabled -ne 0 -and $disabledByDefault -ne 1)
+                  if (-not $notDisabled) { $ok = $false }
+                  $items += [pscustomobject]@{ Protocol=$Protocol; Role=$role; Enabled=$enabled; DisabledByDefault=$disabledByDefault; NotDisabled=$notDisabled }
+              }
+              return [pscustomobject]@{ Protocol=$Protocol; Ok=$ok; Items=$items }
+              }
+
+              $cs = Get-CimInstance Win32_ComputerSystem
+              $os = Get-CimInstance Win32_OperatingSystem
+              $programs = @(Get-UninstallPrograms)
+              $fqdn = $null
+              try { $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName } catch {}
+
+              # ID19 VMware-Tools aktualisieren
+              $vmwarePrograms = @($programs | Where-Object { $_.Name -match "(?i)^VMware Tools" })
+              $vmtoolsService = Get-Service -Name "VMTools" -ErrorAction SilentlyContinue
+              $vmwareVersion = ($vmwarePrograms | Select-Object -First 1).Version
+              $versionOk = Compare-VersionSafe $vmwareVersion $ExpectedVmwareToolsMinVersion
+              $ok19 = (($vmwarePrograms.Count -gt 0 -or $vmtoolsService) -and ($vmtoolsService.Status -eq "Running") -and $versionOk)
+              Add-Check "ID19_VMware_Tools" 19 "Vmware-Tools aktualisieren" $(if($ok19){"OK"}else{"NOK"}) "VMwareToolsInstallationen=$($vmwarePrograms.Count); Version=$vmwareVersion; VMToolsServiceStatus=$($vmtoolsService.Status); ExpectedMinVersion=$ExpectedVmwareToolsMinVersion"
+
+              # ID39 Terminalbus verschluesseln / Verschluesselung deaktivieren laut Hinweis widerspruechlich.
+              $terminalAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $ExpectedTerminalbusAdapterRegex -or $_.InterfaceDescription -match "(?i)Terminalbus" })
+              $terminalDetails = ($terminalAdapters | ForEach-Object { "$($_.Name)/$($_.Status)/$($_.MacAddress)" }) -join " | "
+              $status39 = if ($terminalAdapters.Count -gt 0) { "TEILWEISE" } else { "NICHT_PRUEFBAR" }
+              Add-Check "ID39_Terminalbus_Verschluesselung" 39 "Terminalbus verschluesseln" $status39 "TerminalbusAdapter=$terminalDetails; Die eigentliche PCS7-/SIMATIC-Shell-Verschluesselung ist ohne bekannten Siemens-Konfigurationspfad nachtraeglich nicht belastbar pruefbar. Excel-Hinweis ist zudem widerspruechlich: Beschreibung='Terminalbus verschluesseln', Arbeitsschritt='Verschluesselung deaktivieren'."
+
+              # ID46 Ping auf eigenen Rechnernamen oder 127.0.0.1
+              $ping127 = $false
+              $pingName = $false
+              try { $ping127 = Test-Connection -ComputerName "127.0.0.1" -Count 2 -Quiet -ErrorAction SilentlyContinue } catch {}
+              try { $pingName = Test-Connection -ComputerName $env:COMPUTERNAME -Count 2 -Quiet -ErrorAction SilentlyContinue } catch {}
+              $ok46 = ($ping127 -and $pingName)
+              Add-Check "ID46_Ping_Localhost" 46 "Ping auf eigenen Rechnernamen oder IP-Adresse 127.0.0.1" $(if($ok46){"OK"}else{"NOK"}) "Ping127.0.0.1=$ping127; PingComputername=$pingName; Computername=$env:COMPUTERNAME"
+
+              # ID53 AD-Client in Domaene zuordnen / OU Server
+              $dn = $null
+              $adLookupError = $null
+              if ($cs -and [bool]$cs.PartOfDomain) {
+                  try {
+                      $root = [ADSI]"LDAP://RootDSE"
+                      $base = [ADSI]("LDAP://" + $root.defaultNamingContext)
+                      $searcher = New-Object System.DirectoryServices.DirectorySearcher($base)
+                      $sam = $env:COMPUTERNAME + '$'
+                      $searcher.Filter = "(&(objectCategory=computer)(sAMAccountName=$sam))"
+                      $result = $searcher.FindOne()
+                      if ($result -and $result.Properties.distinguishedname.Count -gt 0) {
+                          $dn = [string]$result.Properties.distinguishedname[0]
+                      }
+                  } catch {
+                      $adLookupError = $_.Exception.Message
+                  }
+              }
+              if (-not ($cs -and [bool]$cs.PartOfDomain)) {
+                  $status53 = "NOK"
+              } elseif ([string]::IsNullOrWhiteSpace($dn)) {
+                  $status53 = "TEILWEISE"
+              } elseif ($dn -match $ExpectedComputerOuRegex) {
+                  $status53 = "OK"
+              } else {
+                  $status53 = "NOK"
+              }
+              Add-Check "ID53_AD_Client_OU_Server" 53 "AD-Client in Domaene zuordnen" $status53 "PartOfDomain=$($cs.PartOfDomain); Domain=$($cs.Domain); DistinguishedName=$dn; ExpectedRegex=$ExpectedComputerOuRegex; LookupError=$adLookupError"
+
+              # ID77 Deinstallieren/Deaktivieren von Windows-Komponenten
+              $featureEvidence = @()
+              $badFeatures = @()
+              foreach ($featureName in $ExpectedDisabledFeatures) {
+                  $f = Get-WindowsOptionalFeature -Online -FeatureName $featureName -ErrorAction SilentlyContinue
+                  if ($null -eq $f) {
+                      $state = "Nicht_vorhanden"
+                      $ok = $true
+                  } else {
+                      $state = [string]$f.State
+                      $ok = ($state -ne "Enabled" -and $state -ne "EnablePending")
+                  }
+                  if (-not $ok) { $badFeatures += $featureName }
+                  $featureEvidence += [pscustomobject]@{ Feature=$featureName; State=$state; Ok=$ok }
+              }
+              Add-Check "ID77_Windows_Komponenten" 77 "Deinstallieren von Windows-Komponenten" $(if($badFeatures.Count -eq 0){"OK"}else{"NOK"}) "Nicht deaktivierte Komponenten=$((Join-Text $badFeatures)); Geprueft=$($ExpectedDisabledFeatures.Count)" $featureEvidence
+
+              # ID78 Deaktivieren von Diensten
+              $serviceEvidence = @()
+              $badServices = @()
+              foreach ($pattern in $ExpectedDisabledServicePatterns) {
+                  $matches = @(Get-ServiceMatches $pattern)
+                  if ($matches.Count -eq 0) {
+                      $serviceEvidence += [pscustomobject]@{ Pattern=$pattern; Found=$false; Ok=$true; Services=@() }
+                      continue
+                  }
+                  $svcItems = @()
+                  foreach ($svc in $matches) {
+                      $isDisabled = ($svc.StartType -eq "Disabled")
+                      if (-not $isDisabled) { $badServices += "$($svc.Name)[$($svc.StartType)/$($svc.Status)]" }
+                      $svcItems += [pscustomobject]@{ Name=$svc.Name; DisplayName=$svc.DisplayName; Status=[string]$svc.Status; StartType=[string]$svc.StartType; Ok=$isDisabled }
+                  }
+                  $serviceEvidence += [pscustomobject]@{ Pattern=$pattern; Found=$true; Ok=(($svcItems | Where-Object { -not $_.Ok }).Count -eq 0); Services=$svcItems }
+              }
+              Add-Check "ID78_Dienste_deaktiviert" 78 "Deaktivieren von Diensten" $(if($badServices.Count -eq 0){"OK"}else{"NOK"}) "Nicht deaktivierte gefundene Dienste=$((Join-Text $badServices ' | ')); Nicht vorhandene Dienste gelten als OK. Gepruefte Pattern=$($ExpectedDisabledServicePatterns.Count)" $serviceEvidence
+
+              # ID80 Deaktivierung von SMBv1
+              $smb1Feature = Get-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -ErrorAction SilentlyContinue
+              $smb1ServerReg = Get-RegValue "HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" "SMB1"
+              $mrxsmb10 = Get-Service -Name "mrxsmb10" -ErrorAction SilentlyContinue
+              $featureOk = ($null -eq $smb1Feature -or ([string]$smb1Feature.State -ne "Enabled" -and [string]$smb1Feature.State -ne "EnablePending"))
+              $serverRegOk = ($smb1ServerReg -eq 0 -or $null -eq $smb1ServerReg)
+              $driverOk = ($null -eq $mrxsmb10 -or $mrxsmb10.Status -ne "Running")
+              $ok80 = ($featureOk -and $serverRegOk -and $driverOk)
+              Add-Check "ID80_SMBv1_deaktiviert" 80 "Deaktivierung von SMBv1" $(if($ok80){"OK"}else{"NOK"}) "SMB1Protocol.State=$($smb1Feature.State); LanmanServer.SMB1=$smb1ServerReg; mrxsmb10.Status=$($mrxsmb10.Status)"
+
+              # ID82 Deaktivierung veralteter SSL-/TLS-Kommunikationsverfahren und Aktivierung TLS 1.2
+              $disabledProtocolResults = @()
+              $enabledProtocolResults = @()
+              foreach ($p in $ExpectedDisabledProtocols) { $disabledProtocolResults += Test-SchannelProtocolDisabled $p }
+              foreach ($p in $ExpectedEnabledProtocols) { $enabledProtocolResults += Test-SchannelProtocolEnabled $p }
+              $badDisabledProtocols = @($disabledProtocolResults | Where-Object { -not $_.Ok } | ForEach-Object { $_.Protocol })
+              $badEnabledProtocols = @($enabledProtocolResults | Where-Object { -not $_.Ok } | ForEach-Object { $_.Protocol })
+              $ok82 = ($badDisabledProtocols.Count -eq 0 -and $badEnabledProtocols.Count -eq 0)
+              Add-Check "ID82_SSL_TLS_Protokolle" 82 "Deaktivierung von veralteten SSL-/TLS-Kommunikationsverfahren" $(if($ok82){"OK"}else{"NOK"}) "Nicht explizit deaktiviert=$((Join-Text $badDisabledProtocols)); Nicht aktiv/nicht eindeutig aktiv=$((Join-Text $badEnabledProtocols)); Hinweis: fehlende Legacy-Registrywerte werden als nicht explizit gehaertet bewertet." (@{ Disabled=$disabledProtocolResults; Enabled=$enabledProtocolResults })
+
+              # ID83 Verwendung sicherer Cipher Suites
+              $cipherSuites = $null
+              try { $cipherSuites = @(Get-TlsCipherSuite -ErrorAction Stop) } catch { $cipherSuites = $null }
+              if ($null -eq $cipherSuites) {
+                  Add-Check "ID83_Sichere_Cipher_Suites" 83 "Verwendung von sicheren Cipher Suites" "NICHT_PRUEFBAR" "Get-TlsCipherSuite ist auf diesem System nicht verfuegbar oder fehlgeschlagen."
+              } else {
+                  $activeCipherNames = @($cipherSuites | ForEach-Object { $_.Name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                  $allowedSet = @{}
+                  foreach ($c in $ExpectedAllowedCipherSuites) { $allowedSet[[string]$c] = $true }
+                  $disallowedActive = @($activeCipherNames | Where-Object { -not $allowedSet.ContainsKey([string]$_) })
+                  Add-Check "ID83_Sichere_Cipher_Suites" 83 "Verwendung von sicheren Cipher Suites" $(if($disallowedActive.Count -eq 0){"OK"}else{"NOK"}) "AktiveCipherSuites=$($activeCipherNames.Count); Nicht_in_Allowlist=$((Join-Text $disallowedActive ' | ')); Allowlist=$($ExpectedAllowedCipherSuites.Count)" (@{ Active=$activeCipherNames; DisallowedActive=$disallowedActive; Allowed=$ExpectedAllowedCipherSuites })
+              }
+
+              # ID84 Verwendung sicherer Cipher Suites - explizite Disable-Liste
+              if ($null -eq $cipherSuites) {
+                  Add-Check "ID84_Cipher_Suites_Deaktiviert" 84 "Verwendung von sicheren Cipher Suites deaktivieren" "NICHT_PRUEFBAR" "Get-TlsCipherSuite ist auf diesem System nicht verfuegbar oder fehlgeschlagen."
+              } else {
+                  $activeCipherNames = @($cipherSuites | ForEach-Object { $_.Name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                  $disabledSet = @{}
+                  foreach ($c in $ExpectedDisabledCipherSuites) { $disabledSet[[string]$c] = $true }
+                  $forbiddenActive = @($activeCipherNames | Where-Object { $disabledSet.ContainsKey([string]$_) })
+                  Add-Check "ID84_Cipher_Suites_Deaktiviert" 84 "Verwendung von sicheren Cipher Suites deaktivieren" $(if($forbiddenActive.Count -eq 0){"OK"}else{"NOK"}) "Verbotene aktive CipherSuites=$((Join-Text $forbiddenActive ' | ')); DisableListe=$($ExpectedDisabledCipherSuites.Count)" (@{ ForbiddenActive=$forbiddenActive; DisabledExpected=$ExpectedDisabledCipherSuites })
+              }
+
+              # ID102 Firewall aktivieren / Security Controller fuer Benutzer DOMuserLS4
+              $fwProfiles = @(Get-NetFirewallProfile -ErrorAction SilentlyContinue)
+              $disabledFwProfiles = @($fwProfiles | Where-Object { $_.Enabled -ne $true })
+              $fwProfileText = (($fwProfiles | ForEach-Object { "$($_.Name):$($_.Enabled)" }) -join ", ")
+              $enabledInboundAllowRules = @(Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow -ErrorAction SilentlyContinue | Select-Object -First 200 DisplayName, Name, Profile, Direction, Action)
+              $fwProfileEvidence = @($fwProfiles | Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction)
+              $allFwRulesCount = @(Get-NetFirewallRule -ErrorAction SilentlyContinue).Count
+              $domUser = Get-CimInstance Win32_UserAccount -Filter "Name='DOMuserLS4'" -ErrorAction SilentlyContinue | Select-Object -First 1
+              $domUserEvidence = if ($domUser) { $domUser | Select-Object Name, Domain, LocalAccount, Disabled, SID } else { $null }
+              $ok102 = ($fwProfiles.Count -gt 0 -and $disabledFwProfiles.Count -eq 0)
+              $status102 = if ($ok102) { "OK" } else { "NOK" }
+              Add-Check "ID102_Firewall_aktiv" 102 "Firewall aktivieren" $status102 "FirewallProfile=$fwProfileText; GesamtRegeln=$allFwRulesCount; EnabledInboundAllowRules_erste200=$($enabledInboundAllowRules.Count); DOMuserLS4_Gefunden=$([bool]$domUser); Hinweis: Die historische Ausfuehrung des Siemens Security Controllers ist nachtraeglich nicht eindeutig beweisbar, daher wird der pruefbare Firewall-Zustand bewertet." (@{ Profiles=$fwProfileEvidence; EnabledInboundAllowRules_First200=$enabledInboundAllowRules; DOMuserLS4=$domUserEvidence })
+
+              $workgroupValue = $null
+              try {
+                  if ($cs -and -not [bool]$cs.PartOfDomain) {
+                      $workgroupValue = [string]$cs.Workgroup
+                  }
+              } catch {
+                  $workgroupValue = $null
+              }
+
+              $result = [ordered]@{
+                  scan_timestamp = "{{ hostvars['localhost']['report_timestamp_iso'] | default('') }}"
+                  target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+                  ip = "{{ inventory_hostname }}"
+                  ansible_reachable = $true
+                  computername = $env:COMPUTERNAME
+                  fqdn = $fqdn
+                  domain = $cs.Domain
+                  workgroup = $workgroupValue
+                  part_of_domain = [bool]$cs.PartOfDomain
+                  os_caption = $os.Caption
+                  os_version = $os.Version
+                  winrm_port = "{{ ansible_port | default('') }}"
+                  winrm_scheme = "{{ ansible_winrm_scheme | default('') }}"
+                  winrm_open_ports = "{{ discovered_winrm_open_ports | default('') }}"
+                  checks = $checks
+                  error = $null
+              }
+
+              $json = $result | ConvertTo-Json -Depth 30 -Compress
+              $Utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+              [System.IO.File]::WriteAllText($ResultJsonPath, $json, $Utf8NoBom)
+
+              Write-Output "OS_SERVER_SYSTEMHARDENING_RESULT_JSON=$ResultJsonPath"
+              exit 0
+          register: systemhardening_script_copy
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob PowerShell-Pruefskript auf Zielsystem vorhanden ist
+          ansible.windows.win_stat:
+            path: "{{ remote_validation_script }}"
+          register: systemhardening_script_file
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Diagnose nach Kopieren des PowerShell-Pruefskripts anzeigen
+          ansible.builtin.debug:
+            msg:
+              - "Host: {{ inventory_hostname }}"
+              - "Remote-Skriptpfad: {{ remote_validation_script }}"
+              - "Kopier-Task failed: {{ systemhardening_script_copy.failed | default(false) }}"
+              - "Kopier-Task msg: {{ systemhardening_script_copy.msg | default('') }}"
+              - "Skriptdatei vorhanden: {{ systemhardening_script_file.stat.exists | default(false) }}"
+              - "Skriptdatei Groesse: {{ systemhardening_script_file.stat.size | default('') }}"
+
+        - name: OS-Server-Systemhardening-Pruefskript auf Zielsystem ausfuehren
+          ansible.windows.win_shell: |
+            $ScriptPath = {{ remote_validation_script | to_json }}
+
+            if (-not (Test-Path -LiteralPath $ScriptPath)) {
+                Write-Error "Pruefskript nicht gefunden: $ScriptPath"
+                exit 10
+            }
+
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath
+            exit $LASTEXITCODE
+          register: systemhardening_raw
+          when:
+            - systemhardening_script_file is defined
+            - systemhardening_script_file.stat.exists | default(false)
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob Ergebnis-JSON auf Zielsystem erzeugt wurde
+          ansible.windows.win_stat:
+            path: "{{ remote_validation_json }}"
+          register: systemhardening_json_file
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Ergebnis-JSON vom Zielsystem zum Ansible-Controller zurueckholen
+          ansible.builtin.slurp:
+            src: "{{ remote_validation_json }}"
+          register: systemhardening_json_slurp
+          when:
+            - systemhardening_json_file is defined
+            - systemhardening_json_file.stat.exists | default(false)
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: OS-Server-Systemhardening-JSON dekodieren
+          ansible.builtin.set_fact:
+            systemhardening_json_text: >-
+              {{
+                systemhardening_json_slurp.content
+                | b64decode
+                | regex_replace('^\ufeff', '')
+                | trim
+              }}
+          when:
+            - systemhardening_json_slurp is defined
+            - systemhardening_json_slurp.content is defined
+            - systemhardening_json_slurp.content | length > 0
+
+        - name: OS-Server-Systemhardening-Pruefergebnis als Host-Fact speichern
+          ansible.builtin.set_fact:
+            systemhardening_validation: "{{ systemhardening_json_text | from_json }}"
+          when:
+            - systemhardening_json_text is defined
+            - systemhardening_json_text | length > 0
+          failed_when: false
+          ignore_errors: true
+
+      always:
+        - name: Temp-Ordner und PowerShell-Pruefskript auf Zielsystem entfernen
+          ansible.windows.win_file:
+            path: "{{ remote_validation_dir }}"
+            state: absent
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+      when:
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+
+    - name: Diagnose anzeigen, wenn kein Systemhardening-JSON gespeichert wurde
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "WinRM-Ping: {{ win_ping_result.ping | default('KEIN_PONG') }}"
+          - "WinRM-Unreachable: {{ win_ping_result.unreachable | default(false) }}"
+          - "WinRM-Message: {{ win_ping_result.msg | default('') }}"
+          - "PowerShell-RC: {{ systemhardening_raw.rc | default('NICHT_AUSGEFUEHRT') }}"
+          - "PowerShell-STDERR: {{ systemhardening_raw.stderr | default('') }}"
+          - "PowerShell-STDOUT-Anfang: {{ (systemhardening_raw.stdout | default(''))[:3000] }}"
+          - "Ergebnisdatei vorhanden: {{ systemhardening_json_file.stat.exists | default(false) }}"
+      when:
+        - systemhardening_validation is not defined
+
+- name: OS-Server V10.0 Systemhardening CSV-Report lokal auf dem Ansible-Controller erzeugen
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    result_dir: "./reports"
+
+  tasks:
+    - name: Zeitstempel fuer Report sicherstellen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ hostvars['localhost']['report_timestamp'] | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}"
+        report_timestamp_iso: "{{ hostvars['localhost']['report_timestamp_iso'] | default(lookup('pipe', 'date -Iseconds')) }}"
+
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: JSON-Report erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/os_server_systemhardening_v10_validation_{{ report_timestamp }}.json"
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups['os_server_systemhardening_targets'] | default([]) %}
+          {% set hv = hostvars[h] if h in hostvars else {} %}
+          {% set fallback = {
+            'scan_timestamp': report_timestamp_iso,
+            'target_timestamp': '',
+            'ip': h,
+            'ansible_reachable': false,
+            'computername': '',
+            'fqdn': '',
+            'domain': '',
+            'workgroup': '',
+            'part_of_domain': '',
+            'os_caption': '',
+            'os_version': '',
+            'winrm_port': hv.ansible_port | default(''),
+            'winrm_scheme': hv.ansible_winrm_scheme | default(''),
+            'winrm_open_ports': hv.discovered_winrm_open_ports | default(''),
+            'checks': {},
+            'error': hv.win_ping_result.msg | default('Host nicht per WinRM erreichbar oder Zugriff verweigert')
+          } %}
+          {% if h in hostvars and hostvars[h].systemhardening_validation is defined %}
+          {{ (hostvars[h].systemhardening_validation | combine({'scan_timestamp': report_timestamp_iso})) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% else %}
+          {{ fallback | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% endif %}
+          {% endfor %}
+          ]
+
+    - name: CSV-Report aus JSON erzeugen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import json
+        from pathlib import Path
+
+        result_dir = Path("{{ result_dir }}")
+        json_path = result_dir / "os_server_systemhardening_v10_validation_{{ report_timestamp }}.json"
+        csv_path = result_dir / "os_server_systemhardening_v10_validation_{{ report_timestamp }}.csv"
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        check_columns = [
+            ("ID19_VMware_Tools", "ID19_VMware_Tools_aktualisieren"),
+            ("ID39_Terminalbus_Verschluesselung", "ID39_Terminalbus_verschluesseln"),
+            ("ID46_Ping_Localhost", "ID46_Ping_eigener_Rechner_127_0_0_1"),
+            ("ID53_AD_Client_OU_Server", "ID53_AD_Client_Domaene_OU_Server"),
+            ("ID77_Windows_Komponenten", "ID77_Windows_Komponenten_deinstallieren"),
+            ("ID78_Dienste_deaktiviert", "ID78_Dienste_deaktivieren"),
+            ("ID80_SMBv1_deaktiviert", "ID80_SMBv1_deaktiviert"),
+            ("ID82_SSL_TLS_Protokolle", "ID82_SSL_TLS_Protokolle"),
+            ("ID83_Sichere_Cipher_Suites", "ID83_Sichere_Cipher_Suites"),
+            ("ID84_Cipher_Suites_Deaktiviert", "ID84_Cipher_Suites_deaktiviert"),
+            ("ID102_Firewall_aktiv", "ID102_Firewall_aktivieren"),
+        ]
+
+        base_fields = [
+            "Zeitstempel_Pruefung",
+            "Zeitstempel_Zielsystem",
+            "IP",
+            "Ansible_erreichbar",
+            "Computername",
+            "FQDN",
+            "Domaene_Workgroup",
+            "Domaenenmitglied",
+            "Betriebssystem",
+            "OS_Version",
+            "WinRM_Port",
+            "WinRM_Schema",
+            "WinRM_Offene_Ports",
+            "Fehler",
+        ]
+
+        fieldnames = list(base_fields)
+        for _, column_name in check_columns:
+            fieldnames.append(column_name)
+            fieldnames.append(column_name + "_Details")
+
+        def check_status(checks, key):
+            if not checks:
+                return ""
+            value = checks.get(key)
+            if not isinstance(value, dict):
+                return "NICHT_PRUEFBAR"
+            return value.get("status", "")
+
+        def check_details(checks, key):
+            if not checks:
+                return ""
+            value = checks.get(key)
+            if not isinstance(value, dict):
+                return ""
+            details = value.get("details", "")
+            evidence = value.get("evidence")
+            if evidence not in (None, ""):
+                try:
+                    evidence_text = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+                except TypeError:
+                    evidence_text = str(evidence)
+                return f"{details} | Evidence={evidence_text}"
+            return details
+
+        rows = []
+        for item in data:
+            row = {
+                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
+                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
+                "IP": item.get("ip", ""),
+                "Ansible_erreichbar": item.get("ansible_reachable", False),
+                "Computername": item.get("computername", ""),
+                "FQDN": item.get("fqdn", ""),
+                "Domaene_Workgroup": item.get("domain") or item.get("workgroup") or "",
+                "Domaenenmitglied": item.get("part_of_domain", ""),
+                "Betriebssystem": item.get("os_caption", ""),
+                "OS_Version": item.get("os_version", ""),
+                "WinRM_Port": item.get("winrm_port", ""),
+                "WinRM_Schema": item.get("winrm_scheme", ""),
+                "WinRM_Offene_Ports": item.get("winrm_open_ports", ""),
+                "Fehler": item.get("error", ""),
+            }
+            checks = item.get("checks") or {}
+            for key, column_name in check_columns:
+                row[column_name] = check_status(checks, key)
+                row[column_name + "_Details"] = check_details(checks, key)
+            rows.append(row)
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter=";")
+            writer.writeheader()
+            writer.writerows(rows)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Pfade der erzeugten Reports anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ result_dir }}/os_server_systemhardening_v10_validation_{{ report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/os_server_systemhardening_v10_validation_{{ report_timestamp }}.csv"
