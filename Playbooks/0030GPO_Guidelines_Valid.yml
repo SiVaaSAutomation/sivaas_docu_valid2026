@@ -5,23 +5,43 @@
   become: false
   gather_facts: false
 
-  vars:
-    # In Semaphore als Environment/Extra Variables ueberschreiben.
-    # Mehrere Netze sind moeglich, z. B.: "192.168.123.0/24 192.168.124.0/24"
-    target_network: "192.168.123.0/24"
+  # vars:
+  #   # In Semaphore als Environment/Extra Variables ueberschreiben.
+  #   # Mehrere Netze sind moeglich, z. B.: "192.168.123.0/24 192.168.124.0/24"
+  #   target_network: "192.168.123.0/24"
 
-    winrm_port: 5985
-    winrm_transport: ntlm
-    result_dir: "./reports"
+  #   winrm_port: 5985
+  #   winrm_transport: ntlm
+  #   result_dir: "./reports"
 
   tasks:
+    - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - nmap_binary is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - nmap_binary | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Es fehlen benoetigte Semaphore-Variablen:
+          target_network, nmap_binary, win_user, win_password,
+          winrm_transport und result_dir.
+
     - name: Zeitstempel fuer Report setzen
       ansible.builtin.set_fact:
         report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
         report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
-      ansible.builtin.shell: "command -v nmap"
+      ansible.builtin.command: "{{ nmap_binary }} --version"
       register: nmap_check
       changed_when: false
       failed_when: false
@@ -43,7 +63,7 @@
     - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
       ansible.builtin.shell: |
         set -o pipefail
-        nmap -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
         awk '
           /Ports:/ {
             host=$2
@@ -95,8 +115,8 @@
         ansible_winrm_scheme: "{{ item.split(';')[2] }}"
         ansible_winrm_transport: "{{ winrm_transport }}"
         ansible_winrm_server_cert_validation: ignore
-        ansible_winrm_operation_timeout_sec: 60
-        ansible_winrm_read_timeout_sec: 120
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(120) }}"
         discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
       loop: "{{ discovered_winrm_hosts }}"
       no_log: true
@@ -111,73 +131,57 @@
   ignore_unreachable: true
 
   vars:
+    remote_validation_dir: "{{ os_server_validation_remote_dir }}"
+    remote_validation_script: "{{ os_server_validation_remote_dir }}\\os_server_v10_validation.ps1"
+    remote_validation_json: "{{ os_server_validation_remote_dir }}\\os_server_v10_validation.json"
 
-    remote_validation_dir: 'C:\Windows\Temp\ansible_os_server_v10_validation'
-    remote_validation_script: '{{ remote_validation_dir }}\os_server_v10_validation.ps1'
-    remote_validation_json: '{{ remote_validation_dir }}\os_server_v10_validation.json'
-
-    # Allgemein / Netzwerk
-    expected_timezone_id: "W. Europe Standard Time"
-    expected_present_adapters:
-      - "Terminalbus"
-      - "Redundanzbus"
-    expected_absent_adapters:
-      - "Anlagenbus"
-      - "Plantbus"
-    allowed_enabled_adapter_names:
-      - "Terminalbus"
-      - "Redundanzbus"
-
-    # Passwort-/Security-Policy
-    expected_password_complexity: 0
-    expected_min_password_length: 0
-    expected_max_password_age_days: 0
-    expected_min_password_age_days: 0
-    expected_eventlog_max_kb: 16384
-
-    # Bildschirm / Energie
-    expected_screen_width: 0
-    expected_screen_height: 0
-    expected_power_plan_regex: "SIMATIC|High performance|Hoechstleistung|Höchstleistung|Ultimate Performance"
-
-    # HOSTS / LMHOSTS
-    hosts_lmhosts_required: false
-    expected_hosts_lmhosts_entries: []
-    expected_hosts_lmhosts_min_date_109: "2025-04-04T11:14:00"
-    expected_hosts_lmhosts_min_date_112: "2025-05-14T11:25:00"
-
-    # VNC / BGInfo / Projekt / Benutzer
-    expected_vnc_ini_paths:
-      - "C:\\Program Files\\uvnc bvba\\UltraVNC\\ultravnc.ini"
-      - "C:\\Program Files\\UltraVNC\\ultravnc.ini"
-    expected_bginfo_paths:
-      - "C:\\Program Files (x86)\\BgInfo"
-      - "C:\\Programme (x86)\\BgInfo"
-    expected_bginfo_run_contains: "BgInfo"
-    expected_pcs7_user: "LOCadmLS4"
-    expected_pcs7_groups:
-      - "SIMATIC HMI"
-      - "SIMATIC NET"
-      - "SIMATIC Management Users"
-      - "SIMATIC Historian Management"
-    expected_project_folder: "D:\\Projekte"
-    expected_project_share: "Projekte"
-    ntp_wizard_required: false
-    expected_ntp_wizard_paths:
-      - "D:\\Tools"
-
-    # WSUS / Hotfixes
-    expected_wsus_server: ""
-    expected_wsus_target_group: ""
-    expected_hotfix_ids:
-      - "KB5053603"
-      - "KB5050187"
-      - "KB5065432"
-      - "KB5065962"
-    expected_edge_version: "140.0.3485.66"
-    perform_windows_update_search: false
+    required_os_server_v10_vars:
+      - os_server_validation_remote_dir
+      - expected_timezone_id
+      - expected_present_adapters
+      - expected_absent_adapters
+      - allowed_enabled_adapter_names
+      - expected_password_complexity
+      - expected_min_password_length
+      - expected_max_password_age_days
+      - expected_min_password_age_days
+      - expected_eventlog_max_kb
+      - expected_screen_width
+      - expected_screen_height
+      - expected_power_plan_regex
+      - hosts_lmhosts_required
+      - expected_hosts_lmhosts_entries
+      - expected_hosts_lmhosts_min_date_109
+      - expected_hosts_lmhosts_min_date_112
+      - expected_vnc_ini_paths
+      - expected_bginfo_paths
+      - expected_bginfo_run_contains
+      - expected_pcs7_user
+      - expected_pcs7_groups
+      - expected_project_folder
+      - expected_project_share
+      - ntp_wizard_required
+      - expected_ntp_wizard_paths
+      - expected_wsus_server
+      - expected_wsus_target_group
+      - expected_wsus_au_options
+      - expected_hotfix_ids
+      - expected_edge_version
+      - perform_windows_update_search
+      - windows_update_search_timeout_seconds
+      - expected_admin_password_min_set_date
+      - expected_admin_password_max_age_days
+      - expected_lifebeat_dcom_accounts
 
   tasks:
+    - name: Pruefen, ob alle OS-Server-V10-Sollwertvariablen aus Semaphore vorhanden sind
+      ansible.builtin.assert:
+        that:
+          - required_os_server_v10_vars | difference(vars.keys() | list) | length == 0
+        fail_msg: >-
+          Es fehlen folgende Semaphore-Variablen:
+          {{ required_os_server_v10_vars | difference(vars.keys() | list) | join(', ') }}
+
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
       register: win_ping_result
@@ -318,8 +322,8 @@
 - name: OS-Server V10.0 CSV-Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
   gather_facts: false
-  vars:
-    result_dir: "./reports"
+  # vars:
+  #   result_dir: "./reports"
   tasks:
     - name: Zeitstempel fuer Report sicherstellen
       ansible.builtin.set_fact:
