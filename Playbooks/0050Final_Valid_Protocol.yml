@@ -18,11 +18,11 @@
     # Name des Sheets in der Vorlagen-Excel.
     matrix_template_sheet: "{{ os_server_template_sheet | default('VM OS Server V10.0') }}"
 
-    # CSV-Dateimuster der vier bisherigen Reports. Es wird jeweils automatisch die neueste Datei genommen.
-    matrix_0010_pattern: "{{ matrix_0010_pattern | default('network_discovery_*.csv') }}"
-    matrix_0020_pattern: "{{ matrix_0020_pattern | default('pcs7_installation_check_*.csv') }}"
-    matrix_0030_pattern: "{{ matrix_0030_pattern | default('os_server_v10_validation_*.csv') }}"
-    matrix_0040_pattern: "{{ matrix_0040_pattern | default('os_server_systemhardening_v10_validation_*.csv') }}"
+    # # CSV-Dateimuster der vier bisherigen Reports. Es wird jeweils automatisch die neueste Datei genommen.
+    # matrix_0010_pattern: "{{ matrix_0010_pattern | default('network_discovery_*.csv') }}"
+    # matrix_0020_pattern: "{{ matrix_0020_pattern | default('pcs7_installation_check_*.csv') }}"
+    # matrix_0030_pattern: "{{ matrix_0030_pattern | default('os_server_v10_validation_*.csv') }}"
+    # matrix_0040_pattern: "{{ matrix_0040_pattern | default('os_server_systemhardening_v10_validation_*.csv') }}"
 
     # Status-Texte im Zielreport.
     matrix_status_ok: "OK"
@@ -76,13 +76,13 @@
         MATRIX_TEMPLATE_XLSX: "{{ matrix_template_xlsx }}"
         MATRIX_TEMPLATE_SHEET: "{{ matrix_template_sheet }}"
         MATRIX_OUTPUT_BASENAME: "task_status_matrix_{{ matrix_report_timestamp }}"
-        MATRIX_0010_PATTERN: "{{ matrix_0010_pattern }}"
-        MATRIX_0020_PATTERN: "{{ matrix_0020_pattern }}"
-        MATRIX_0030_PATTERN: "{{ matrix_0030_pattern }}"
-        MATRIX_0040_PATTERN: "{{ matrix_0040_pattern }}"
-        MATRIX_STATUS_OK: "{{ matrix_status_ok }}"
-        MATRIX_STATUS_NOK: "{{ matrix_status_nok }}"
-        MATRIX_STATUS_NP: "{{ matrix_status_np }}"
+        MATRIX_0010_PATTERN: "{{ matrix_0010_pattern | default('network_discovery_*.csv') }}"
+        MATRIX_0020_PATTERN: "{{ matrix_0020_pattern | default('pcs7_installation_check_*.csv') }}"
+        MATRIX_0030_PATTERN: "{{ matrix_0030_pattern | default('os_server_v10_validation_*.csv') }}"
+        MATRIX_0040_PATTERN: "{{ matrix_0040_pattern | default('os_server_systemhardening_v10_validation_*.csv') }}"
+        MATRIX_STATUS_OK: "{{ matrix_status_ok | default('OK') }}"
+        MATRIX_STATUS_NOK: "{{ matrix_status_nok | default('NOK') }}"
+        MATRIX_STATUS_NP: "{{ matrix_status_np | default('NICHT_PRUEFBAR') }}"
         PYTHONIOENCODING: "utf-8"
       register: matrix_script_result
       changed_when: true
