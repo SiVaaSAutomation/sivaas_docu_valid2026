@@ -5,8 +5,13 @@
   gather_facts: false
 
   vars:
-    # Ergebnisordner der bisherigen Reports. In Semaphore am besten als result_dir setzen.
-    matrix_result_dir: "{{ result_dir | default('/home/ansible/Dokumente/semaphore_reports/docu_valid') }}"
+    # Quellordner der vorhandenen CSV-Dateien aus 0010/0020/0030/0040.
+    # In Semaphore am besten matrix_csv_source_dir setzen.
+    matrix_source_dir: "{{ matrix_csv_source_dir | default(result_dir | default('/home/ansible/Dokumente/semaphore_reports/docu_valid')) }}"
+
+    # Zielordner fuer die neue 0050-Matrix. Wenn nicht gesetzt, wird in den Quellordner geschrieben.
+    # In Semaphore optional matrix_csv_output_dir setzen.
+    matrix_output_dir: "{{ matrix_csv_output_dir | default(matrix_csv_source_dir | default(result_dir | default('/home/ansible/Dokumente/semaphore_reports/docu_valid'))) }}"
 
     # Vorlage: Excel-Datei mit Sheet "VM OS Server V10.0".
     # Falls die Datei im Repo-Root liegt und dieses Playbook im Ordner Playbooks liegt, passt der Default.
@@ -18,27 +23,53 @@
     # Name des Sheets in der Vorlagen-Excel.
     matrix_template_sheet: "{{ os_server_template_sheet | default('VM OS Server V10.0') }}"
 
-    # # CSV-Dateimuster der vier bisherigen Reports. Es wird jeweils automatisch die neueste Datei genommen.
-    # matrix_0010_pattern: "{{ matrix_0010_pattern | default('network_discovery_*.csv') }}"
-    # matrix_0020_pattern: "{{ matrix_0020_pattern | default('pcs7_installation_check_*.csv') }}"
-    # matrix_0030_pattern: "{{ matrix_0030_pattern | default('os_server_v10_validation_*.csv') }}"
-    # matrix_0040_pattern: "{{ matrix_0040_pattern | default('os_server_systemhardening_v10_validation_*.csv') }}"
-
-    # Status-Texte im Zielreport.
-    matrix_status_ok: "OK"
-    matrix_status_nok: "NOK"
-    matrix_status_np: "NICHT_PRUEFBAR"
-
   tasks:
     - name: Zeitstempel fuer Matrix-Report setzen
       ansible.builtin.set_fact:
         matrix_report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
-    - name: Report-Verzeichnis pruefen/anlegen
+    - name: Zielverzeichnis fuer Matrix pruefen/anlegen
       ansible.builtin.file:
-        path: "{{ matrix_result_dir }}"
+        path: "{{ matrix_output_dir }}"
         state: directory
         mode: "0750"
+
+    - name: Quellverzeichnis der vorhandenen CSV-Reports pruefen
+      ansible.builtin.stat:
+        path: "{{ matrix_source_dir }}"
+      register: matrix_source_dir_stat
+
+    - name: Abbrechen, wenn Quellverzeichnis fehlt
+      ansible.builtin.fail:
+        msg: >-
+          Der CSV-Quellordner wurde nicht gefunden: {{ matrix_source_dir }}.
+          Setze in Semaphore matrix_csv_source_dir auf den Ordner, in dem die CSV-Dateien
+          aus 0010/0020/0030/0040 liegen, z. B.
+          /home/ansible/Dokumente/semaphore_reports/docu_valid.
+      when: not matrix_source_dir_stat.stat.exists
+
+    - name: Vorhandene CSV-Dateien im Quellordner suchen
+      ansible.builtin.find:
+        paths: "{{ matrix_source_dir }}"
+        patterns: "*.csv"
+        file_type: file
+        recurse: false
+      register: matrix_existing_csv_files
+
+    - name: Gefundene CSV-Dateien anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "CSV-Quellordner: {{ matrix_source_dir }}"
+          - "Matrix-Zielordner: {{ matrix_output_dir }}"
+          - "Gefundene CSV-Dateien: {{ matrix_existing_csv_files.files | map(attribute='path') | list }}"
+
+    - name: Abbrechen, wenn im Quellordner keine CSV-Dateien liegen
+      ansible.builtin.fail:
+        msg: >-
+          Im CSV-Quellordner {{ matrix_source_dir }} wurden keine CSV-Dateien gefunden.
+          Pruefe, ob 0010/0020/0030/0040 denselben result_dir verwenden oder setze
+          matrix_csv_source_dir in Semaphore korrekt.
+      when: matrix_existing_csv_files.matched | int == 0
 
     - name: Pruefen, ob Vorlagen-Excel vorhanden ist
       ansible.builtin.stat:
@@ -72,7 +103,8 @@
           - "{{ ansible_playbook_python | default('/usr/bin/python3') }}"
           - "{{ matrix_python_script }}"
       environment:
-        MATRIX_RESULT_DIR: "{{ matrix_result_dir }}"
+        MATRIX_SOURCE_DIR: "{{ matrix_source_dir }}"
+        MATRIX_OUTPUT_DIR: "{{ matrix_output_dir }}"
         MATRIX_TEMPLATE_XLSX: "{{ matrix_template_xlsx }}"
         MATRIX_TEMPLATE_SHEET: "{{ matrix_template_sheet }}"
         MATRIX_OUTPUT_BASENAME: "task_status_matrix_{{ matrix_report_timestamp }}"
@@ -91,5 +123,5 @@
       ansible.builtin.debug:
         msg:
           - "{{ matrix_script_result.stdout_lines | default([]) }}"
-          - "CSV-Matrix: {{ matrix_result_dir }}/task_status_matrix_{{ matrix_report_timestamp }}.csv"
-          - "Quelleninfo: {{ matrix_result_dir }}/task_status_matrix_{{ matrix_report_timestamp }}_quellen.txt"
+          - "CSV-Matrix: {{ matrix_output_dir }}/task_status_matrix_{{ matrix_report_timestamp }}.csv"
+          - "Quelleninfo: {{ matrix_output_dir }}/task_status_matrix_{{ matrix_report_timestamp }}_quellen.txt"

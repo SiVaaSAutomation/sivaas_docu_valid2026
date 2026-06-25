@@ -8,7 +8,9 @@ import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-result_dir = Path(os.environ["MATRIX_RESULT_DIR"])
+source_dir = Path(os.environ.get("MATRIX_SOURCE_DIR") or os.environ.get("MATRIX_RESULT_DIR", "."))
+output_dir = Path(os.environ.get("MATRIX_OUTPUT_DIR") or source_dir)
+output_dir.mkdir(parents=True, exist_ok=True)
 template_xlsx = Path(os.environ["MATRIX_TEMPLATE_XLSX"])
 template_sheet = os.environ.get("MATRIX_TEMPLATE_SHEET", "VM OS Server V10.0")
 output_basename = os.environ["MATRIX_OUTPUT_BASENAME"]
@@ -40,7 +42,7 @@ fallback_task_map = {
 }
 
 def latest_file(pattern):
-    matches = [Path(p) for p in glob.glob(str(result_dir / pattern))]
+    matches = [Path(p) for p in glob.glob(str(source_dir / pattern))]
     if not matches:
         return None
     return sorted(matches, key=lambda p: p.stat().st_mtime, reverse=True)[0]
@@ -364,8 +366,8 @@ for tr in template_rows:
 
     output_rows.append(out)
 
-csv_path = result_dir / f"{output_basename}.csv"
-meta_path = result_dir / f"{output_basename}_quellen.txt"
+csv_path = output_dir / f"{output_basename}.csv"
+meta_path = output_dir / f"{output_basename}_quellen.txt"
 
 with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
     writer = csv.writer(fh, delimiter=";")
@@ -374,6 +376,8 @@ with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
 with meta_path.open("w", encoding="utf-8") as fh:
     fh.write("0050 Task-Status-Matrix\n")
     fh.write(f"Vorlage: {template_xlsx}\n")
+    fh.write(f"CSV-Quellordner: {source_dir}\n")
+    fh.write(f"Matrix-Zielordner: {output_dir}\n")
     fh.write(f"Sheet: {template_sheet}\n")
     fh.write("\nVerwendete CSV-Quellen:\n")
     for src in ("0010", "0020", "0030", "0040"):
