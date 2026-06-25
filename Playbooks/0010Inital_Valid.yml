@@ -141,8 +141,9 @@
         ansible_winrm_scheme: "{{ item.split(';')[2] }}"
         ansible_winrm_transport: "{{ winrm_transport }}"
         ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(90) }}"
         discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
-      loop: "{{ discovered_winrm_hosts }}"
       no_log: true
 
 
