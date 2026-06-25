@@ -53,7 +53,8 @@
     - name: Task-Status-Matrix aus neuesten 0010/0020/0030/0040-CSV-Dateien erzeugen
       ansible.builtin.shell: |
         set -euo pipefail
-        python3 - <<'PY'
+        "{{ ansible_playbook_python | default('python3') }}" - <<'PY'
+        {% raw %}
         import csv
         import glob
         import ipaddress
@@ -444,6 +445,7 @@
         print(f"META={meta_path}")
         print(f"IPS={len(ips)}")
         print("SOURCES=" + "; ".join(f"{k}:{v if v else 'NICHT_GEFUNDEN'}" for k, v in source_files.items()))
+        {% endraw %}
         PY
       args:
         executable: /bin/bash
@@ -459,6 +461,7 @@
         MATRIX_STATUS_OK: "{{ matrix_status_ok }}"
         MATRIX_STATUS_NOK: "{{ matrix_status_nok }}"
         MATRIX_STATUS_NP: "{{ matrix_status_np }}"
+        PYTHONIOENCODING: "utf-8"
       register: matrix_script_result
       changed_when: true
 
