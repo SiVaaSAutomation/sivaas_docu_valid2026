@@ -8,19 +8,41 @@
   # become_user: Administrator
   gather_facts: no
 
-  vars:
-    target_network: "192.168.123.0/24"
-    winrm_port: 5985
-    winrm_transport: ntlm
-    result_dir: "./reports"
+  # vars:
+  #   target_network: "192.168.123.0/24"
+  #   winrm_port: 5985
+  #   winrm_transport: ntlm
+  #   result_dir: "./reports"
   tasks:
+    - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - nmap_binary is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - result_dir is defined
+          - pcs7_setup_log_path is defined
+          - target_network | string | length > 0
+          - nmap_binary | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - result_dir | string | length > 0
+          - pcs7_setup_log_path | string | length > 0
+        fail_msg: >-
+          Es fehlen benoetigte Variablen aus Semaphore.
+          Benoetigt werden mindestens target_network, nmap_binary, win_user,
+          win_password, winrm_transport, result_dir und pcs7_setup_log_path.
+
     # - name: Zeitstempel fuer Report setzen
     #   ansible.builtin.set_fact:
     #     report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
     #     report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
-      ansible.builtin.shell: "command -v nmap"
+      ansible.builtin.command: "{{ nmap_binary }} --version"
       register: nmap_check
       changed_when: false
       failed_when: false
@@ -75,7 +97,7 @@
     - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
       ansible.builtin.shell: |
         set -o pipefail
-        nmap -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
         awk '
           /Ports:/ {
             host=$2
@@ -141,8 +163,8 @@
   hosts: pcs7_check_targets
   gather_facts: false
   ignore_unreachable: true
-  vars:
-    pcs7_setup_log_path: "C:\\ProgramData\\Siemens\\Automation\\Logfiles\\Setup\\RS"
+  # vars:
+  #   pcs7_setup_log_path: "C:\\ProgramData\\Siemens\\Automation\\Logfiles\\Setup\\RS"
   tasks:
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
@@ -365,8 +387,8 @@
 - name: PCS7-Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
   gather_facts: false
-  vars:
-    result_dir: "./reports"
+  # vars:
+  #   result_dir: "./reports"
   tasks:
 
     - name: Zeitstempel fuer Report sicherstellen
