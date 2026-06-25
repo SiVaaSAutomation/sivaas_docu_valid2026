@@ -5,26 +5,48 @@
   become: false
   gather_facts: false
 
-  vars:
-    # In Semaphore als Environment/Extra Variables ueberschreiben.
-    # Mehrere Netze sind moeglich, z. B.: "192.168.123.0/24 192.168.124.0/24"
-    target_network: "192.168.123.0/24"
+  # vars:
+  #   # In Semaphore als Environment/Extra Variables ueberschreiben.
+  #   # Mehrere Netze sind moeglich, z. B.: "192.168.123.0/24 192.168.124.0/24"
+  #   target_network: "192.168.123.0/24"
 
-    # Windows-Zugangsdaten muessen in Semaphore/Vault uebergeben werden.
-    # win_user: "Administrator"
-    # win_password: "..."
-    winrm_default_port: 5985
-    winrm_transport: ntlm
-    result_dir: "./reports"
+  #   # Windows-Zugangsdaten muessen in Semaphore/Vault uebergeben werden.
+  #   # win_user: "Administrator"
+  #   # win_password: "..."
+  #   winrm_default_port: 5985
+  #   winrm_transport: ntlm
+  #   result_dir: "./reports"
 
   tasks:
+
+    - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - nmap_binary is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - winrm_default_port is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - nmap_binary | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Es fehlen benoetigte Semaphore-Variablen:
+          target_network, nmap_binary, win_user, win_password,
+          winrm_transport, winrm_default_port und result_dir.
+
     - name: Zeitstempel fuer Report setzen
       ansible.builtin.set_fact:
         report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
         report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
-      ansible.builtin.shell: "command -v nmap"
+      ansible.builtin.command: "{{ nmap_binary }} --version"
       register: nmap_check
       changed_when: false
       failed_when: false
@@ -50,7 +72,7 @@
         trap 'rm -rf "$tmpdir"' EXIT
 
         # 1) Alle per Ping/ARP erkannten Teilnehmer aufnehmen.
-        nmap -n -sn {{ target_network }} -oG "$tmpdir/ping.gnmap" >/dev/null
+        {{ nmap_binary }} -n -sn {{ target_network }} -oG "$tmpdir/ping.gnmap" >/dev/null
         awk '/Status: Up/{print $2}' "$tmpdir/ping.gnmap" | sort -u > "$tmpdir/live_ips.txt"
 
         # 2) Zusaetzlich WinRM-Ports erfassen, auch wenn ein Host auf Ping nicht antwortet.
@@ -115,8 +137,8 @@
         ansible_winrm_scheme: "{{ item.split(';')[2] }}"
         ansible_winrm_transport: "{{ winrm_transport }}"
         ansible_winrm_server_cert_validation: ignore
-        ansible_winrm_operation_timeout_sec: 60
-        ansible_winrm_read_timeout_sec: 120
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(120) }}"
         discovered_winrm_open_ports: "{{ item.split(';')[3] | default('') }}"
       loop: "{{ discovered_systemhardening_hosts }}"
       no_log: true
@@ -131,100 +153,34 @@
   ignore_unreachable: true
 
   vars:
-    remote_validation_dir: 'C:\Windows\Temp\ansible_os_server_systemhardening_validation'
-    remote_validation_script: '{{ remote_validation_dir }}\os_server_systemhardening_validation.ps1'
-    remote_validation_json: '{{ remote_validation_dir }}\os_server_systemhardening_validation.json'
+    remote_validation_dir: "{{ systemhardening_validation_remote_dir }}"
+    remote_validation_script: "{{ systemhardening_validation_remote_dir }}\\os_server_systemhardening_validation.ps1"
+    remote_validation_json: "{{ systemhardening_validation_remote_dir }}\\os_server_systemhardening_validation.json"
 
-    # Task 19: VMware Tools
-    expected_vmware_tools_min_version: ""
-
-    # Task 39: Terminalbus-Verschluesselung
-    # Ohne bekannten Siemens-/PCS7-Konfigurationspfad wird nur der Terminalbus-Adapter nachgewiesen.
-    expected_terminalbus_adapter_regex: "^Terminalbus$"
-
-    # Task 53: Computerobjekt soll in der OU/Struktur "Server" liegen.
-    expected_computer_ou_regex: "OU=Server"
-
-    # Task 77: nicht benoetigte Windows-Komponenten sollen deaktiviert oder nicht installiert sein.
-    expected_disabled_windows_features:
-      - "SMB1Protocol"
-      - "TelnetClient"
-      - "TFTP"
-      - "WorkFolders-Client"
-      - "Printing-XPSServices-Features"
-      - "WindowsMediaPlayer"
-      - "MicrosoftWindowsPowerShellV2"
-      - "MicrosoftWindowsPowerShellV2Root"
-
-    # Task 78: Dienste, die durch PCS7 System Hardening deaktiviert sein sollen.
-    # Es wird gegen ServiceName ODER DisplayName geprueft. Nicht vorhandene Dienste gelten als OK.
-    expected_disabled_service_patterns:
-      - "^BTAGService$|Bluetooth-Audiogateway"
-      - "^bthserv$|Bluetooth-Unterstuetzung|Bluetooth Support"
-      - "^WdiServiceHost$|Diagnosediensthost|Diagnostic Service Host"
-      - "^DPS$|Diagnoserichtlinien|Diagnostic Policy"
-      - "^RmSvc$|Funkverwaltungsdienst|Radio Management"
-      - "^lfsvc$|Geolocation"
-      - "^pla$|Leistungsprotokolle|Performance Logs"
-      - "^MapsBroker$|heruntergeladene Karten|Downloaded Maps"
-      - "Siemens Telemetry|Telemetry Connector"
-      - "^TapiSrv$|Telefondienst|Telephony"
-      - "^WalletService$|WalletService"
-      - "^WMPNetworkSvc$|Windows Media Player-Netzwerkfreigabe"
-      - "^FontCache3.0.0.0$|Windows Presentation Foundation.*Schriftartcache|WPF.*Font Cache"
-      - "^icssvc$|mobile Hotspots|Mobile Hotspot"
-      - "^WcsPlugInService$|Windows-Farbsystem|Windows Color System"
-      - "^wisvc$|Windows-Insider"
-      - "^Wcncsvc$|Windows-Sofortverbindung|Windows Connect Now"
-      - "^XboxGipSvc$|Xbox Accessory"
-      - "^XblAuthManager$|Xbox Live Authentifizierungs"
-      - "^XboxNetApiSvc$|Xbox Live-Netzwerk"
-      - "^XblGameSave$|Xbox Live-Spiele"
-      - "^SEMgrSvc$|Zahlungs|NFC|SE-Manager"
-      - "^CertPropSvc$|Zertifikatverteilung|Certificate Propagation"
-
-    # Task 82: SSL/TLS-Protokolle
-    expected_disabled_schannel_protocols:
-      - "SSL 2.0"
-      - "SSL 3.0"
-      - "TLS 1.0"
-      - "TLS 1.1"
-    expected_enabled_schannel_protocols:
-      - "TLS 1.2"
-
-    # Task 83: erlaubte sichere Cipher Suites laut Excel-Aufgabe.
-    expected_allowed_tls12_cipher_suites:
-      - "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"
-      - "TLS_DHE_RSA_WITH_AES_128_CBC_SHA256"
-      - "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384"
-      - "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256"
-      - "TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
-      - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
-      - "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
-      - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
-      - "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384"
-      - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
-
-    # Task 84: laut Excel-Aufgabe explizit zu deaktivierende Cipher Suites.
-    expected_disabled_cipher_suites:
-      - "TLS_AES_256_GCM_SHA384"
-      - "TLS_AES_128_GCM_SHA256"
-      - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
-      - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
-      - "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384"
-      - "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256"
-      - "TLS_RSA_WITH_NULL_SHA256"
-      - "TLS_RSA_WITH_NULL_SHA"
-      - "TLS_PSK_WITH_AES_256_GCM_SHA384"
-      - "TLS_PSK_WITH_AES_128_GCM_SHA256"
-      - "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA"
-      - "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA"
-      - "TLS_PSK_WITH_AES_256_CBC_SHA384"
-      - "TLS_PSK_WITH_AES_128_CBC_SHA256"
-      - "TLS_PSK_WITH_NULL_SHA384"
-      - "TLS_PSK_WITH_NULL_SHA256"
+    required_systemhardening_vars:
+      - systemhardening_validation_remote_dir
+      - expected_vmware_tools_min_version
+      - expected_terminalbus_adapter_regex
+      - expected_computer_ou_regex
+      - expected_disabled_windows_features
+      - expected_disabled_service_patterns
+      - expected_disabled_schannel_protocols
+      - expected_enabled_schannel_protocols
+      - expected_allowed_tls12_cipher_suites
+      - expected_disabled_cipher_suites
+      - expected_firewall_rule_name_patterns
+      - expected_security_controller_user
 
   tasks:
+
+    - name: Pruefen, ob alle Systemhardening-Sollwertvariablen aus Semaphore vorhanden sind
+      ansible.builtin.assert:
+        that:
+          - required_systemhardening_vars | difference(vars.keys() | list) | length == 0
+        fail_msg: >-
+          Es fehlen folgende Semaphore-Variablen:
+          {{ required_systemhardening_vars | difference(vars.keys() | list) | join(', ') }}
+
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
       register: win_ping_result
@@ -268,7 +224,8 @@
               $ExpectedEnabledProtocols = @(Convert-JsonVar '{{ expected_enabled_schannel_protocols | to_json }}')
               $ExpectedAllowedCipherSuites = @(Convert-JsonVar '{{ expected_allowed_tls12_cipher_suites | to_json }}')
               $ExpectedDisabledCipherSuites = @(Convert-JsonVar '{{ expected_disabled_cipher_suites | to_json }}')
-
+              $ExpectedFirewallRuleNamePatterns = @(Convert-JsonVar '{{ expected_firewall_rule_name_patterns | to_json }}')
+              $ExpectedSecurityControllerUser = {{ expected_security_controller_user | to_json }}
               $checks = [ordered]@{}
 
               function Add-Check {
@@ -673,8 +630,8 @@
   hosts: localhost
   gather_facts: false
 
-  vars:
-    result_dir: "./reports"
+  # vars:
+  #   result_dir: "./reports"
 
   tasks:
     - name: Zeitstempel fuer Report sicherstellen
