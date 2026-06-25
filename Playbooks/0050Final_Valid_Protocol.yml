@@ -6,7 +6,7 @@
 
   vars:
     # Ergebnisordner der bisherigen Reports. In Semaphore am besten als result_dir setzen.
-    matrix_result_dir: "{{ result_dir | default('./reports') }}"
+    matrix_result_dir: "{{ result_dir | default('/home/ansible/Dokumente/semaphore_reports/docu_valid') }}"
 
     # Vorlage: Excel-Datei mit Sheet "VM OS Server V10.0".
     # Falls die Datei im Repo-Root liegt und dieses Playbook im Ordner Playbooks liegt, passt der Default.
