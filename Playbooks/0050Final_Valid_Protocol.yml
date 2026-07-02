@@ -115,6 +115,7 @@
         MATRIX_STATUS_OK: "{{ matrix_status_ok | default('OK') }}"
         MATRIX_STATUS_NOK: "{{ matrix_status_nok | default('NOK') }}"
         MATRIX_STATUS_NP: "{{ matrix_status_np | default('NICHT_PRUEFBAR') }}"
+        MATRIX_STATUS_IST: "{{ matrix_status_ist | default('ISTWERT') }}"
         MATRIX_SHOW_INDIRECT_VALUES: "{{ matrix_show_indirect_values | default(true) | ternary('true', 'false') }}"
         MATRIX_SHOW_DETAILS_FOR_NP: "{{ matrix_show_details_for_np | default(true) | ternary('true', 'false') }}"
         MATRIX_MAX_CELL_TEXT_LEN: "{{ matrix_max_cell_text_len | default(180) }}"
