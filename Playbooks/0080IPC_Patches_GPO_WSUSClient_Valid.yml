@@ -1,0 +1,539 @@
+---
+- name: IPC Patches, GPO und WSUS-Client - Teilnehmer im Zielnetz erkennen
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  # Dieses Playbook wird nach 0010, 0020, 0030, 0040 und 0070 ausgefuehrt.
+  # Es wiederholt bewusst NICHT:
+  # - allgemeine Windows-Update-Suche aus 0030,
+  # - WSUS-Server-/TargetGroup-/AUOptions-Pruefung aus 0030,
+  # - Zertifikats-Sperrlistenoptionen des Internet Explorers aus 0030,
+  # - Windows-Basiskonfiguration aus 0070.
+  #
+  # Neu geprueft werden nur die IPC-IDs:
+  # 0070, 0072, 0075, 0171, 0173, 0176 und 0178.
+  # IDs 0070/0171 verwenden dieselbe Zertifikatsabfrage.
+  # IDs 0173/0178 werden indirekt ueber den wirksamen Zustand von ID 0176
+  # und den letzten Gruppenrichtlinien-Verarbeitungszeitpunkt bewertet.
+
+  tasks:
+    - name: Pruefen, ob gemeinsame Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - nmap_binary is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - winrm_default_port is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - nmap_binary | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Es fehlen gemeinsame Semaphore-Variablen: target_network,
+          nmap_binary, win_user, win_password, winrm_transport,
+          winrm_default_port und result_dir.
+
+    - name: Pruefen, ob 0080-spezifische Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - ipc_patches_gpo_wsusclient_validation_remote_dir is defined
+          - ipc_wsus_certificate_store_location is defined
+          - ipc_wsus_certificate_store_name is defined
+          - ipc_wsus_certificate_subject_regex is defined
+          - ipc_wsus_certificate_thumbprint is defined
+          - ipc_wsus_certificate_min_valid_until is defined
+          - ipc_expected_hotfixes is defined
+          - ipc_update_policy_registry_path is defined
+          - ipc_update_policy_value_name is defined
+          - ipc_expected_update_policy_value is defined
+          - ipc_group_policy_operational_log_name is defined
+          - ipc_patches_gpo_wsusclient_validation_remote_dir | string | length > 0
+          - ipc_wsus_certificate_store_location | string | length > 0
+          - ipc_wsus_certificate_store_name | string | length > 0
+          - ipc_wsus_certificate_subject_regex | string | length > 0
+          - ipc_expected_hotfixes | length > 0
+          - ipc_update_policy_registry_path | string | length > 0
+          - ipc_update_policy_value_name | string | length > 0
+          - ipc_group_policy_operational_log_name | string | length > 0
+        fail_msg: >-
+          Es fehlen 0080-spezifische Semaphore-Variablen. Verwende die
+          mitgelieferte Datei 0080IPC_Patches_GPO_WSUSClient_Semaphore_Variablen.json.
+
+    - name: Zeitstempel fuer Report setzen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+      ansible.builtin.command: "{{ nmap_binary }} --version"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap fehlt
+      ansible.builtin.fail:
+        msg: >-
+          nmap ist auf dem Ansible-Controller unter {{ nmap_binary }}
+          nicht ausfuehrbar. Installation z. B.: sudo apt install nmap
+      when: nmap_check.rc != 0
+
+    - name: Zielnetz nach Teilnehmern und offenen WinRM-Ports scannen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "$tmpdir"' EXIT
+
+        {{ nmap_binary }} -n -sn {{ target_network }} -oG "$tmpdir/ping.gnmap" >/dev/null
+        awk '/Status: Up/{print $2}' "$tmpdir/ping.gnmap" | sort -u > "$tmpdir/live_ips.txt"
+
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG "$tmpdir/winrm.gnmap" >/dev/null
+        awk '
+          /Ports:/ {
+            host=$2
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
+
+            if (has_https) {
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
+            } else if (has_http) {
+              print host ";5985;http;5985"
+            }
+          }
+        ' "$tmpdir/winrm.gnmap" | sort -u > "$tmpdir/winrm_hosts.txt"
+
+        awk -F';' '{print $1}' "$tmpdir/winrm_hosts.txt" >> "$tmpdir/live_ips.txt"
+        sort -u "$tmpdir/live_ips.txt" > "$tmpdir/all_ips.txt"
+
+        while read -r ip; do
+          [ -z "$ip" ] && continue
+          winrm_line="$(awk -F';' -v ip="$ip" '$1 == ip {print; exit}' "$tmpdir/winrm_hosts.txt")"
+          if [ -n "$winrm_line" ]; then
+            echo "$winrm_line"
+          else
+            echo "$ip;{{ winrm_default_port }};http;"
+          fi
+        done < "$tmpdir/all_ips.txt"
+      args:
+        executable: /bin/bash
+      register: scan_result
+      changed_when: false
+
+    - name: Gefundene IPC-Teilnehmer und WinRM-Informationen speichern
+      ansible.builtin.set_fact:
+        discovered_ipc_patches_hosts: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_ips: >-
+          {{ scan_result.stdout_lines
+             | map('regex_replace', ';.*$', '')
+             | unique
+             | list }}
+
+    - name: Gefundene IPC-Teilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_ipc_patches_hosts
+
+    - name: Hinweis ausgeben, wenn keine Teilnehmer gefunden wurden
+      ansible.builtin.debug:
+        msg: >-
+          Es wurden keine Teilnehmer im Zielnetz {{ target_network }} gefunden.
+          Der Report enthaelt dann nur die Kopfzeile. Pruefe Zielnetz,
+          VLAN, Firewall und nmap-Rechte.
+      when: discovered_ipc_patches_hosts | length == 0
+
+    - name: Gefundene Teilnehmer temporaer in das Inventory aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ item.split(';')[0] }}"
+        groups: ipc_patches_gpo_wsusclient_targets
+        ansible_host: "{{ item.split(';')[0] }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ item.split(';')[1] | int }}"
+        ansible_winrm_scheme: "{{ item.split(';')[2] }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(180) }}"
+        discovered_winrm_open_ports: "{{ item.split(';')[3] | default('') }}"
+      loop: "{{ discovered_ipc_patches_hosts }}"
+      no_log: true
+
+    - name: Dynamische 0080-Zielgruppe anzeigen
+      ansible.builtin.debug:
+        msg: "{{ groups['ipc_patches_gpo_wsusclient_targets'] | default([]) }}"
+
+
+- name: IPC Patches, GPO und WSUS-Client auf Windows-Zielen pruefen
+  hosts: ipc_patches_gpo_wsusclient_targets
+  gather_facts: false
+  ignore_unreachable: true
+
+  vars:
+    remote_validation_dir: "{{ ipc_patches_gpo_wsusclient_validation_remote_dir }}"
+    remote_validation_script: "{{ ipc_patches_gpo_wsusclient_validation_remote_dir }}\\ipc_patches_gpo_wsusclient_validation.ps1"
+    remote_validation_config: "{{ ipc_patches_gpo_wsusclient_validation_remote_dir }}\\ipc_patches_gpo_wsusclient_validation_config.json"
+    remote_validation_json: "{{ ipc_patches_gpo_wsusclient_validation_remote_dir }}\\ipc_patches_gpo_wsusclient_validation.json"
+
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: win_ping_result
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: IPC-Patches-GPO-WSUSClient-Pruefung ausfuehren
+      block:
+        - name: Temporaeres Verzeichnis fuer 0080-Pruefung erstellen
+          ansible.windows.win_file:
+            path: "{{ remote_validation_dir }}"
+            state: directory
+
+        - name: 0080-PowerShell-Pruefskript auf Zielsystem kopieren
+          ansible.windows.win_copy:
+            src: "{{ (playbook_dir | dirname) ~ '/PowershellBatch/ipc_patches_gpo_wsusclient_validation.ps1' }}"
+            dest: "{{ remote_validation_script }}"
+            force: true
+          register: ipc_patches_script_copy
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Hostbezogene 0080-Konfiguration auf Zielsystem kopieren
+          ansible.windows.win_copy:
+            dest: "{{ remote_validation_config }}"
+            content: |
+              {
+                "TargetIp": {{ (ansible_host | default(inventory_hostname)) | to_json }},
+                "WinRmPort": {{ (ansible_port | default('')) | to_json }},
+                "WinRmScheme": {{ (ansible_winrm_scheme | default('')) | to_json }},
+                "WinRmOpenPorts": {{ (discovered_winrm_open_ports | default('')) | to_json }},
+                "CertificateStoreLocation": {{ ipc_wsus_certificate_store_location | to_json }},
+                "CertificateStoreName": {{ ipc_wsus_certificate_store_name | to_json }},
+                "CertificateSubjectRegex": {{ ipc_wsus_certificate_subject_regex | to_json }},
+                "CertificateThumbprint": {{ ipc_wsus_certificate_thumbprint | to_json }},
+                "CertificateMinValidUntil": {{ ipc_wsus_certificate_min_valid_until | to_json }},
+                "ExpectedHotfixes": {{ ipc_expected_hotfixes | to_json }},
+                "UpdatePolicyRegistryPath": {{ ipc_update_policy_registry_path | to_json }},
+                "UpdatePolicyValueName": {{ ipc_update_policy_value_name | to_json }},
+                "ExpectedUpdatePolicyValue": {{ ipc_expected_update_policy_value | int | to_json }},
+                "GroupPolicyOperationalLogName": {{ ipc_group_policy_operational_log_name | to_json }}
+              }
+            force: true
+          register: ipc_patches_config_copy
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob 0080-Skript und Konfiguration vorhanden sind
+          ansible.windows.win_stat:
+            path: "{{ item }}"
+          loop:
+            - "{{ remote_validation_script }}"
+            - "{{ remote_validation_config }}"
+          register: ipc_patches_remote_files
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Vorhandensein der temporaeren 0080-Dateien auswerten
+          ansible.builtin.set_fact:
+            ipc_patches_script_exists: >-
+              {{ ipc_patches_remote_files.results[0].stat.exists | default(false) }}
+            ipc_patches_config_exists: >-
+              {{ ipc_patches_remote_files.results[1].stat.exists | default(false) }}
+          when:
+            - ipc_patches_remote_files is defined
+            - ipc_patches_remote_files.results is defined
+            - ipc_patches_remote_files.results | length >= 2
+
+        - name: Diagnose nach dem Kopieren anzeigen
+          ansible.builtin.debug:
+            msg:
+              - "Host: {{ inventory_hostname }}"
+              - "Skript vorhanden: {{ ipc_patches_script_exists | default(false) }}"
+              - "Konfiguration vorhanden: {{ ipc_patches_config_exists | default(false) }}"
+              - "Skript-Kopierfehler: {{ ipc_patches_script_copy.msg | default('') }}"
+              - "Konfigurations-Kopierfehler: {{ ipc_patches_config_copy.msg | default('') }}"
+
+        - name: 0080-PowerShell-Pruefskript ausfuehren
+          ansible.windows.win_shell: |
+            $ScriptPath = {{ remote_validation_script | to_json }}
+            $ConfigPath = {{ remote_validation_config | to_json }}
+            $ResultPath = {{ remote_validation_json | to_json }}
+
+            if (-not (Test-Path -LiteralPath $ScriptPath)) {
+                Write-Error "Pruefskript nicht gefunden: $ScriptPath"
+                exit 10
+            }
+            if (-not (Test-Path -LiteralPath $ConfigPath)) {
+                Write-Error "Konfigurationsdatei nicht gefunden: $ConfigPath"
+                exit 11
+            }
+
+            powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+              -File $ScriptPath `
+              -ConfigPath $ConfigPath `
+              -ResultJsonPath $ResultPath
+            exit $LASTEXITCODE
+          register: ipc_patches_raw
+          when:
+            - ipc_patches_script_exists | default(false)
+            - ipc_patches_config_exists | default(false)
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob 0080-Ergebnis-JSON erzeugt wurde
+          ansible.windows.win_stat:
+            path: "{{ remote_validation_json }}"
+          register: ipc_patches_json_file
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: 0080-Ergebnis-JSON vom Zielsystem zurueckholen
+          ansible.builtin.slurp:
+            src: "{{ remote_validation_json }}"
+          register: ipc_patches_json_slurp
+          when:
+            - ipc_patches_json_file is defined
+            - ipc_patches_json_file.stat.exists | default(false)
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: 0080-Ergebnis-JSON dekodieren
+          ansible.builtin.set_fact:
+            ipc_patches_json_text: >-
+              {{
+                ipc_patches_json_slurp.content
+                | b64decode
+                | regex_replace('^\ufeff', '')
+                | trim
+              }}
+          when:
+            - ipc_patches_json_slurp is defined
+            - ipc_patches_json_slurp.content is defined
+            - ipc_patches_json_slurp.content | length > 0
+
+        - name: 0080-Pruefergebnis als Host-Fact speichern
+          ansible.builtin.set_fact:
+            ipc_patches_gpo_wsusclient_validation: "{{ ipc_patches_json_text | from_json }}"
+          when:
+            - ipc_patches_json_text is defined
+            - ipc_patches_json_text | length > 0
+          failed_when: false
+          ignore_errors: true
+
+      always:
+        - name: Temporaeres 0080-Verzeichnis entfernen
+          ansible.windows.win_file:
+            path: "{{ remote_validation_dir }}"
+            state: absent
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+      when:
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+
+    - name: Diagnose anzeigen, wenn kein 0080-Ergebnis gespeichert wurde
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "WinRM-Ping: {{ win_ping_result.ping | default('KEIN_PONG') }}"
+          - "WinRM-Unreachable: {{ win_ping_result.unreachable | default(false) }}"
+          - "WinRM-Meldung: {{ win_ping_result.msg | default('') }}"
+          - "PowerShell-RC: {{ ipc_patches_raw.rc | default('NICHT_AUSGEFUEHRT') }}"
+          - "PowerShell-STDERR: {{ ipc_patches_raw.stderr | default('') }}"
+          - "Ergebnisdatei vorhanden: {{ ipc_patches_json_file.stat.exists | default(false) }}"
+      when:
+        - ipc_patches_gpo_wsusclient_validation is not defined
+
+
+- name: IPC Patches, GPO und WSUS-Client - CSV-Report lokal erzeugen
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Zeitstempel fuer Report sicherstellen
+      ansible.builtin.set_fact:
+        report_timestamp: >-
+          {{ hostvars['localhost']['report_timestamp']
+             | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}
+        report_timestamp_iso: >-
+          {{ hostvars['localhost']['report_timestamp_iso']
+             | default(lookup('pipe', 'date -Iseconds')) }}
+
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: 0080-JSON-Report erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/ipc_patches_gpo_wsusclient_validation_{{ report_timestamp }}.json"
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups['ipc_patches_gpo_wsusclient_targets'] | default([]) %}
+          {% set hv = hostvars[h] if h in hostvars else {} %}
+          {% set fallback = {
+            'scan_timestamp': report_timestamp_iso,
+            'target_timestamp': '',
+            'ip': h,
+            'ansible_reachable': false,
+            'computername': '',
+            'fqdn': '',
+            'domain': '',
+            'workgroup': '',
+            'part_of_domain': '',
+            'os_caption': '',
+            'os_version': '',
+            'winrm_port': hv.ansible_port | default(''),
+            'winrm_scheme': hv.ansible_winrm_scheme | default(''),
+            'winrm_open_ports': hv.discovered_winrm_open_ports | default(''),
+            'checks': {},
+            'error': hv.win_ping_result.msg | default('Host nicht per WinRM erreichbar oder Zugriff verweigert')
+          } %}
+          {% if h in hostvars and hostvars[h].ipc_patches_gpo_wsusclient_validation is defined %}
+          {{ (hostvars[h].ipc_patches_gpo_wsusclient_validation | combine({'scan_timestamp': report_timestamp_iso})) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% else %}
+          {{ fallback | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% endif %}
+          {% endfor %}
+          ]
+
+    - name: 0080-CSV-Report aus JSON erzeugen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import json
+        from pathlib import Path
+
+        result_dir = Path("{{ result_dir }}")
+        json_path = result_dir / "ipc_patches_gpo_wsusclient_validation_{{ report_timestamp }}.json"
+        csv_path = result_dir / "ipc_patches_gpo_wsusclient_validation_{{ report_timestamp }}.csv"
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        check_columns = [
+            ("ID0070_WSUS_Zertifikat", "ID0070_WSUS_Zertifikat_importiert"),
+            ("ID0072_KB5058385", "ID0072_KB5058385_installiert"),
+            ("ID0075_KB5055688", "ID0075_KB5055688_installiert"),
+            ("ID0171_SSL_Zertifikat", "ID0171_SSL_Zertifikat_importiert"),
+            ("ID0173_gpupdate_force", "ID0173_gpupdate_force"),
+            ("ID0176_Updatebenachrichtigungen_Nichtadministratoren", "ID0176_Updatebenachrichtigungen_Nichtadministratoren_deaktiviert"),
+            ("ID0178_gpupdate_force", "ID0178_gpupdate_force"),
+        ]
+
+        base_fields = [
+            "Zeitstempel_Pruefung",
+            "Zeitstempel_Zielsystem",
+            "IP",
+            "Ansible_erreichbar",
+            "Computername",
+            "FQDN",
+            "Domaene_Workgroup",
+            "Domaenenmitglied",
+            "Betriebssystem",
+            "OS_Version",
+            "WinRM_Port",
+            "WinRM_Schema",
+            "WinRM_Offene_Ports",
+            "Fehler",
+        ]
+
+        fieldnames = list(base_fields)
+        for _, column_name in check_columns:
+            fieldnames.append(column_name)
+            fieldnames.append(column_name + "_Details")
+
+        def check_status(checks, key):
+            if not checks:
+                return ""
+            value = checks.get(key)
+            if not isinstance(value, dict):
+                return "NICHT_PRUEFBAR"
+            return value.get("status", "")
+
+        def check_details(checks, key):
+            if not checks:
+                return ""
+            value = checks.get(key)
+            if not isinstance(value, dict):
+                return ""
+            details = value.get("details", "")
+            evidence = value.get("evidence")
+            if evidence not in (None, ""):
+                try:
+                    evidence_text = json.dumps(
+                        evidence,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                except TypeError:
+                    evidence_text = str(evidence)
+                return f"{details} | Evidence={evidence_text}"
+            return details
+
+        rows = []
+        for item in data:
+            row = {
+                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
+                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
+                "IP": item.get("ip", ""),
+                "Ansible_erreichbar": item.get("ansible_reachable", False),
+                "Computername": item.get("computername", ""),
+                "FQDN": item.get("fqdn", ""),
+                "Domaene_Workgroup": item.get("domain") or item.get("workgroup") or "",
+                "Domaenenmitglied": item.get("part_of_domain", ""),
+                "Betriebssystem": item.get("os_caption", ""),
+                "OS_Version": item.get("os_version", ""),
+                "WinRM_Port": item.get("winrm_port", ""),
+                "WinRM_Schema": item.get("winrm_scheme", ""),
+                "WinRM_Offene_Ports": item.get("winrm_open_ports", ""),
+                "Fehler": item.get("error", ""),
+            }
+            checks = item.get("checks") or {}
+            for key, column_name in check_columns:
+                row[column_name] = check_status(checks, key)
+                row[column_name + "_Details"] = check_details(checks, key)
+            rows.append(row)
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as file_handle:
+            writer = csv.DictWriter(
+                file_handle,
+                fieldnames=fieldnames,
+                delimiter=";",
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Pfade der erzeugten 0080-Reports anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ result_dir }}/ipc_patches_gpo_wsusclient_validation_{{ report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/ipc_patches_gpo_wsusclient_validation_{{ report_timestamp }}.csv"
