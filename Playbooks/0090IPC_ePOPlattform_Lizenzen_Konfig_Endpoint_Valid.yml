@@ -1,0 +1,690 @@
+---
+- name: IPC ePO-Plattform, Lizenzen, Konfiguration und Endpoint - Teilnehmer erkennen
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  # Ausfuehrungsreihenfolge:
+  # 0010 -> 0020 -> 0030 -> 0040 -> 0070 -> 0080 -> 0090
+  #
+  # Dieses Playbook wiederholt bewusst NICHT:
+  # - Netzwerk-, Domaenen- und lokale Benutzerinventur aus 0010,
+  # - PCS-7-Komponentenpruefungen aus 0020,
+  # - Windows-/GPO-/WSUS-/Updatebasis aus 0030 und 0080,
+  # - Systemhardening aus 0040,
+  # - Windows-Basiskonfiguration aus 0070.
+  #
+  # Historische Neustart- und Anmeldeschritte 0191/0192 werden nicht
+  # nachgestellt. Geprueft wird der resultierende ePO-/SQL-/ENS-Sollzustand.
+  #
+  # Rollen:
+  # - ePO-Server: IDs 0193-0275
+  # - ENS-Endpunkte: IDs 0278-0280
+  # Nicht zutreffende IDs erhalten NICHT_ERFORDERLICH.
+
+  tasks:
+    - name: Pruefen, ob gemeinsame Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - nmap_binary is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - winrm_default_port is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - nmap_binary | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Es fehlen gemeinsame Semaphore-Variablen: target_network,
+          nmap_binary, win_user, win_password, winrm_transport,
+          winrm_default_port und result_dir.
+
+    - name: Pruefen, ob 0090-spezifische Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - ipc_epo_validation_remote_dir is defined
+          - ipc_epo_server_host_patterns is defined
+          - ipc_ens_endpoint_host_patterns is defined
+          - ipc_epo_sql_instance_by_host is defined
+          - ipc_epo_expected_sql_tcp_port is defined
+          - ipc_epo_expected_sql_edition_regex is defined
+          - ipc_epo_expected_sql_major_version is defined
+          - ipc_epo_expected_ntfs_8dot3_value is defined
+          - ipc_epo_sql_native_client_program_regex is defined
+          - ipc_epo_install_directories is defined
+          - ipc_epo_service_name_regex is defined
+          - ipc_epo_required_listening_ports is defined
+          - ipc_epo_product_name_regex is defined
+          - ipc_epo_expected_product_version_regex is defined
+          - ipc_epo_expected_final_update_regex is defined
+          - ipc_epo_ssms_program_regex is defined
+          - ipc_epo_ssms_min_version is defined
+          - ipc_epo_api_base_url is defined
+          - ipc_epo_api_username is defined
+          - ipc_epo_api_password is defined
+          - ipc_epo_api_validate_certificate is defined
+          - ipc_epo_api_timeout_seconds is defined
+          - ipc_epo_managed_system_names is defined
+          - ipc_epo_api_checks is defined
+          - ipc_ens_platform_program_regex is defined
+          - ipc_ens_platform_version_regex is defined
+          - ipc_ens_threat_prevention_program_regex is defined
+          - ipc_ens_threat_prevention_version_regex is defined
+          - ipc_ens_service_regex is defined
+          - ipc_ens_content_registry_paths is defined
+          - ipc_ens_content_paths is defined
+          - ipc_ens_content_max_age_days is defined
+          - ipc_epo_validation_remote_dir | string | length > 0
+          - ipc_epo_server_host_patterns | length > 0
+          - ipc_ens_endpoint_host_patterns | length > 0
+          - ipc_epo_api_base_url | string | length > 0
+          - ipc_epo_api_username | string | length > 0
+          - ipc_epo_api_password | string | length > 0
+          - ipc_epo_api_checks | length > 0
+          - ipc_ens_content_max_age_days | int >= 0
+        fail_msg: >-
+          Es fehlen 0090-spezifische Semaphore-Variablen. Uebernimm die
+          Eintraege aus
+          0090IPC_ePOPlattform_Lizenzen_Konfig_Endpoint_Semaphore_Variablen.json
+          in deine Semaphore-Umgebung. API-Zugangsdaten muessen als Secret
+          hinterlegt werden.
+
+    - name: Zeitstempel fuer Report setzen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+      ansible.builtin.command: "{{ nmap_binary }} --version"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap fehlt
+      ansible.builtin.fail:
+        msg: >-
+          nmap ist auf dem Ansible-Controller unter {{ nmap_binary }}
+          nicht ausfuehrbar. Installation z. B.: sudo apt install nmap
+      when: nmap_check.rc != 0
+
+    - name: Zielnetz nach Teilnehmern und offenen WinRM-Ports scannen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "$tmpdir"' EXIT
+
+        {{ nmap_binary }} -n -sn {{ target_network }} -oG "$tmpdir/ping.gnmap" >/dev/null
+        awk '/Status: Up/{print $2}' "$tmpdir/ping.gnmap" | sort -u > "$tmpdir/live_ips.txt"
+
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG "$tmpdir/winrm.gnmap" >/dev/null
+        awk '
+          /Ports:/ {
+            host=$2
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
+
+            if (has_https) {
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
+            } else if (has_http) {
+              print host ";5985;http;5985"
+            }
+          }
+        ' "$tmpdir/winrm.gnmap" | sort -u > "$tmpdir/winrm_hosts.txt"
+
+        awk -F';' '{print $1}' "$tmpdir/winrm_hosts.txt" >> "$tmpdir/live_ips.txt"
+        sort -u "$tmpdir/live_ips.txt" > "$tmpdir/all_ips.txt"
+
+        while read -r ip; do
+          [ -z "$ip" ] && continue
+          winrm_line="$(awk -F';' -v ip="$ip" '$1 == ip {print; exit}' "$tmpdir/winrm_hosts.txt")"
+          if [ -n "$winrm_line" ]; then
+            echo "$winrm_line"
+          else
+            echo "$ip;{{ winrm_default_port }};http;"
+          fi
+        done < "$tmpdir/all_ips.txt"
+      args:
+        executable: /bin/bash
+      register: scan_result
+      changed_when: false
+
+    - name: Gefundene IPC-Teilnehmer und WinRM-Informationen speichern
+      ansible.builtin.set_fact:
+        discovered_ipc_epo_hosts: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_ips: >-
+          {{ scan_result.stdout_lines
+             | map('regex_replace', ';.*$', '')
+             | unique
+             | list }}
+
+    - name: Gefundene IPC-Teilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_ipc_epo_hosts
+
+    - name: Hinweis ausgeben, wenn keine Teilnehmer gefunden wurden
+      ansible.builtin.debug:
+        msg: >-
+          Es wurden keine Teilnehmer im Zielnetz {{ target_network }} gefunden.
+          Der Report enthaelt dann nur die Kopfzeile. Pruefe Zielnetz,
+          VLAN, Firewall und nmap-Rechte.
+      when: discovered_ipc_epo_hosts | length == 0
+
+    - name: Gefundene Teilnehmer temporaer in das Inventory aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ item.split(';')[0] }}"
+        groups: ipc_epo_platform_targets
+        ansible_host: "{{ item.split(';')[0] }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ item.split(';')[1] | int }}"
+        ansible_winrm_scheme: "{{ item.split(';')[2] }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(300) }}"
+        discovered_winrm_open_ports: "{{ item.split(';')[3] | default('') }}"
+      loop: "{{ discovered_ipc_epo_hosts }}"
+      no_log: true
+
+    - name: Dynamische 0090-Zielgruppe anzeigen
+      ansible.builtin.debug:
+        msg: "{{ groups['ipc_epo_platform_targets'] | default([]) }}"
+
+
+- name: IPC ePO-Plattform, Lizenzen, Konfiguration und Endpoint pruefen
+  hosts: ipc_epo_platform_targets
+  gather_facts: false
+  ignore_unreachable: true
+
+  vars:
+    remote_validation_dir: "{{ ipc_epo_validation_remote_dir }}"
+    remote_validation_script: "{{ ipc_epo_validation_remote_dir }}\\ipc_epo_platform_validation.ps1"
+    remote_validation_config: "{{ ipc_epo_validation_remote_dir }}\\ipc_epo_platform_validation_config.json"
+    remote_validation_json: "{{ ipc_epo_validation_remote_dir }}\\ipc_epo_platform_validation.json"
+
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: win_ping_result
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Computername und ePO-Serverrolle vorab bestimmen
+      ansible.windows.win_shell: |
+        $Patterns = ConvertFrom-Json @'
+        {{ ipc_epo_server_host_patterns | to_json }}
+        '@
+        $Values = @($env:COMPUTERNAME, {{ (ansible_host | default(inventory_hostname)) | to_json }})
+        $IsEpoServer = $false
+        foreach ($Pattern in @($Patterns)) {
+          foreach ($Value in $Values) {
+            try {
+              if ([string]$Value -match [string]$Pattern) {
+                $IsEpoServer = $true
+              }
+            } catch {
+              if ([string]$Value -ieq [string]$Pattern) {
+                $IsEpoServer = $true
+              }
+            }
+          }
+        }
+        [ordered]@{
+          computername = $env:COMPUTERNAME
+          epo_server = $IsEpoServer
+        } | ConvertTo-Json -Compress
+      register: ipc_epo_role_raw
+      when:
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Vorab erkannte ePO-Serverrolle speichern
+      ansible.builtin.set_fact:
+        ipc_epo_is_epo_server: >-
+          {{
+            (
+              ipc_epo_role_raw.stdout
+              | default('{}')
+              | trim
+              | from_json
+            ).epo_server
+            | default(false)
+          }}
+        ipc_epo_detected_computername: >-
+          {{
+            (
+              ipc_epo_role_raw.stdout
+              | default('{}')
+              | trim
+              | from_json
+            ).computername
+            | default('')
+          }}
+      when:
+        - ipc_epo_role_raw is defined
+        - ipc_epo_role_raw.stdout | default('') | trim | length > 0
+      failed_when: false
+
+    - name: 0090-ePO-Pruefung ausfuehren
+      block:
+        - name: Temporaeres Verzeichnis fuer 0090-Pruefung erstellen
+          ansible.windows.win_file:
+            path: "{{ remote_validation_dir }}"
+            state: directory
+
+        - name: 0090-PowerShell-Pruefskript auf Zielsystem kopieren
+          ansible.windows.win_copy:
+            src: "{{ (playbook_dir | dirname) ~ '/PowershellBatch/ipc_epo_platform_validation.ps1' }}"
+            dest: "{{ remote_validation_script }}"
+            force: true
+          register: ipc_epo_script_copy
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Hostbezogene 0090-Konfiguration auf Zielsystem kopieren
+          ansible.windows.win_copy:
+            dest: "{{ remote_validation_config }}"
+            content: |
+              {
+                "TargetIp": {{ (ansible_host | default(inventory_hostname)) | to_json }},
+                "WinRmPort": {{ (ansible_port | default('')) | to_json }},
+                "WinRmScheme": {{ (ansible_winrm_scheme | default('')) | to_json }},
+                "WinRmOpenPorts": {{ (discovered_winrm_open_ports | default('')) | to_json }},
+
+                "EpoServerHostPatterns": {{ ipc_epo_server_host_patterns | to_json }},
+                "EnsEndpointHostPatterns": {{ ipc_ens_endpoint_host_patterns | to_json }},
+
+                "SqlInstanceByHost": {{ ipc_epo_sql_instance_by_host | to_json }},
+                "ExpectedSqlTcpPort": {{ ipc_epo_expected_sql_tcp_port | int | to_json }},
+                "ExpectedSqlEditionRegex": {{ ipc_epo_expected_sql_edition_regex | to_json }},
+                "ExpectedSqlMajorVersion": {{ ipc_epo_expected_sql_major_version | int | to_json }},
+                "ExpectedNtfs8dot3Value": {{ ipc_epo_expected_ntfs_8dot3_value | int | to_json }},
+                "SqlNativeClientProgramRegex": {{ ipc_epo_sql_native_client_program_regex | to_json }},
+
+                "EpoInstallDirectories": {{ ipc_epo_install_directories | to_json }},
+                "EpoServiceNameRegex": {{ ipc_epo_service_name_regex | to_json }},
+                "EpoRequiredListeningPorts": {{ ipc_epo_required_listening_ports | to_json }},
+                "EpoProductNameRegex": {{ ipc_epo_product_name_regex | to_json }},
+                "ExpectedEpoProductVersionRegex": {{ ipc_epo_expected_product_version_regex | to_json }},
+                "ExpectedFinalUpdateRegex": {{ ipc_epo_expected_final_update_regex | to_json }},
+                "SsmsProgramRegex": {{ ipc_epo_ssms_program_regex | to_json }},
+                "SsmsMinVersion": {{ ipc_epo_ssms_min_version | to_json }},
+
+                "EpoApiBaseUrl": {{ ipc_epo_api_base_url | to_json }},
+                "EpoApiUsername": {{ (ipc_epo_api_username if (ipc_epo_is_epo_server | default(false)) else '') | to_json }},
+                "EpoApiPassword": {{ (ipc_epo_api_password if (ipc_epo_is_epo_server | default(false)) else '') | to_json }},
+                "EpoApiValidateCertificate": {{ ipc_epo_api_validate_certificate | bool | to_json }},
+                "EpoApiTimeoutSeconds": {{ ipc_epo_api_timeout_seconds | int | to_json }},
+                "EpoManagedSystemNames": {{ ipc_epo_managed_system_names | to_json }},
+                "EpoApiChecks": {{ ipc_epo_api_checks | to_json }},
+
+                "EnsPlatformProgramRegex": {{ ipc_ens_platform_program_regex | to_json }},
+                "EnsPlatformVersionRegex": {{ ipc_ens_platform_version_regex | to_json }},
+                "EnsThreatPreventionProgramRegex": {{ ipc_ens_threat_prevention_program_regex | to_json }},
+                "EnsThreatPreventionVersionRegex": {{ ipc_ens_threat_prevention_version_regex | to_json }},
+                "EnsServiceRegex": {{ ipc_ens_service_regex | to_json }},
+                "EnsContentRegistryPaths": {{ ipc_ens_content_registry_paths | to_json }},
+                "EnsContentPaths": {{ ipc_ens_content_paths | to_json }},
+                "EnsContentMaxAgeDays": {{ ipc_ens_content_max_age_days | int | to_json }}
+              }
+            force: true
+          no_log: true
+          register: ipc_epo_config_copy
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob 0090-Skript auf Zielsystem vorhanden ist
+          ansible.windows.win_stat:
+            path: "{{ remote_validation_script }}"
+          register: ipc_epo_script_stat
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob 0090-Konfiguration auf Zielsystem vorhanden ist
+          ansible.windows.win_stat:
+            path: "{{ remote_validation_config }}"
+          register: ipc_epo_config_stat
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Vorhandensein der 0090-Eingabedateien speichern
+          ansible.builtin.set_fact:
+            ipc_epo_script_exists: "{{ ipc_epo_script_stat.stat.exists | default(false) }}"
+            ipc_epo_config_exists: "{{ ipc_epo_config_stat.stat.exists | default(false) }}"
+
+        - name: 0090-PowerShell-Pruefskript ausfuehren
+          ansible.windows.win_shell: |
+            $ScriptPath = {{ remote_validation_script | to_json }}
+            $ConfigPath = {{ remote_validation_config | to_json }}
+            $ResultPath = {{ remote_validation_json | to_json }}
+
+            & powershell.exe `
+              -NoProfile `
+              -NonInteractive `
+              -ExecutionPolicy Bypass `
+              -File $ScriptPath `
+              -ConfigPath $ConfigPath `
+              -ResultJsonPath $ResultPath
+            exit $LASTEXITCODE
+          register: ipc_epo_raw
+          when:
+            - ipc_epo_script_exists | default(false)
+            - ipc_epo_config_exists | default(false)
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: Pruefen, ob 0090-Ergebnis-JSON erzeugt wurde
+          ansible.windows.win_stat:
+            path: "{{ remote_validation_json }}"
+          register: ipc_epo_json_file
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: 0090-Ergebnis-JSON vom Zielsystem zurueckholen
+          ansible.builtin.slurp:
+            src: "{{ remote_validation_json }}"
+          register: ipc_epo_json_slurp
+          when:
+            - ipc_epo_json_file is defined
+            - ipc_epo_json_file.stat.exists | default(false)
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+        - name: 0090-Ergebnis-JSON dekodieren
+          ansible.builtin.set_fact:
+            ipc_epo_json_text: >-
+              {{
+                ipc_epo_json_slurp.content
+                | b64decode
+                | regex_replace('^\ufeff', '')
+                | trim
+              }}
+          when:
+            - ipc_epo_json_slurp is defined
+            - ipc_epo_json_slurp.content is defined
+            - ipc_epo_json_slurp.content | length > 0
+
+        - name: 0090-Pruefergebnis als Host-Fact speichern
+          ansible.builtin.set_fact:
+            ipc_epo_platform_validation: "{{ ipc_epo_json_text | from_json }}"
+          when:
+            - ipc_epo_json_text is defined
+            - ipc_epo_json_text | length > 0
+          failed_when: false
+          ignore_errors: true
+
+      always:
+        - name: Temporaeres 0090-Verzeichnis entfernen
+          ansible.windows.win_file:
+            path: "{{ remote_validation_dir }}"
+            state: absent
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+          ignore_unreachable: true
+
+      when:
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+
+    - name: Diagnose anzeigen, wenn kein 0090-Ergebnis gespeichert wurde
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "WinRM-Ping: {{ win_ping_result.ping | default('KEIN_PONG') }}"
+          - "WinRM-Unreachable: {{ win_ping_result.unreachable | default(false) }}"
+          - "WinRM-Meldung: {{ win_ping_result.msg | default('') }}"
+          - "PowerShell-RC: {{ ipc_epo_raw.rc | default('NICHT_AUSGEFUEHRT') }}"
+          - "PowerShell-STDERR: {{ ipc_epo_raw.stderr | default('') }}"
+          - "Ergebnisdatei vorhanden: {{ ipc_epo_json_file.stat.exists | default(false) }}"
+      when:
+        - ipc_epo_platform_validation is not defined
+
+
+- name: IPC ePO-Plattform, Lizenzen, Konfiguration und Endpoint - CSV-Report lokal erzeugen
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Zeitstempel fuer Report sicherstellen
+      ansible.builtin.set_fact:
+        report_timestamp: >-
+          {{ hostvars['localhost']['report_timestamp']
+             | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}
+        report_timestamp_iso: >-
+          {{ hostvars['localhost']['report_timestamp_iso']
+             | default(lookup('pipe', 'date -Iseconds')) }}
+
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: 0090-JSON-Report erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/ipc_epo_platform_validation_{{ report_timestamp }}.json"
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups['ipc_epo_platform_targets'] | default([]) %}
+          {% set hv = hostvars[h] if h in hostvars else {} %}
+          {% set fallback = {
+            'scan_timestamp': report_timestamp_iso,
+            'target_timestamp': '',
+            'ip': h,
+            'ansible_reachable': false,
+            'computername': '',
+            'fqdn': '',
+            'domain': '',
+            'workgroup': '',
+            'part_of_domain': '',
+            'os_caption': '',
+            'os_version': '',
+            'winrm_port': hv.ansible_port | default(''),
+            'winrm_scheme': hv.ansible_winrm_scheme | default(''),
+            'winrm_open_ports': hv.discovered_winrm_open_ports | default(''),
+            'roles': {},
+            'checks': {},
+            'error': hv.win_ping_result.msg | default('Host nicht per WinRM erreichbar oder Zugriff verweigert')
+          } %}
+          {% if h in hostvars and hostvars[h].ipc_epo_platform_validation is defined %}
+          {{ (hostvars[h].ipc_epo_platform_validation | combine({'scan_timestamp': report_timestamp_iso})) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% else %}
+          {{ fallback | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% endif %}
+          {% endfor %}
+          ]
+
+    - name: 0090-CSV-Report aus JSON erzeugen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import json
+        from pathlib import Path
+
+        result_dir = Path("{{ result_dir }}")
+        json_path = result_dir / "ipc_epo_platform_validation_{{ report_timestamp }}.json"
+        csv_path = result_dir / "ipc_epo_platform_validation_{{ report_timestamp }}.csv"
+
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        check_columns = [
+            ("ID0191_Rechner_neu_starten", "ID0191_Rechner_neu_starten"),
+            ("ID0192_Anmeldung_SecurityAdmin", "ID0192_Anmeldung_SecurityAdmin"),
+            ("ID0193_SQLServer_2022_Express", "ID0193_SQLServer_2022_Express"),
+            ("ID0194_SQLServer_TCP_1433", "ID0194_SQLServer_TCP_1433"),
+            ("ID0195_ePO_Voraussetzungen", "ID0195_ePO_Installationsvoraussetzungen"),
+            ("ID0196_ePO_Installation", "ID0196_ePO_Installation"),
+            ("ID0197_SSMS_20_2_1", "ID0197_SQL_Server_Management_Studio"),
+            ("ID0201_ePO_SP1_UP3", "ID0201_ePO_SP1_UP3"),
+            ("ID0202_ePO_SP1_UP4_Vorbereitung", "ID0202_ePO_SP1_UP4_Vorbereitung"),
+            ("ID0203_ePO_SP1_UP4", "ID0203_ePO_SP1_UP4"),
+            ("ID0204_ePO_SP1_UP5", "ID0204_ePO_SP1_UP5"),
+            ("ID0205_ServerTasks_deaktiviert", "ID0205_ePO_ServerTasks_deaktiviert"),
+            ("ID0206_MasterRepository_bereinigt", "ID0206_ePO_MasterRepository_bereinigt"),
+            ("ID0210_Trellix_Agent_Extension", "ID0210_Trellix_Agent_Extension"),
+            ("ID0212_ePO_Agent_Key_Updater", "ID0212_ePO_Agent_Key_Updater"),
+            ("ID0214_MsgBus_Cert_Updater", "ID0214_MsgBus_Cert_Updater"),
+            ("ID0216_Trellix_Agent_Windows", "ID0216_Trellix_Agent_Windows"),
+            ("ID0218_Application_Control", "ID0218_Trellix_Application_Control"),
+            ("ID0219_ePO_Management_Extension", "ID0219_ePO_Management_Extension"),
+            ("ID0221_Endpoint_Upgrade_Assistant", "ID0221_Endpoint_Upgrade_Assistant"),
+            ("ID0223_MER_ePO_Extension", "ID0223_MER_ePO_Extension"),
+            ("ID0225_MER_ePO_Paket", "ID0225_MER_ePO_Paket"),
+            ("ID0226_Solidcore_Lizenz", "ID0226_Solidcore_Lizenz"),
+            ("ID0227_GTI_Synchronisierung", "ID0227_GTI_Synchronisierung_deaktiviert"),
+            ("ID0234_SC_CLI_Passwort", "ID0234_SC_CLI_Passwort_vergeben"),
+            ("ID0237_Abfragen_importiert", "ID0237_Abfragen_importiert"),
+            ("ID0238_Berichte_importiert", "ID0238_Berichte_importiert"),
+            ("ID0241_Systemstruktur", "ID0241_Systemstruktur_und_Agents"),
+            ("ID0245_ENS_Platform_Paket", "ID0245_ENS_Platform_Paket"),
+            ("ID0247_ENS_Threat_Prevention_Paket", "ID0247_ENS_Threat_Prevention_Paket"),
+            ("ID0248_AMCore_Content_Paket", "ID0248_AMCore_Content_Paket"),
+            ("ID0249_Exploit_Prevention_Content", "ID0249_Exploit_Prevention_Content"),
+            ("ID0251_ENS_Common_Extension", "ID0251_ENS_Common_Extension"),
+            ("ID0253_ENS_Threat_Prevention_Extension", "ID0253_ENS_Threat_Prevention_Extension"),
+            ("ID0255_Tag_Katalog", "ID0255_Tag_Katalog_importiert"),
+            ("ID0258_Trellix_Agent_Richtlinien", "ID0258_Trellix_Agent_Richtlinien_importiert"),
+            ("ID0259_ENS_Common_Richtlinien", "ID0259_ENS_Common_Richtlinien_importiert"),
+            ("ID0260_ENS_TP_Richtlinien", "ID0260_ENS_TP_Richtlinien_importiert"),
+            ("ID0261_Solidcore_Richtlinien", "ID0261_Solidcore_Richtlinien_importiert"),
+            ("ID0263_Richtlinienzuweisungsregeln", "ID0263_Richtlinienzuweisungsregeln_importiert"),
+            ("ID0265_Richtlinienzuweisungen", "ID0265_Richtlinienzuweisungen_importiert"),
+            ("ID0266_ENS_CLI_Passwort", "ID0266_ENS_CLI_Passwort_vergeben"),
+            ("ID0267_ENS_Abfragen", "ID0267_ENS_Abfragen_importiert"),
+            ("ID0269_Solidcore_Regeln", "ID0269_Solidcore_Regeln_importiert"),
+            ("ID0271_Dashboards", "ID0271_Dashboards_importiert"),
+            ("ID0273_ServerTasks", "ID0273_ServerTasks_importiert"),
+            ("ID0274_AV_Download_Task", "ID0274_AV_Download_Task_angepasst"),
+            ("ID0275_ClientTask_Katalog", "ID0275_ClientTask_Katalog_importiert"),
+            ("ID0278_ENS_installiert", "ID0278_ENS_auf_Zielsystem_installiert"),
+            ("ID0279_Sicherheit_aktualisiert", "ID0279_ENS_Sicherheit_aktualisiert"),
+            ("ID0280_ENS_Version", "ID0280_ENS_Version"),
+        ]
+
+        base_fields = [
+            "Zeitstempel_Pruefung",
+            "Zeitstempel_Zielsystem",
+            "IP",
+            "Ansible_erreichbar",
+            "Computername",
+            "FQDN",
+            "Domaene_Workgroup",
+            "Domaenenmitglied",
+            "Betriebssystem",
+            "OS_Version",
+            "WinRM_Port",
+            "WinRM_Schema",
+            "WinRM_Offene_Ports",
+            "Rolle_ePO_Server",
+            "Rolle_ENS_Endpoint",
+            "Fehler",
+        ]
+
+        fieldnames = list(base_fields)
+        for _, column_name in check_columns:
+            fieldnames.append(column_name)
+            fieldnames.append(column_name + "_Details")
+
+        def check_status(checks, key):
+            if not checks:
+                return ""
+            value = checks.get(key)
+            if not isinstance(value, dict):
+                return "NICHT_PRUEFBAR"
+            return value.get("status", "")
+
+        def check_details(checks, key):
+            if not checks:
+                return ""
+            value = checks.get(key)
+            if not isinstance(value, dict):
+                return ""
+            details = value.get("details", "")
+            evidence = value.get("evidence")
+            if evidence not in (None, ""):
+                try:
+                    evidence_text = json.dumps(
+                        evidence,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                except TypeError:
+                    evidence_text = str(evidence)
+                return f"{details} | Evidence={evidence_text}"
+            return details
+
+        rows = []
+        for item in data:
+            roles = item.get("roles") or {}
+            row = {
+                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
+                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
+                "IP": item.get("ip", ""),
+                "Ansible_erreichbar": item.get("ansible_reachable", False),
+                "Computername": item.get("computername", ""),
+                "FQDN": item.get("fqdn", ""),
+                "Domaene_Workgroup": item.get("domain") or item.get("workgroup") or "",
+                "Domaenenmitglied": item.get("part_of_domain", ""),
+                "Betriebssystem": item.get("os_caption", ""),
+                "OS_Version": item.get("os_version", ""),
+                "WinRM_Port": item.get("winrm_port", ""),
+                "WinRM_Schema": item.get("winrm_scheme", ""),
+                "WinRM_Offene_Ports": item.get("winrm_open_ports", ""),
+                "Rolle_ePO_Server": roles.get("epo_server", False),
+                "Rolle_ENS_Endpoint": roles.get("ens_endpoint", False),
+                "Fehler": item.get("error", ""),
+            }
+            checks = item.get("checks") or {}
+            for key, column_name in check_columns:
+                row[column_name] = check_status(checks, key)
+                row[column_name + "_Details"] = check_details(checks, key)
+            rows.append(row)
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as file_handle:
+            writer = csv.DictWriter(
+                file_handle,
+                fieldnames=fieldnames,
+                delimiter=";",
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Pfade der erzeugten 0090-Reports anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ result_dir }}/ipc_epo_platform_validation_{{ report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/ipc_epo_platform_validation_{{ report_timestamp }}.csv"
