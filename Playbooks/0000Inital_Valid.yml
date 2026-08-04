@@ -457,5 +457,5 @@
     - name: Pfade der erzeugten Reports anzeigen
       ansible.builtin.debug:
         msg:
-          - "JSON: {{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.json"
-          - "CSV:  {{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.csv"
+          - "JSON: {{ result_dir }}/0000_network_inventory_{{ report_file_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/0000_network_inventory_{{ report_file_timestamp }}.csv"

@@ -926,7 +926,7 @@
         - pcs7_raw.stdout | trim | length > 0
 
 
-- name: JSON- und ID-basierten CSV-Report erzeugen
+- name: Getrennte VM-, IPC- und Uebersichtsreports erzeugen
   hosts: localhost
   connection: local
   gather_facts: false
@@ -952,9 +952,9 @@
         state: directory
         mode: "0750"
 
-    - name: JSON-Report erzeugen
+    - name: Temporaeren Rohdaten-JSON-Report erzeugen
       ansible.builtin.copy:
-        dest: "{{ result_dir }}/0020_pcs7_kategorisierung_{{ report_file_timestamp }}.json"
+        dest: "{{ result_dir }}/.0020_pcs7_rohdaten_{{ report_file_timestamp }}.json"
         mode: "0644"
         content: |
           [
@@ -1004,14 +1004,20 @@
       ansible.builtin.shell: |
         set -euo pipefail
         "{{ ansible_playbook_python }}" - <<'PY'
+        import copy
         import csv
         import json
         import re
         from pathlib import Path
 
-        json_path = Path("{{ result_dir }}/0020_pcs7_kategorisierung_{{ report_file_timestamp }}.json")
-        csv_path = Path("{{ result_dir }}/0020_pcs7_kategorisierung_{{ report_file_timestamp }}.csv")
-        data = json.loads(json_path.read_text(encoding="utf-8"))
+        raw_json_path = Path("{{ result_dir }}/.0020_pcs7_rohdaten_{{ report_file_timestamp }}.json")
+        vm_json_path = Path("{{ result_dir }}/0020_pcs7_vm_detail_{{ report_file_timestamp }}.json")
+        vm_csv_path = Path("{{ result_dir }}/0020_pcs7_vm_detail_{{ report_file_timestamp }}.csv")
+        ipc_json_path = Path("{{ result_dir }}/0020_pcs7_ipc_detail_{{ report_file_timestamp }}.json")
+        ipc_csv_path = Path("{{ result_dir }}/0020_pcs7_ipc_detail_{{ report_file_timestamp }}.csv")
+        overview_json_path = Path("{{ result_dir }}/0020_pcs7_uebersicht_{{ report_file_timestamp }}.json")
+        overview_csv_path = Path("{{ result_dir }}/0020_pcs7_uebersicht_{{ report_file_timestamp }}.csv")
+        data = json.loads(raw_json_path.read_text(encoding="utf-8"))
 
         def natural_key(value):
             return [int(part) if part.isdigit() else part.lower()
@@ -1121,12 +1127,114 @@
                 ),
             }
 
-        json_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
+        def is_vm_item(item):
+            platform = str(item.get("platform_detected") or "")
+            category = str(item.get("category") or "")
+            return platform == "VM" or category.startswith("VM ")
+
+        def is_ipc_item(item):
+            platform = str(item.get("platform_detected") or "")
+            category = str(item.get("category") or "")
+            return platform == "Siemens IPC" or category.startswith("IPC ")
+
+        vm_ids = [check_id for check_id in all_ids if check_id.startswith("VM-")]
+        ipc_ids = [check_id for check_id in all_ids if check_id.startswith("IPC-")]
+
+        def family_record(item, selected_ids):
+            result = copy.deepcopy(item)
+            selected_id_set = set(selected_ids)
+            family_checks = {
+                check_id: value
+                for check_id, value in (item.get("checks_by_id") or {}).items()
+                if check_id in selected_id_set
+            }
+            result["checks_by_id"] = family_checks
+            result["checks"] = [
+                check for check in (item.get("checks") or [])
+                if str(check.get("id") or "") in selected_id_set
+            ]
+            result["check_summary"] = {
+                "ok": sum(1 for value in family_checks.values() if value.get("status") == "OK"),
+                "nok": sum(1 for value in family_checks.values() if value.get("status") == "NOK"),
+                "nicht_relevant": sum(
+                    1 for value in family_checks.values()
+                    if value.get("status") == "NICHT_RELEVANT"
+                ),
+                "nicht_pruefbar": sum(
+                    1 for value in family_checks.values()
+                    if value.get("status") == "NICHT_PRUEFBAR"
+                ),
+            }
+            return result
+
+        vm_data = [family_record(item, vm_ids) for item in data if is_vm_item(item)]
+        ipc_data = [family_record(item, ipc_ids) for item in data if is_ipc_item(item)]
+
+        def overview_record(item):
+            summary = item.get("check_summary") or {}
+            scores = item.get("classification_scores") or {}
+            if is_vm_item(item):
+                detail_group = "VM"
+            elif is_ipc_item(item):
+                detail_group = "IPC"
+            else:
+                detail_group = "NUR_UEBERSICHT"
+
+            return {
+                "scan_timestamp": item.get("scan_timestamp", ""),
+                "target_timestamp": item.get("target_timestamp", ""),
+                "ip": item.get("ip", ""),
+                "ansible_reachable": item.get("ansible_reachable", False),
+                "computername": item.get("computername", ""),
+                "manufacturer": item.get("manufacturer", ""),
+                "model": item.get("model", ""),
+                "os_caption": item.get("os_caption", ""),
+                "os_version": item.get("os_version", ""),
+                "os_build": item.get("os_build", ""),
+                "domain": item.get("domain", ""),
+                "domain_role": item.get("domain_role", ""),
+                "platform_detected": item.get("platform_detected", ""),
+                "pcs7_detected": item.get("pcs7_detected", False),
+                "pcs7_role_detected": item.get("pcs7_role_detected", ""),
+                "category": item.get("category", ""),
+                "special_subtype": item.get("special_subtype", ""),
+                "classification_confidence": item.get("classification_confidence", ""),
+                "classification_note": item.get("classification_note", ""),
+                "applicable_follow_up_playbooks": item.get("applicable_follow_up_playbooks") or [],
+                "classification_scores": {
+                    "engineering": scores.get("engineering", ""),
+                    "os_server": scores.get("os_server", ""),
+                    "os_client": scores.get("os_client", ""),
+                },
+                "check_summary": {
+                    "ok": summary.get("ok", 0),
+                    "nok": summary.get("nok", 0),
+                    "nicht_relevant": summary.get("nicht_relevant", 0),
+                    "nicht_pruefbar": summary.get("nicht_pruefbar", 0),
+                },
+                "detail_report_group": detail_group,
+                "winrm_port": item.get("winrm_port", ""),
+                "winrm_scheme": item.get("winrm_scheme", ""),
+                "winrm_open_ports": item.get("winrm_open_ports", ""),
+                "error": item.get("error", ""),
+            }
+
+        overview_data = [overview_record(item) for item in data]
+
+        vm_json_path.write_text(
+            json.dumps(vm_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        ipc_json_path.write_text(
+            json.dumps(ipc_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        overview_json_path.write_text(
+            json.dumps(overview_data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
-        base_fields = [
+        detail_base_fields = [
             "Zeitstempel_Pruefung",
             "Zeitstempel_Zielsystem",
             "IP_Adresse",
@@ -1161,12 +1269,42 @@
             "Fehler",
         ]
 
-        id_fields = []
-        for check_id in all_ids:
-            id_fields.extend([f"{check_id}_Status", f"{check_id}_Istwert"])
+        overview_fields = [
+            "Zeitstempel_Pruefung",
+            "Zeitstempel_Zielsystem",
+            "IP_Adresse",
+            "Ansible_erreichbar",
+            "Computername",
+            "Hersteller",
+            "Modell",
+            "Betriebssystem",
+            "OS_Version",
+            "OS_Build",
+            "Domaene",
+            "Domaenenrolle",
+            "Plattform_erkannt",
+            "PCS7_erkannt",
+            "PCS7_Rolle_erkannt",
+            "Kategorie",
+            "Spezialtyp",
+            "Klassifikationssicherheit",
+            "Klassifikationshinweis",
+            "Detailreport_Gruppe",
+            "Weitere_Pruefplaybooks",
+            "Engineering_Score",
+            "OS_Server_Score",
+            "OS_Client_Score",
+            "Pruefungen_OK",
+            "Pruefungen_NOK",
+            "Pruefungen_NICHT_RELEVANT",
+            "Pruefungen_NICHT_PRUEFBAR",
+            "WinRM_Port",
+            "WinRM_Schema",
+            "WinRM_offene_Ports",
+            "Fehler",
+        ]
 
-        rows = []
-        for item in data:
+        def detail_row(item, selected_ids):
             scores = item.get("classification_scores") or {}
             summary = item.get("check_summary") or {}
             checks = item.get("checks_by_id") or {}
@@ -1205,25 +1343,82 @@
                 "Fehler": item.get("error", ""),
             }
 
-            for check_id in all_ids:
-                check = checks.get(check_id)
-                if check:
-                    row[f"{check_id}_Status"] = check.get("status", "")
-                    row[f"{check_id}_Istwert"] = check.get("actual", "")
-                else:
-                    row[f"{check_id}_Status"] = "NICHT_PRUEFBAR"
-                    row[f"{check_id}_Istwert"] = "Pruefdefinition fehlt"
-            rows.append(row)
+            for check_id in selected_ids:
+                check = checks.get(check_id) or {}
+                row[f"{check_id}_Status"] = check.get("status", "NICHT_PRUEFBAR")
+                row[f"{check_id}_Istwert"] = check.get("actual", "Pruefdefinition fehlt")
+            return row
 
-        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=base_fields + id_fields,
-                delimiter=";",
-                extrasaction="ignore",
-            )
-            writer.writeheader()
-            writer.writerows(rows)
+        def overview_row(item):
+            scores = item.get("classification_scores") or {}
+            summary = item.get("check_summary") or {}
+            return {
+                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
+                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
+                "IP_Adresse": item.get("ip", ""),
+                "Ansible_erreichbar": item.get("ansible_reachable", False),
+                "Computername": item.get("computername", ""),
+                "Hersteller": item.get("manufacturer", ""),
+                "Modell": item.get("model", ""),
+                "Betriebssystem": item.get("os_caption", ""),
+                "OS_Version": item.get("os_version", ""),
+                "OS_Build": item.get("os_build", ""),
+                "Domaene": item.get("domain", ""),
+                "Domaenenrolle": item.get("domain_role", ""),
+                "Plattform_erkannt": item.get("platform_detected", ""),
+                "PCS7_erkannt": item.get("pcs7_detected", False),
+                "PCS7_Rolle_erkannt": item.get("pcs7_role_detected", ""),
+                "Kategorie": item.get("category", ""),
+                "Spezialtyp": item.get("special_subtype", ""),
+                "Klassifikationssicherheit": item.get("classification_confidence", ""),
+                "Klassifikationshinweis": item.get("classification_note", ""),
+                "Detailreport_Gruppe": item.get("detail_report_group", ""),
+                "Weitere_Pruefplaybooks": " | ".join(item.get("applicable_follow_up_playbooks") or []),
+                "Engineering_Score": scores.get("engineering", ""),
+                "OS_Server_Score": scores.get("os_server", ""),
+                "OS_Client_Score": scores.get("os_client", ""),
+                "Pruefungen_OK": summary.get("ok", 0),
+                "Pruefungen_NOK": summary.get("nok", 0),
+                "Pruefungen_NICHT_RELEVANT": summary.get("nicht_relevant", 0),
+                "Pruefungen_NICHT_PRUEFBAR": summary.get("nicht_pruefbar", 0),
+                "WinRM_Port": item.get("winrm_port", ""),
+                "WinRM_Schema": item.get("winrm_scheme", ""),
+                "WinRM_offene_Ports": item.get("winrm_open_ports", ""),
+                "Fehler": item.get("error", ""),
+            }
+
+        def write_detail_csv(path, items, selected_ids):
+            id_fields = []
+            for check_id in selected_ids:
+                id_fields.extend([f"{check_id}_Status", f"{check_id}_Istwert"])
+            with path.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=detail_base_fields + id_fields,
+                    delimiter=";",
+                    extrasaction="ignore",
+                )
+                writer.writeheader()
+                for item in items:
+                    writer.writerow(detail_row(item, selected_ids))
+
+        def write_overview_csv(path, items):
+            with path.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=overview_fields,
+                    delimiter=";",
+                    extrasaction="ignore",
+                )
+                writer.writeheader()
+                for item in items:
+                    writer.writerow(overview_row(item))
+
+        write_detail_csv(vm_csv_path, vm_data, vm_ids)
+        write_detail_csv(ipc_csv_path, ipc_data, ipc_ids)
+        write_overview_csv(overview_csv_path, overview_data)
+
+        raw_json_path.unlink(missing_ok=True)
         PY
       args:
         executable: /bin/bash
@@ -1232,5 +1427,9 @@
     - name: Pfade der erzeugten Reports anzeigen
       ansible.builtin.debug:
         msg:
-          - "JSON: {{ result_dir }}/0020_pcs7_kategorisierung_{{ report_file_timestamp }}.json"
-          - "CSV:  {{ result_dir }}/0020_pcs7_kategorisierung_{{ report_file_timestamp }}.csv"
+          - "VM JSON Detail:  {{ result_dir }}/0010_pcs7_vm_detail_{{ report_file_timestamp }}.json"
+          - "VM CSV Detail:   {{ result_dir }}/0010_pcs7_vm_detail_{{ report_file_timestamp }}.csv"
+          - "IPC JSON Detail: {{ result_dir }}/0010_pcs7_ipc_detail_{{ report_file_timestamp }}.json"
+          - "IPC CSV Detail:  {{ result_dir }}/0010_pcs7_ipc_detail_{{ report_file_timestamp }}.csv"
+          - "JSON Uebersicht: {{ result_dir }}/0010_pcs7_uebersicht_{{ report_file_timestamp }}.json"
+          - "CSV Uebersicht:  {{ result_dir }}/0010_pcs7_uebersicht_{{ report_file_timestamp }}.csv"
