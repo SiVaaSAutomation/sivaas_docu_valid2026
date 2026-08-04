@@ -155,7 +155,7 @@
           - "IP-Adressen: {{ discovered_ips | join(', ') }}"
 
 
-- name: Ansible-Verbindung und adapterspezifische Kommunikationsdaten pruefen
+- name: Ansible-Verbindung sowie Betriebssystem- und Kommunikationsdaten pruefen
   hosts: discovered_windows
   gather_facts: false
   ignore_unreachable: true
@@ -198,6 +198,7 @@
         }
 
         $computerSystem = Get-CimInstance Win32_ComputerSystem
+        $operatingSystem = Get-CimInstance Win32_OperatingSystem
 
         $fqdn = $null
         try {
@@ -223,80 +224,110 @@
         $adapterResults = @()
 
         if (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue) {
+          # Alle Windows-Netzwerkadapter erfassen, auch wenn sie getrennt,
+          # deaktiviert oder noch ohne IPv4-Konfiguration sind.
           $adapterResults = @(Get-NetAdapter |
             Sort-Object ifIndex |
             ForEach-Object {
               $adapter = $_
+
               $ipv4Addresses = @(Get-NetIPAddress `
                 -InterfaceIndex $adapter.ifIndex `
                 -AddressFamily IPv4 `
                 -ErrorAction SilentlyContinue |
                 Where-Object { $_.IPAddress -notlike "169.254.*" })
 
-              # Nur Adapter mit einer konfigurierten IPv4-Adresse aufnehmen.
-              if ($ipv4Addresses.Count -gt 0) {
-                $ipInterface = Get-NetIPInterface `
-                  -InterfaceIndex $adapter.ifIndex `
-                  -AddressFamily IPv4 `
-                  -ErrorAction SilentlyContinue
+              $ipInterface = Get-NetIPInterface `
+                -InterfaceIndex $adapter.ifIndex `
+                -AddressFamily IPv4 `
+                -ErrorAction SilentlyContinue
 
-                $ipConfiguration = Get-NetIPConfiguration `
-                  -InterfaceIndex $adapter.ifIndex `
-                  -ErrorAction SilentlyContinue
+              $ipConfiguration = Get-NetIPConfiguration `
+                -InterfaceIndex $adapter.ifIndex `
+                -ErrorAction SilentlyContinue
 
-                $dnsClient = Get-DnsClient `
-                  -InterfaceIndex $adapter.ifIndex `
-                  -ErrorAction SilentlyContinue
+              $dnsClient = Get-DnsClient `
+                -InterfaceIndex $adapter.ifIndex `
+                -ErrorAction SilentlyContinue
 
-                $dnsServers = @(Get-DnsClientServerAddress `
-                  -InterfaceIndex $adapter.ifIndex `
-                  -AddressFamily IPv4 `
-                  -ErrorAction SilentlyContinue).ServerAddresses
+              $dnsServers = @(Get-DnsClientServerAddress `
+                -InterfaceIndex $adapter.ifIndex `
+                -AddressFamily IPv4 `
+                -ErrorAction SilentlyContinue).ServerAddresses
 
-                $networkProfile = Get-NetConnectionProfile `
-                  -InterfaceIndex $adapter.ifIndex `
-                  -ErrorAction SilentlyContinue
+              $networkProfile = Get-NetConnectionProfile `
+                -InterfaceIndex $adapter.ifIndex `
+                -ErrorAction SilentlyContinue
 
-                $prefixLengths = @($ipv4Addresses | ForEach-Object {
-                  [string]$_.PrefixLength
+              $adapterBindings = @(Get-NetAdapterBinding `
+                -Name $adapter.Name `
+                -ErrorAction SilentlyContinue |
+                Sort-Object DisplayName, ComponentID)
+
+              $activeBindings = @($adapterBindings |
+                Where-Object { $_.Enabled -eq $true } |
+                ForEach-Object {
+                  if ([string]::IsNullOrWhiteSpace([string]$_.DisplayName)) {
+                    [string]$_.ComponentID
+                  } else {
+                    "{0} [{1}]" -f $_.DisplayName, $_.ComponentID
+                  }
                 })
 
-                $subnetMasks = @($ipv4Addresses | ForEach-Object {
-                  Convert-PrefixLengthToSubnetMask -PrefixLength $_.PrefixLength
+              $inactiveBindings = @($adapterBindings |
+                Where-Object { $_.Enabled -ne $true } |
+                ForEach-Object {
+                  if ([string]::IsNullOrWhiteSpace([string]$_.DisplayName)) {
+                    [string]$_.ComponentID
+                  } else {
+                    "{0} [{1}]" -f $_.DisplayName, $_.ComponentID
+                  }
                 })
 
-                [ordered]@{
-                  adapter_name = [string]$adapter.Name
-                  adapter_status = [string]$adapter.Status
-                  adapter_description = [string]$adapter.InterfaceDescription
-                  mac_address = [string]$adapter.MacAddress
-                  ipv4_addresses = (@($ipv4Addresses.IPAddress) -join ", ")
-                  subnet_masks = ($subnetMasks -join ", ")
-                  prefix_lengths = ($prefixLengths -join ", ")
-                  default_gateway = (@($ipConfiguration.IPv4DefaultGateway.NextHop) -join ", ")
-                  dns_servers = (@($dnsServers) -join ", ")
-                  dns_suffix = [string]$dnsClient.ConnectionSpecificSuffix
-                  dns_registration = [string]$dnsClient.RegisterThisConnectionsAddress
-                  dhcp_enabled = [string]$ipInterface.Dhcp
-                  network_profile = (@($networkProfile.NetworkCategory) -join ", ")
-                }
+              $prefixLengths = @($ipv4Addresses | ForEach-Object {
+                [string]$_.PrefixLength
+              })
+
+              $subnetMasks = @($ipv4Addresses | ForEach-Object {
+                Convert-PrefixLengthToSubnetMask -PrefixLength $_.PrefixLength
+              })
+
+              [ordered]@{
+                adapter_name = [string]$adapter.Name
+                adapter_status = [string]$adapter.Status
+                adapter_description = [string]$adapter.InterfaceDescription
+                mac_address = [string]$adapter.MacAddress
+                ipv4_addresses = (@($ipv4Addresses.IPAddress) -join ", ")
+                subnet_masks = ($subnetMasks -join ", ")
+                prefix_lengths = ($prefixLengths -join ", ")
+                default_gateway = (@($ipConfiguration.IPv4DefaultGateway.NextHop) -join ", ")
+                dns_servers = (@($dnsServers) -join ", ")
+                dns_suffix = [string]$dnsClient.ConnectionSpecificSuffix
+                dns_registration = [string]$dnsClient.RegisterThisConnectionsAddress
+                dhcp_enabled = [string]$ipInterface.Dhcp
+                network_profile = (@($networkProfile.NetworkCategory) -join ", ")
+                active_network_bindings = ($activeBindings -join ", ")
+                inactive_network_bindings = ($inactiveBindings -join ", ")
               }
             })
         } else {
-          # Fallback fuer Systeme ohne NetTCPIP-Cmdlets.
-          $adapterResults = @(Get-CimInstance Win32_NetworkAdapterConfiguration `
-            -Filter "IPEnabled = True" |
+          # Fallback fuer Systeme ohne NetTCPIP-/NetAdapter-Cmdlets.
+          # Die Bindungen und das Netzwerkprofil sind dort nicht verlaesslich
+          # ueber die verwendeten CIM-Klassen ermittelbar und bleiben leer.
+          $adapterResults = @(Get-CimInstance Win32_NetworkAdapter |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.NetConnectionID) } |
             Sort-Object InterfaceIndex |
             ForEach-Object {
-              $configuration = $_
-              $networkAdapter = Get-CimInstance Win32_NetworkAdapter `
-                -Filter "Index = $($configuration.Index)"
+              $networkAdapter = $_
+              $configuration = Get-CimInstance Win32_NetworkAdapterConfiguration `
+                -Filter "Index = $($networkAdapter.Index)" `
+                -ErrorAction SilentlyContinue
 
               [ordered]@{
                 adapter_name = [string]$networkAdapter.NetConnectionID
-                adapter_status = ""
-                adapter_description = [string]$configuration.Description
-                mac_address = [string]$configuration.MACAddress
+                adapter_status = [string]$networkAdapter.NetConnectionStatus
+                adapter_description = [string]$networkAdapter.Name
+                mac_address = [string]$networkAdapter.MACAddress
                 ipv4_addresses = (@($configuration.IPAddress |
                   Where-Object { $_ -match "^\d{1,3}(\.\d{1,3}){3}$" }) -join ", ")
                 subnet_masks = (@($configuration.IPSubnet |
@@ -308,6 +339,8 @@
                 dns_registration = [string]$configuration.DomainDNSRegistrationEnabled
                 dhcp_enabled = [string]$configuration.DHCPEnabled
                 network_profile = ""
+                active_network_bindings = ""
+                inactive_network_bindings = ""
               }
             })
         }
@@ -315,6 +348,10 @@
         $result = [ordered]@{
           computername = [string]$env:COMPUTERNAME
           fqdn = [string]$fqdn
+          os_caption = [string]$operatingSystem.Caption
+          os_version = [string]$operatingSystem.Version
+          os_build_number = [string]$operatingSystem.BuildNumber
+          os_architecture = [string]$operatingSystem.OSArchitecture
           part_of_domain = [bool]$computerSystem.PartOfDomain
           domain_or_workgroup = if ($computerSystem.PartOfDomain) {
             [string]$computerSystem.Domain
@@ -342,7 +379,7 @@
         - communication_raw.stdout | trim | length > 0
 
 
-- name: Einen nach IP-Adresse sortierten CSV-Report erzeugen
+- name: JSON- und nach IP-Adresse sortierten CSV-Report erzeugen
   hosts: localhost
   connection: local
   gather_facts: false
@@ -354,6 +391,24 @@
         state: directory
         mode: "0750"
 
+    - name: JSON-Report erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.json"
+        mode: "0644"
+        content: |
+          [
+          {% for h in discovered_ips %}
+          {% set info = hostvars[h].communication_info | default({}) %}
+          {% set base = {
+            'timestamp': report_csv_timestamp,
+            'ip_address': h,
+            'ansible_reachable': hostvars[h].validation_ansible_reachable | default(false),
+            'winrm_ports': hostvars[h].discovered_winrm_open_ports | default('')
+          } %}
+          {{ base | combine(info, recursive=True) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+
     - name: Einzigen CSV-Report erzeugen
       ansible.builtin.copy:
         dest: "{{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.csv"
@@ -362,14 +417,15 @@
           {%- macro csv(value) -%}
           "{{ (value | default('', true) | string | replace('"', '""') | replace('\r', ' ') | replace('\n', ' ')) }}"
           {%- endmacro -%}
-          Zeitstempel;IP_Adresse;Ansible_erreichbar;WinRM_Port;Computername;FQDN;Domaenenmitglied;Domaene_oder_Arbeitsgruppe;Organisationseinheit;Adaptername;Adapterstatus;Adapterbeschreibung;MAC_Adresse;IPv4_Adressen;Subnetzmasken;Praefixlaengen;Standardgateway;DNS_Server;DNS_Suffix;DNS_Registrierung;DHCP_aktiv;Netzwerkprofil
+          Zeitstempel;IP_Adresse;Ansible_erreichbar;WinRM_Port;Computername;FQDN;Betriebssystem;OS_Version;OS_Build;OS_Architektur;Domaenenmitglied;Domaene_oder_Arbeitsgruppe;Organisationseinheit;Adaptername;Adapterstatus;Adapterbeschreibung;MAC_Adresse;IPv4_Adressen;Subnetzmasken;Praefixlaengen;Standardgateway;DNS_Server;DNS_Suffix;DNS_Registrierung;DHCP_aktiv;Netzwerkprofil;Aktive_Netzwerkbindungen;Inaktive_Netzwerkbindungen
           {% for h in discovered_ips -%}
           {% set info = hostvars[h].communication_info | default({}) -%}
           {% set adapters = info.adapters | default([]) -%}
-          {{ csv(report_csv_timestamp) }};{{ csv(h) }};{{ csv(hostvars[h].validation_ansible_reachable | default(false)) }};{{ csv(hostvars[h].discovered_winrm_open_ports | default('')) }};{{ csv(info.computername | default('')) }};{{ csv(info.fqdn | default('')) }};{{ csv(info.part_of_domain | default('')) }};{{ csv(info.domain_or_workgroup | default('')) }};{{ csv(info.organizational_unit | default('')) }};{{ csv(adapters | map(attribute='adapter_name') | join(' | ')) }};{{ csv(adapters | map(attribute='adapter_status') | join(' | ')) }};{{ csv(adapters | map(attribute='adapter_description') | join(' | ')) }};{{ csv(adapters | map(attribute='mac_address') | join(' | ')) }};{{ csv(adapters | map(attribute='ipv4_addresses') | join(' | ')) }};{{ csv(adapters | map(attribute='subnet_masks') | join(' | ')) }};{{ csv(adapters | map(attribute='prefix_lengths') | join(' | ')) }};{{ csv(adapters | map(attribute='default_gateway') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_servers') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_suffix') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_registration') | join(' | ')) }};{{ csv(adapters | map(attribute='dhcp_enabled') | join(' | ')) }};{{ csv(adapters | map(attribute='network_profile') | join(' | ')) }}
+          {{ csv(report_csv_timestamp) }};{{ csv(h) }};{{ csv(hostvars[h].validation_ansible_reachable | default(false)) }};{{ csv(hostvars[h].discovered_winrm_open_ports | default('')) }};{{ csv(info.computername | default('')) }};{{ csv(info.fqdn | default('')) }};{{ csv(info.os_caption | default('')) }};{{ csv(info.os_version | default('')) }};{{ csv(info.os_build_number | default('')) }};{{ csv(info.os_architecture | default('')) }};{{ csv(info.part_of_domain | default('')) }};{{ csv(info.domain_or_workgroup | default('')) }};{{ csv(info.organizational_unit | default('')) }};{{ csv(adapters | map(attribute='adapter_name') | join(' | ')) }};{{ csv(adapters | map(attribute='adapter_status') | join(' | ')) }};{{ csv(adapters | map(attribute='adapter_description') | join(' | ')) }};{{ csv(adapters | map(attribute='mac_address') | join(' | ')) }};{{ csv(adapters | map(attribute='ipv4_addresses') | join(' | ')) }};{{ csv(adapters | map(attribute='subnet_masks') | join(' | ')) }};{{ csv(adapters | map(attribute='prefix_lengths') | join(' | ')) }};{{ csv(adapters | map(attribute='default_gateway') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_servers') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_suffix') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_registration') | join(' | ')) }};{{ csv(adapters | map(attribute='dhcp_enabled') | join(' | ')) }};{{ csv(adapters | map(attribute='network_profile') | join(' | ')) }};{{ csv(adapters | map(attribute='active_network_bindings') | join(' | ')) }};{{ csv(adapters | map(attribute='inactive_network_bindings') | join(' | ')) }}
           {% endfor -%}
 
-    - name: Pfad des erzeugten CSV-Reports anzeigen
+    - name: Pfade der erzeugten Reports anzeigen
       ansible.builtin.debug:
-        msg: >-
-          CSV: {{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.csv
+        msg:
+          - "JSON: {{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.csv"
