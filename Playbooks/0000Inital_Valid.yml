@@ -1,14 +1,16 @@
 ---
-- name: Netzwerkteilnehmer erkennen und WinRM-Verbindungsdaten vorbereiten
+##################### Weiter unter neuer Play, weil Benutzerwechsel ############################################
+- name: Netzwerkteilnehmer im Zielnetz erkennen und Infos in JSON und CSV exportieren
   hosts: localhost
   connection: local
-  gather_facts: false
+  gather_facts: no
+
+ 
 
   tasks:
     - name: Zeitstempel fuer Report setzen
       ansible.builtin.set_fact:
-        report_file_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-        report_csv_timestamp: "{{ lookup('pipe', 'date +\"%Y-%m-%d %H:%M:%S\"') }}"
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
     - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
       ansible.builtin.assert:
@@ -30,6 +32,7 @@
           Erforderlich sind: target_network, win_user, win_password,
           winrm_transport, nmap_binary und result_dir.
 
+
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
       ansible.builtin.command: "{{ nmap_binary }} --version"
       register: nmap_check
@@ -38,98 +41,95 @@
 
     - name: Abbrechen, wenn nmap fehlt
       ansible.builtin.fail:
-        msg: >-
-          nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht
-          ausfuehrbar. Installation pruefen: sudo apt install nmap
+        msg: "nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht ausfuehrbar. Installation pruefen: sudo apt install nmap"
       when: nmap_check.rc != 0
 
-    - name: Alle erkennbaren Netzwerkteilnehmer und offene WinRM-Ports suchen
+
+    # - name: Diagnose nmap auf dem Ansible-Controller
+    #   ansible.builtin.shell: |
+    #     echo "USER=$(whoami)"
+    #     echo "PATH=$PATH"
+    #     echo "nmap_binary={{ nmap_binary }}"
+    #     echo "--- ls -l {{ nmap_binary }} ---"
+    #     ls -l {{ nmap_binary }} || true
+    #     echo "--- file {{ nmap_binary }} ---"
+    #     file {{ nmap_binary }} || true
+    #     echo "--- test -x {{ nmap_binary }} ---"
+    #     test -x {{ nmap_binary }}
+    #     echo "test_x_rc=$?"
+    #     echo "--- {{ nmap_binary }} --version ---"
+    #     {{ nmap_binary }} --version
+    #     echo "nmap_version_rc=$?"
+    #   args:
+    #     executable: /bin/bash
+    #   register: nmap_diag
+    #   changed_when: false
+    #   failed_when: false
+
+    # - name: Diagnoseausgabe nmap anzeigen
+    #   ansible.builtin.debug:
+    #     var: nmap_diag.stdout_lines
+
+    # - name: Diagnosefehler nmap anzeigen
+    #   ansible.builtin.debug:
+    #     var: nmap_diag.stderr_lines
+
+    # - name: Abbrechen, wenn nmap nicht ausfuehrbar ist
+    #   ansible.builtin.fail:
+    #     msg: >-
+    #       nmap konnte durch Semaphore/Ansible nicht ausgefuehrt werden.
+    #       Rueckgabecode: {{ nmap_diag.rc }}.
+    #       Pruefe stdout/stderr der vorherigen Diagnoseausgabe.
+    #   when: nmap_diag.rc != 0
+
+    - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - win_user is defined
+          - win_password is defined
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+        fail_msg: >-
+          Fuer die Detailabfrage muessen win_user und win_password uebergeben werden,
+          z. B. ueber Semaphore Environment/Extra Variables oder Ansible Vault.
+
+    - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
       ansible.builtin.shell: |
         set -o pipefail
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        awk '
+          /Ports:/ {
+            host=$2
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
 
-        declare -A participant_seen
-        declare -A winrm_port
-        declare -A winrm_scheme
-        declare -A winrm_open_ports
-
-        # 1. Allgemeine Teilnehmererkennung. Hierdurch bleiben auch Geraete ohne
-        #    offenen WinRM-Port im spaeteren CSV-Report enthalten.
-        while IFS= read -r ip; do
-          if [ -n "$ip" ]; then
-            participant_seen["$ip"]=1
-          fi
-        done < <(
-          {{ nmap_binary | quote }} -n -sn {{ target_network | quote }} -oG - |
-          awk '/Status: Up/ { print $2 }'
-        )
-
-        # 2. Zusaetzliche WinRM-Pruefung. -Pn erfasst auch Windows-Rechner,
-        #    die ICMP/Ping blockieren, aber WinRM bereitstellen.
-        while IFS=';' read -r ip selected_port selected_scheme open_ports; do
-          if [ -n "$ip" ]; then
-            participant_seen["$ip"]=1
-            winrm_port["$ip"]="$selected_port"
-            winrm_scheme["$ip"]="$selected_scheme"
-            winrm_open_ports["$ip"]="$open_ports"
-          fi
-        done < <(
-          {{ nmap_binary | quote }} -n -Pn -p 5985,5986 --open {{ target_network | quote }} -oG - |
-          awk '
-            /Ports:/ {
-              host=$2
-              has_http = ($0 ~ /5985\/open\/tcp/)
-              has_https = ($0 ~ /5986\/open\/tcp/)
-
-              if (has_https) {
-                ports = has_http ? "5985,5986" : "5986"
-                print host ";5986;https;" ports
-              } else if (has_http) {
-                print host ";5985;http;5985"
-              }
+            if (has_https) {
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
+            } else if (has_http) {
+              print host ";5985;http;5985"
             }
-          '
-        )
-
-        # Numerische Sortierung nach IP-Adresse. Jede Zeile enthaelt:
-        # IP;bevorzugter_Port;Schema;alle_offenen_WinRM_Ports
-        for ip in "${!participant_seen[@]}"; do
-          printf '%s;%s;%s;%s\n' \
-            "$ip" \
-            "${winrm_port[$ip]:-}" \
-            "${winrm_scheme[$ip]:-}" \
-            "${winrm_open_ports[$ip]:-}"
-        done | sort -V
+          }
+        '
       args:
         executable: /bin/bash
-      register: network_scan_result
+      register: scan_result
       changed_when: false
 
-    - name: Gefundene Teilnehmer speichern
+    - name: Gefundene IP-Adressen und WinRM-Infos speichern
       ansible.builtin.set_fact:
-        discovered_participant_records: "{{ network_scan_result.stdout_lines | default([]) }}"
-        discovered_ips: >-
-          {{ network_scan_result.stdout_lines
-             | default([])
-             | map('regex_replace', ';.*$', '')
-             | list }}
+        discovered_winrm_hosts: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_ips: "{{ scan_result.stdout_lines | map('regex_replace', ';.*$', '') | unique | list }}"
 
-    - name: Abbrechen, wenn keine Netzwerkteilnehmer erkannt wurden
-      ansible.builtin.fail:
-        msg: "Im Zielnetz {{ target_network }} wurden keine Netzwerkteilnehmer erkannt."
-      when: discovered_ips | length == 0
+    - name: Gefundene WinRM-Teilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_winrm_hosts
 
-    - name: Alle gefundenen Teilnehmer zum Laufzeit-Inventar hinzufuegen
-      ansible.builtin.add_host:
-        name: "{{ item.split(';')[0] }}"
-        groups: discovered_network_participants
-        ansible_host: "{{ item.split(';')[0] }}"
-        discovered_winrm_port: "{{ item.split(';')[1] }}"
-        discovered_winrm_scheme: "{{ item.split(';')[2] }}"
-        discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
-      loop: "{{ discovered_participant_records }}"
-      changed_when: false
+    - name: Gefundene IP-Adressen anzeigen
+      ansible.builtin.debug:
+        var: discovered_ips
 
-    - name: Teilnehmer mit offenem WinRM-Port als Windows-Ziel hinzufuegen
+    - name: Gefundene Windows-Hosts dynamisch hinzufügen
       ansible.builtin.add_host:
         name: "{{ item.split(';')[0] }}"
         groups: discovered_windows
@@ -143,319 +143,255 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
         ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(90) }}"
-      loop: "{{ discovered_participant_records }}"
-      when: item.split(';')[1] | length > 0
+        discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
+      loop: "{{ discovered_winrm_hosts }}"
       no_log: true
-      changed_when: false
-
-    - name: Gefundene Teilnehmer anzeigen
-      ansible.builtin.debug:
-        msg:
-          - "Erkannte Teilnehmer: {{ discovered_ips | length }}"
-          - "IP-Adressen: {{ discovered_ips | join(', ') }}"
 
 
-- name: Ansible-Verbindung sowie Betriebssystem- und Kommunikationsdaten pruefen
+- name: Windows-Kommunikationsdaten und Domaenenzugehoerigkeit abfragen
   hosts: discovered_windows
   gather_facts: false
   ignore_unreachable: true
 
   tasks:
-    - name: Ansible-Erreichbarkeit standardmaessig auf false setzen
-      ansible.builtin.set_fact:
-        validation_ansible_reachable: false
-
-    - name: WinRM-Verbindung mit Ansible pruefen
+    - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
       register: win_ping_result
       changed_when: false
-      failed_when: false
-      ignore_unreachable: true
+      ignore_errors: true
 
-    - name: Erfolgreiche Ansible-Verbindung speichern
-      ansible.builtin.set_fact:
-        validation_ansible_reachable: true
-      when:
-        - win_ping_result is defined
-        - win_ping_result.ping | default('') == 'pong'
+    - name: Windows-Facts minimal erfassen
+      ansible.windows.setup:
+        gather_subset:
+          - min
+      register: windows_facts_result
+      when: win_ping_result is defined and win_ping_result is succeeded
+      changed_when: false
 
-    - name: Netzwerk-, Domaenen- und OU-Daten auslesen
+    - name: Computername, Domaene und Kommunikationseinstellungen auslesen
       ansible.windows.win_shell: |
         $ErrorActionPreference = "SilentlyContinue"
 
-        function Convert-PrefixLengthToSubnetMask {
-          param([int]$PrefixLength)
-
-          if ($PrefixLength -lt 0 -or $PrefixLength -gt 32) {
-            return $null
-          }
-
-          $bitString = ("1" * $PrefixLength).PadRight(32, "0")
-          $octets = for ($i = 0; $i -lt 4; $i++) {
-            [Convert]::ToInt32($bitString.Substring($i * 8, 8), 2)
-          }
-          return ($octets -join ".")
-        }
-
-        $computerSystem = Get-CimInstance Win32_ComputerSystem
-        $operatingSystem = Get-CimInstance Win32_OperatingSystem
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+        $bios = Get-CimInstance Win32_BIOS
 
         $fqdn = $null
         try {
           $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
         } catch {}
 
-        $organizationalUnit = $null
-        if ($computerSystem.PartOfDomain) {
-          try {
-            $searcher = New-Object System.DirectoryServices.DirectorySearcher
-            $searcher.Filter = "(&(objectCategory=computer)(sAMAccountName=$($env:COMPUTERNAME)`$))"
-            $searcher.PropertiesToLoad.Add("distinguishedName") | Out-Null
-            $searchResult = $searcher.FindOne()
+        $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" | ForEach-Object {
+          [ordered]@{
+            description = $_.Description
+            dns_host_name = $_.DNSHostName
+            dns_domain = $_.DNSDomain
+            mac_address = $_.MACAddress
+            dhcp_enabled = $_.DHCPEnabled
+            dhcp_server = $_.DHCPServer
+            ip_address = @($_.IPAddress)
+            ip_subnet = @($_.IPSubnet)
+            default_gateway = @($_.DefaultIPGateway)
+            dns_server = @($_.DNSServerSearchOrder)
+            wins_primary_server = $_.WINSPrimaryServer
+            wins_secondary_server = $_.WINSSecondaryServer
+            tcpip_netbios_options = $_.TcpipNetbiosOptions
+          }
+        })
 
-            if ($null -ne $searchResult) {
-              $distinguishedName = [string]$searchResult.Properties["distinguishedName"][0]
-              $organizationalUnit = (($distinguishedName -split ",") |
-                Where-Object { $_ -like "OU=*" }) -join ","
+        $defaultRoutes = @()
+        try {
+          $defaultRoutes = @(Get-CimInstance Win32_IP4RouteTable |
+            Where-Object { $_.Destination -eq "0.0.0.0" } |
+            ForEach-Object {
+              [ordered]@{
+                gateway = $_.NextHop
+                interface_index = $_.InterfaceIndex
+                metric = $_.Metric1
+              }
+            })
+        } catch {}
+
+        $firewallProfiles = @()
+        try {
+          $firewallProfiles = @(Get-NetFirewallProfile | ForEach-Object {
+            [ordered]@{
+              name = $_.Name
+              enabled = $_.Enabled
+              default_inbound_action = $_.DefaultInboundAction.ToString()
+              default_outbound_action = $_.DefaultOutboundAction.ToString()
+              notify_on_listen = $_.NotifyOnListen
             }
-          } catch {}
-        }
+          })
+        } catch {}
 
-        $adapterResults = @()
+        $winrmListeners = @()
+        try {
+          $winrmListeners = @(Get-ChildItem WSMan:\localhost\Listener | ForEach-Object {
+            [ordered]@{
+              keys = ($_.Keys -join ";")
+              address = (Get-Item "$($_.PSPath)\Address").Value
+              port = (Get-Item "$($_.PSPath)\Port").Value
+              enabled = (Get-Item "$($_.PSPath)\Enabled").Value
+            }
+          })
+        } catch {}
 
-        if (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue) {
-          # Alle Windows-Netzwerkadapter erfassen, auch wenn sie getrennt,
-          # deaktiviert oder noch ohne IPv4-Konfiguration sind.
-          $adapterResults = @(Get-NetAdapter |
-            Sort-Object ifIndex |
-            ForEach-Object {
-              $adapter = $_
+        $localUsers = @()
+        try {
+          $now = Get-Date
 
-              $ipv4Addresses = @(Get-NetIPAddress `
-                -InterfaceIndex $adapter.ifIndex `
-                -AddressFamily IPv4 `
-                -ErrorAction SilentlyContinue |
-                Where-Object { $_.IPAddress -notlike "169.254.*" })
+          if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
+            $localUsers = @(Get-LocalUser | Sort-Object Name | ForEach-Object {
+              $lastLogon = $null
+              if ($null -ne $_.LastLogon) {
+                $lastLogon = $_.LastLogon.ToString("yyyy-MM-dd HH:mm:ss")
+              }
 
-              $ipInterface = Get-NetIPInterface `
-                -InterfaceIndex $adapter.ifIndex `
-                -AddressFamily IPv4 `
-                -ErrorAction SilentlyContinue
-
-              $ipConfiguration = Get-NetIPConfiguration `
-                -InterfaceIndex $adapter.ifIndex `
-                -ErrorAction SilentlyContinue
-
-              $dnsClient = Get-DnsClient `
-                -InterfaceIndex $adapter.ifIndex `
-                -ErrorAction SilentlyContinue
-
-              $dnsServers = @(Get-DnsClientServerAddress `
-                -InterfaceIndex $adapter.ifIndex `
-                -AddressFamily IPv4 `
-                -ErrorAction SilentlyContinue).ServerAddresses
-
-              $networkProfile = Get-NetConnectionProfile `
-                -InterfaceIndex $adapter.ifIndex `
-                -ErrorAction SilentlyContinue
-
-              $adapterBindings = @(Get-NetAdapterBinding `
-                -Name $adapter.Name `
-                -ErrorAction SilentlyContinue |
-                Sort-Object DisplayName, ComponentID)
-
-              $activeBindings = @($adapterBindings |
-                Where-Object { $_.Enabled -eq $true } |
-                ForEach-Object {
-                  if ([string]::IsNullOrWhiteSpace([string]$_.DisplayName)) {
-                    [string]$_.ComponentID
-                  } else {
-                    "{0} [{1}]" -f $_.DisplayName, $_.ComponentID
-                  }
-                })
-
-              $inactiveBindings = @($adapterBindings |
-                Where-Object { $_.Enabled -ne $true } |
-                ForEach-Object {
-                  if ([string]::IsNullOrWhiteSpace([string]$_.DisplayName)) {
-                    [string]$_.ComponentID
-                  } else {
-                    "{0} [{1}]" -f $_.DisplayName, $_.ComponentID
-                  }
-                })
-
-              $prefixLengths = @($ipv4Addresses | ForEach-Object {
-                [string]$_.PrefixLength
-              })
-
-              $subnetMasks = @($ipv4Addresses | ForEach-Object {
-                Convert-PrefixLengthToSubnetMask -PrefixLength $_.PrefixLength
-              })
+              $passwordLastSet = $null
+              $passwordAgeDays = $null
+              if ($null -ne $_.PasswordLastSet) {
+                $passwordLastSet = $_.PasswordLastSet.ToString("yyyy-MM-dd HH:mm:ss")
+                $passwordAgeDays = [math]::Round(($now - $_.PasswordLastSet).TotalDays, 1)
+              }
 
               [ordered]@{
-                adapter_name = [string]$adapter.Name
-                adapter_status = [string]$adapter.Status
-                adapter_description = [string]$adapter.InterfaceDescription
-                mac_address = [string]$adapter.MacAddress
-                ipv4_addresses = (@($ipv4Addresses.IPAddress) -join ", ")
-                subnet_masks = ($subnetMasks -join ", ")
-                prefix_lengths = ($prefixLengths -join ", ")
-                default_gateway = (@($ipConfiguration.IPv4DefaultGateway.NextHop) -join ", ")
-                dns_servers = (@($dnsServers) -join ", ")
-                dns_suffix = [string]$dnsClient.ConnectionSpecificSuffix
-                dns_registration = [string]$dnsClient.RegisterThisConnectionsAddress
-                dhcp_enabled = [string]$ipInterface.Dhcp
-                network_profile = (@($networkProfile.NetworkCategory) -join ", ")
-                active_network_bindings = ($activeBindings -join ", ")
-                inactive_network_bindings = ($inactiveBindings -join ", ")
+                name = [string]$_.Name
+                enabled = [bool]$_.Enabled
+                last_logon = $lastLogon
+                password_last_set = $passwordLastSet
+                password_age_days = $passwordAgeDays
               }
             })
-        } else {
-          # Fallback fuer Systeme ohne NetTCPIP-/NetAdapter-Cmdlets.
-          # Die Bindungen und das Netzwerkprofil sind dort nicht verlaesslich
-          # ueber die verwendeten CIM-Klassen ermittelbar und bleiben leer.
-          $adapterResults = @(Get-CimInstance Win32_NetworkAdapter |
-            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.NetConnectionID) } |
-            Sort-Object InterfaceIndex |
-            ForEach-Object {
-              $networkAdapter = $_
-              $configuration = Get-CimInstance Win32_NetworkAdapterConfiguration `
-                -Filter "Index = $($networkAdapter.Index)" `
-                -ErrorAction SilentlyContinue
+          } else {
+            $computer = [ADSI]("WinNT://" + $env:COMPUTERNAME)
+            $localUsers = @($computer.Children | Where-Object { $_.SchemaClassName -eq "User" } | Sort-Object Name | ForEach-Object {
+              $lastLogon = $null
+              try {
+                if ($null -ne $_.LastLogin -and $_.LastLogin -ne "") {
+                  $lastLogon = ([datetime]$_.LastLogin).ToString("yyyy-MM-dd HH:mm:ss")
+                }
+              } catch {}
+
+              $passwordAgeDays = $null
+              try {
+                if ($null -ne $_.PasswordAge) {
+                  $passwordAgeDays = [math]::Round(([double]$_.PasswordAge.Value / 86400), 1)
+                }
+              } catch {}
+
+              $enabled = $null
+              try {
+                $enabled = -not [bool]($_.UserFlags.Value -band 0x2)
+              } catch {}
 
               [ordered]@{
-                adapter_name = [string]$networkAdapter.NetConnectionID
-                adapter_status = [string]$networkAdapter.NetConnectionStatus
-                adapter_description = [string]$networkAdapter.Name
-                mac_address = [string]$networkAdapter.MACAddress
-                ipv4_addresses = (@($configuration.IPAddress |
-                  Where-Object { $_ -match "^\d{1,3}(\.\d{1,3}){3}$" }) -join ", ")
-                subnet_masks = (@($configuration.IPSubnet |
-                  Where-Object { $_ -match "^\d{1,3}(\.\d{1,3}){3}$" }) -join ", ")
-                prefix_lengths = ""
-                default_gateway = (@($configuration.DefaultIPGateway) -join ", ")
-                dns_servers = (@($configuration.DNSServerSearchOrder) -join ", ")
-                dns_suffix = [string]$configuration.DNSDomain
-                dns_registration = [string]$configuration.DomainDNSRegistrationEnabled
-                dhcp_enabled = [string]$configuration.DHCPEnabled
-                network_profile = ""
-                active_network_bindings = ""
-                inactive_network_bindings = ""
+                name = [string]$_.Name
+                enabled = $enabled
+                last_logon = $lastLogon
+                password_last_set = $null
+                password_age_days = $passwordAgeDays
               }
             })
-        }
+          }
+        } catch {}
 
         $result = [ordered]@{
-          computername = [string]$env:COMPUTERNAME
-          fqdn = [string]$fqdn
-          os_caption = [string]$operatingSystem.Caption
-          os_version = [string]$operatingSystem.Version
-          os_build_number = [string]$operatingSystem.BuildNumber
-          os_architecture = [string]$operatingSystem.OSArchitecture
-          part_of_domain = [bool]$computerSystem.PartOfDomain
-          domain_or_workgroup = if ($computerSystem.PartOfDomain) {
-            [string]$computerSystem.Domain
-          } else {
-            [string]$computerSystem.Workgroup
-          }
-          organizational_unit = [string]$organizationalUnit
-          adapters = $adapterResults
+          ip = "{{ inventory_hostname }}"
+          ansible_reachable = $true
+          computername = $env:COMPUTERNAME
+          fqdn = $fqdn
+          domain = $cs.Domain
+          part_of_domain = $cs.PartOfDomain
+          workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
+          manufacturer = $cs.Manufacturer
+          model = $cs.Model
+          os_caption = $os.Caption
+          os_version = $os.Version
+          serial_number = $bios.SerialNumber
+          adapters = $adapters
+          default_routes = $defaultRoutes
+          firewall_profiles = $firewallProfiles
+          winrm_listeners = $winrmListeners
+          local_users = $localUsers
         }
 
-        $result | ConvertTo-Json -Depth 6 -Compress
+        $result | ConvertTo-Json -Depth 9 -Compress
       register: communication_raw
-      when: validation_ansible_reachable | bool
+      when: win_ping_result is defined and win_ping_result is succeeded
       changed_when: false
-      failed_when: false
 
     - name: Kommunikationsdaten als Host-Fact speichern
       ansible.builtin.set_fact:
-        communication_info: "{{ communication_raw.stdout | trim | from_json }}"
+        communication_info: "{{ communication_raw.stdout | from_json }}"
       when:
-        - validation_ansible_reachable | bool
         - communication_raw is defined
-        - communication_raw.rc | default(1) == 0
         - communication_raw.stdout is defined
-        - communication_raw.stdout | trim | length > 0
+        - communication_raw.stdout | length > 0
 
 
-- name: JSON- und nach IP-Adresse sortierten CSV-Report erzeugen
+
+
+
+#################################### NEW PLAY, weil ich Benutzer wechseln muss um lokal zu speichern###########################################################
+- name: Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
-  connection: local
   gather_facts: false
 
   tasks:
-    - name: Pruefen, ob der Ablagepfad vorhanden ist
-      ansible.builtin.stat:
-        path: "{{ result_dir }}"
-      register: report_directory_status
 
-    - name: Abbrechen, wenn der Ablagepfad existiert, aber kein Ordner ist
-      ansible.builtin.fail:
-        msg: >-
-          Der konfigurierte Ablagepfad {{ result_dir }} existiert,
-          ist aber kein Verzeichnis. Bitte result_dir korrigieren oder
-          die vorhandene Datei entfernen.
-      when:
-        - report_directory_status.stat.exists | bool
-        - not (report_directory_status.stat.isdir | default(false) | bool)
+    - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - nmap_binary is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - nmap_binary | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Es fehlen benoetigte Variablen aus der Semaphore-Variablengruppe.
+          Erforderlich sind: target_network, win_user, win_password,
+          winrm_transport, nmap_binary und result_dir.
 
-    - name: Ablagepfad mit Ablageordner erzeugen, falls er nicht vorhanden ist
+
+    - name: Report-Verzeichnis erzeugen, falls es noch nicht existiert
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
         mode: "0750"
-      when: not (report_directory_status.stat.exists | bool)
 
-    - name: Ablagepfad nach dem Erzeugen erneut pruefen
-      ansible.builtin.stat:
-        path: "{{ result_dir }}"
-      register: report_directory_final_status
-
-    - name: Sicherstellen, dass der Ablageordner verwendbar ist
-      ansible.builtin.assert:
-        that:
-          - report_directory_final_status.stat.exists | bool
-          - report_directory_final_status.stat.isdir | bool
-        fail_msg: >-
-          Der Ablageordner {{ result_dir }} konnte nicht erstellt
-          oder nicht als Verzeichnis erkannt werden.
 
     - name: JSON-Report erzeugen
       ansible.builtin.copy:
-        dest: "{{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.json"
+        dest: "{{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.json"
         mode: "0644"
         content: |
           [
-          {% for h in discovered_ips %}
-          {% set info = hostvars[h].communication_info | default({}) %}
-          {% set base = {
-            'timestamp': report_csv_timestamp,
-            'ip_address': h,
-            'ansible_reachable': hostvars[h].validation_ansible_reachable | default(false),
-            'winrm_ports': hostvars[h].discovered_winrm_open_ports | default('')
-          } %}
-          {{ base | combine(info, recursive=True) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {% for h in groups['discovered_windows'] | default([]) %}
+          {{ (hostvars[h].communication_info | default({'ip': h, 'ansible_reachable': false, 'error': 'WinRM nicht erreichbar oder Zugriff verweigert'})) | to_nice_json }}{% if not loop.last %},{% endif %}
           {% endfor %}
           ]
 
-    - name: Einzigen CSV-Report erzeugen
+    - name: CSV-Report erzeugen
       ansible.builtin.copy:
-        dest: "{{ result_dir }}/0010_network_inventory_{{ report_file_timestamp }}.csv"
+        dest: "{{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.csv"
         mode: "0644"
         content: |
-          {%- macro csv(value) -%}
-          "{{ (value | default('', true) | string | replace('"', '""') | replace('\r', ' ') | replace('\n', ' ')) }}"
-          {%- endmacro -%}
-          Zeitstempel;IP_Adresse;Ansible_erreichbar;WinRM_Port;Computername;FQDN;Betriebssystem;OS_Version;OS_Build;OS_Architektur;Domaenenmitglied;Domaene_oder_Arbeitsgruppe;Organisationseinheit;Adaptername;Adapterstatus;Adapterbeschreibung;MAC_Adresse;IPv4_Adressen;Subnetzmasken;Praefixlaengen;Standardgateway;DNS_Server;DNS_Suffix;DNS_Registrierung;DHCP_aktiv;Netzwerkprofil;Aktive_Netzwerkbindungen;Inaktive_Netzwerkbindungen
-          {% for h in discovered_ips -%}
-          {% set info = hostvars[h].communication_info | default({}) -%}
-          {% set adapters = info.adapters | default([]) -%}
-          {{ csv(report_csv_timestamp) }};{{ csv(h) }};{{ csv(hostvars[h].validation_ansible_reachable | default(false)) }};{{ csv(hostvars[h].discovered_winrm_open_ports | default('')) }};{{ csv(info.computername | default('')) }};{{ csv(info.fqdn | default('')) }};{{ csv(info.os_caption | default('')) }};{{ csv(info.os_version | default('')) }};{{ csv(info.os_build_number | default('')) }};{{ csv(info.os_architecture | default('')) }};{{ csv(info.part_of_domain | default('')) }};{{ csv(info.domain_or_workgroup | default('')) }};{{ csv(info.organizational_unit | default('')) }};{{ csv(adapters | map(attribute='adapter_name') | join(' | ')) }};{{ csv(adapters | map(attribute='adapter_status') | join(' | ')) }};{{ csv(adapters | map(attribute='adapter_description') | join(' | ')) }};{{ csv(adapters | map(attribute='mac_address') | join(' | ')) }};{{ csv(adapters | map(attribute='ipv4_addresses') | join(' | ')) }};{{ csv(adapters | map(attribute='subnet_masks') | join(' | ')) }};{{ csv(adapters | map(attribute='prefix_lengths') | join(' | ')) }};{{ csv(adapters | map(attribute='default_gateway') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_servers') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_suffix') | join(' | ')) }};{{ csv(adapters | map(attribute='dns_registration') | join(' | ')) }};{{ csv(adapters | map(attribute='dhcp_enabled') | join(' | ')) }};{{ csv(adapters | map(attribute='network_profile') | join(' | ')) }};{{ csv(adapters | map(attribute='active_network_bindings') | join(' | ')) }};{{ csv(adapters | map(attribute='inactive_network_bindings') | join(' | ')) }}
-          {% endfor -%}
+          IP;Ansible_erreichbar;Computername;FQDN;Domaene;Domaenenmitglied;Workgroup;OS;IPv4;Subnetz;Gateway;DNS_Server;MAC;DHCP;Firewallprofile;WinRM_Listener;Lokale_Benutzer
+          {% for h in groups['discovered_windows'] | default([]) %}
+          {% set info = hostvars[h].communication_info | default({}) %}
+          {{ h }};{{ info.ansible_reachable | default(false) }};{{ info.computername | default('') }};{{ info.fqdn | default('') }};{{ info.domain | default('') }};{{ info.part_of_domain | default('') }};{{ info.workgroup | default('') }};{{ info.os_caption | default('') }};"{% for a in info.adapters | default([]) %}{{ a.ip_address | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.ip_subnet | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.default_gateway | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dns_server | default([]) | join(',') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.mac_address | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for a in info.adapters | default([]) %}{{ a.dhcp_enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for f in info.firewall_profiles | default([]) %}{{ f.name | default('') }}={{ f.enabled | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for l in info.winrm_listeners | default([]) %}{{ l.keys | default('') }}:{{ l.port | default('') }}{% if not loop.last %}|{% endif %}{% endfor %}";"{% for u in info.local_users | default([]) %}{{ u.name | default('', true) }}(aktiv={{ u.enabled | default('', true) }},letzter_login={{ u.last_logon | default('nie/unbekannt', true) }},passwort_gesetzt={{ u.password_last_set | default('unbekannt', true) }},passwortalter_tage={{ u.password_age_days | default('unbekannt', true) }}){% if not loop.last %}|{% endif %}{% endfor %}"
+          {% endfor %}
 
     - name: Pfade der erzeugten Reports anzeigen
       ansible.builtin.debug:
         msg:
-          - "JSON: {{ result_dir }}/0000_network_inventory_{{ report_file_timestamp }}.json"
-          - "CSV:  {{ result_dir }}/0000_network_inventory_{{ report_file_timestamp }}.csv"
+          - "JSON: {{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/network_discovery_{{ hostvars['localhost'].report_timestamp }}.csv"

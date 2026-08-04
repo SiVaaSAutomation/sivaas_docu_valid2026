@@ -1,34 +1,45 @@
 ---
-- name: Netzwerkteilnehmer erkennen und PCS7-Pruefziele vorbereiten
+
+- name: Netzwerkteilnehmer im Zielnetz erkennen und Infos in JSON und CSV exportieren
   hosts: localhost
   connection: local
-  gather_facts: false
+  become: false
+  # become_method: runas
+  # become_user: Administrator
+  gather_facts: no
 
+  # vars:
+  #   target_network: "192.168.123.0/24"
+  #   winrm_port: 5985
+  #   winrm_transport: ntlm
+  #   result_dir: "./reports"
   tasks:
-    - name: Zeitstempel fuer Report setzen
-      ansible.builtin.set_fact:
-        report_file_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-        report_csv_timestamp: "{{ lookup('pipe', 'date +\"%Y-%m-%d %H:%M:%S\"') }}"
-
     - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
       ansible.builtin.assert:
         that:
           - target_network is defined
+          - nmap_binary is defined
           - win_user is defined
           - win_password is defined
           - winrm_transport is defined
-          - nmap_binary is defined
           - result_dir is defined
+          - pcs7_setup_log_path is defined
           - target_network | string | length > 0
+          - nmap_binary | string | length > 0
           - win_user | string | length > 0
           - win_password | string | length > 0
           - winrm_transport | string | length > 0
-          - nmap_binary | string | length > 0
           - result_dir | string | length > 0
+          - pcs7_setup_log_path | string | length > 0
         fail_msg: >-
-          Es fehlen benoetigte Variablen aus der Semaphore-Variablengruppe.
-          Erforderlich sind: target_network, win_user, win_password,
-          winrm_transport, nmap_binary und result_dir.
+          Es fehlen benoetigte Variablen aus Semaphore.
+          Benoetigt werden mindestens target_network, nmap_binary, win_user,
+          win_password, winrm_transport, result_dir und pcs7_setup_log_path.
+
+    # - name: Zeitstempel fuer Report setzen
+    #   ansible.builtin.set_fact:
+    #     report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+    #     report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
 
     - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
       ansible.builtin.command: "{{ nmap_binary }} --version"
@@ -38,92 +49,95 @@
 
     - name: Abbrechen, wenn nmap fehlt
       ansible.builtin.fail:
-        msg: >-
-          nmap ist auf dem Ansible-Controller unter {{ nmap_binary }} nicht
-          ausfuehrbar. Installation pruefen: sudo apt install nmap
+        msg: "nmap ist auf dem Ansible-Controller nicht installiert. Installation z. B.: sudo apt install nmap"
       when: nmap_check.rc != 0
 
-    - name: Alle erkennbaren Netzwerkteilnehmer und offene WinRM-Ports suchen
+    - name: Pruefen, ob Windows-Zugangsdaten uebergeben wurden
+      ansible.builtin.assert:
+        that:
+          - win_user is defined
+          - win_password is defined
+        fail_msg: >-
+          Fuer die PCS7-Installationspruefung muessen win_user und win_password uebergeben werden,
+          z. B. ueber Semaphore Environment/Extra Variables oder Ansible Vault.
+
+    # - name: Netzwerk per ICMP/ARP und WinRM-Port scannen
+    #   ansible.builtin.shell: |
+    #     set -o pipefail
+    #     nmap -n -sn -PR -PE -PS{{ winrm_port }},5986 {{ target_network }} -oG - | awk '/Status: Up/{print $2}'
+    #   args:
+    #     executable: /bin/bash
+    #   register: scan_result
+    #   changed_when: false
+
+    # - name: Gefundene IP-Adressen speichern
+    #   ansible.builtin.set_fact:
+    #     discovered_ips: "{{ scan_result.stdout_lines | unique | list }}"
+
+    # - name: Gefundene Netzwerkteilnehmer anzeigen
+    #   ansible.builtin.debug:
+    #     var: discovered_ips
+
+    # - name: Gefundene Hosts temporaer in das Inventory aufnehmen
+    #   ansible.builtin.add_host:
+    #     name: "{{ item }}"
+    #     groups: pcs7_check_targets
+    #     ansible_host: "{{ item }}"
+    #     ansible_connection: winrm
+    #     ansible_port: "{{ winrm_port }}"
+    #     ansible_user: "{{ win_user }}"
+    #     ansible_password: "{{ win_password }}"
+    #     ansible_winrm_transport: "{{ winrm_transport }}"
+    #     ansible_winrm_server_cert_validation: ignore
+    #     ansible_winrm_operation_timeout_sec: 60
+    #     ansible_winrm_read_timeout_sec: 90
+    #   loop: "{{ discovered_ips }}"
+    #   no_log: true
+
+    - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
       ansible.builtin.shell: |
         set -o pipefail
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        awk '
+          /Ports:/ {
+            host=$2
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
 
-        declare -A participant_seen
-        declare -A winrm_port
-        declare -A winrm_scheme
-        declare -A winrm_open_ports
-
-        while IFS= read -r ip; do
-          if [ -n "$ip" ]; then
-            participant_seen["$ip"]=1
-          fi
-        done < <(
-          {{ nmap_binary | quote }} -n -sn {{ target_network | quote }} -oG - |
-          awk '/Status: Up/ { print $2 }'
-        )
-
-        while IFS=';' read -r ip selected_port selected_scheme open_ports; do
-          if [ -n "$ip" ]; then
-            participant_seen["$ip"]=1
-            winrm_port["$ip"]="$selected_port"
-            winrm_scheme["$ip"]="$selected_scheme"
-            winrm_open_ports["$ip"]="$open_ports"
-          fi
-        done < <(
-          {{ nmap_binary | quote }} -n -Pn -p 5985,5986 --open {{ target_network | quote }} -oG - |
-          awk '
-            /Ports:/ {
-              host=$2
-              has_http = ($0 ~ /5985\/open\/tcp/)
-              has_https = ($0 ~ /5986\/open\/tcp/)
-
-              if (has_https) {
-                ports = has_http ? "5985,5986" : "5986"
-                print host ";5986;https;" ports
-              } else if (has_http) {
-                print host ";5985;http;5985"
-              }
+            if (has_https) {
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
+            } else if (has_http) {
+              print host ";5985;http;5985"
             }
-          '
-        )
-
-        for ip in "${!participant_seen[@]}"; do
-          printf '%s;%s;%s;%s\n' \
-            "$ip" \
-            "${winrm_port[$ip]:-}" \
-            "${winrm_scheme[$ip]:-}" \
-            "${winrm_open_ports[$ip]:-}"
-        done | sort -V
+          }
+        '
       args:
         executable: /bin/bash
-      register: network_scan_result
+      register: scan_result
       changed_when: false
 
-    - name: Gefundene Teilnehmer speichern
+    - name: Gefundene IP-Adressen und WinRM-Infos speichern
       ansible.builtin.set_fact:
-        discovered_participant_records: "{{ network_scan_result.stdout_lines | default([]) }}"
-        discovered_ips: >-
-          {{ network_scan_result.stdout_lines
-             | default([])
-             | map('regex_replace', ';.*$', '')
-             | list }}
+        discovered_winrm_hosts: "{{ scan_result.stdout_lines | unique | list }}"
+        discovered_ips: "{{ scan_result.stdout_lines | map('regex_replace', ';.*$', '') | unique | list }}"
 
-    - name: Abbrechen, wenn keine Netzwerkteilnehmer erkannt wurden
-      ansible.builtin.fail:
-        msg: "Im Zielnetz {{ target_network }} wurden keine Netzwerkteilnehmer erkannt."
-      when: discovered_ips | length == 0
+    - name: Gefundene WinRM-Teilnehmer anzeigen
+      ansible.builtin.debug:
+        var: discovered_winrm_hosts
 
-    - name: Alle Teilnehmer zum Laufzeit-Inventar hinzufuegen
-      ansible.builtin.add_host:
-        name: "{{ item.split(';')[0] }}"
-        groups: discovered_pcs7_participants
-        ansible_host: "{{ item.split(';')[0] }}"
-        discovered_winrm_port: "{{ item.split(';')[1] }}"
-        discovered_winrm_scheme: "{{ item.split(';')[2] }}"
-        discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
-      loop: "{{ discovered_participant_records }}"
-      changed_when: false
+    - name: Gefundene IP-Adressen anzeigen
+      ansible.builtin.debug:
+        var: discovered_ips
 
-    - name: Teilnehmer mit offenem WinRM-Port als PCS7-Pruefziel hinzufuegen
+    - name: Hinweis ausgeben, wenn keine WinRM-Teilnehmer gefunden wurden
+      ansible.builtin.debug:
+        msg: >-
+          Es wurden keine Hosts mit offenem WinRM-Port 5985/5986 im Zielnetz {{ target_network }} gefunden.
+          Der Report enthaelt dann nur die Kopfzeile. Pruefe target_network, Firewall und WinRM.
+      when: discovered_winrm_hosts | length == 0
+
+    - name: Gefundene Hosts temporaer in das Inventory aufnehmen
       ansible.builtin.add_host:
         name: "{{ item.split(';')[0] }}"
         groups: pcs7_check_targets
@@ -135,1290 +149,431 @@
         ansible_winrm_scheme: "{{ item.split(';')[2] }}"
         ansible_winrm_transport: "{{ winrm_transport }}"
         ansible_winrm_server_cert_validation: ignore
-        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
-        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(120) }}"
+        ansible_winrm_operation_timeout_sec: 60
+        ansible_winrm_read_timeout_sec: 90
         discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
-      loop: "{{ discovered_participant_records }}"
-      when: item.split(';')[1] | length > 0
+      loop: "{{ discovered_winrm_hosts }}"
       no_log: true
-      changed_when: false
 
-    - name: Gefundene Teilnehmer anzeigen
+    - name: Dynamische PCS7-Zielgruppe anzeigen
       ansible.builtin.debug:
-        msg:
-          - "Alle Teilnehmer: {{ discovered_ips }}"
-          - "WinRM-Pruefziele: {{ groups['pcs7_check_targets'] | default([]) }}"
+        msg: "{{ groups['pcs7_check_targets'] | default([]) }}"
 
-
-- name: PCS7-Rolle erkennen und Installation sowie Konfiguration pruefen
+- name: PCS7-Installation auf Windows-Stationen pruefen
   hosts: pcs7_check_targets
   gather_facts: false
   ignore_unreachable: true
-
-  vars:
-    effective_pcs7_setup_log_path: >-
-      {{ pcs7_setup_log_path
-         | default('C:\\ProgramData\\Siemens\\Automation\\Logfiles\\Setup\\RS') }}
-    effective_non_pcs7_mtu_required: "{{ non_pcs7_mtu_required | default(false) | bool }}"
-    effective_wins_server_required: "{{ wins_server_required | default(false) | bool }}"
-
+  # vars:
+  #   pcs7_setup_log_path: "C:\\ProgramData\\Siemens\\Automation\\Logfiles\\Setup\\RS"
   tasks:
-    - name: Ansible-Erreichbarkeit standardmaessig auf false setzen
-      ansible.builtin.set_fact:
-        pcs7_ansible_reachable: false
-
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
       register: win_ping_result
       changed_when: false
-      failed_when: false
+      ignore_errors: true
 
-    - name: Erfolgreiche WinRM-Verbindung speichern
-      ansible.builtin.set_fact:
-        pcs7_ansible_reachable: true
-      when:
-        - win_ping_result is defined
-        - win_ping_result.ping | default('') == 'pong'
-
-    - name: PCS7-Komponenten, Rechnerart und ID-Pruefungen auslesen
+    - name: PCS7-Installationsnachweis, Komponenten und Versionen auslesen
       ansible.windows.win_shell: |
-        $ErrorActionPreference = 'SilentlyContinue'
-        $ProgressPreference = 'SilentlyContinue'
+        $ErrorActionPreference = "SilentlyContinue"
 
         function Get-UninstallPrograms {
           $roots = @(
-            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
           )
 
-          $items = @()
           foreach ($root in $roots) {
-            if (-not (Test-Path $root)) { continue }
-            foreach ($key in Get-ChildItem -Path $root -ErrorAction SilentlyContinue) {
-              $props = Get-ItemProperty -Path $key.PSPath -ErrorAction SilentlyContinue
-              if ([string]::IsNullOrWhiteSpace([string]$props.DisplayName)) { continue }
-              $items += [ordered]@{
-                name = [string]$props.DisplayName
-                version = [string]$props.DisplayVersion
-                publisher = [string]$props.Publisher
-                install_date = [string]$props.InstallDate
-                install_location = [string]$props.InstallLocation
-                registry_key = [string]$key.Name
-              }
-            }
-          }
-          return @($items | Sort-Object name, version -Unique)
-        }
-
-        function Get-WindowsFeaturesSafe {
-          $features = @()
-          if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) {
-            $features = @(Get-WindowsFeature | ForEach-Object {
-              [ordered]@{
-                name = [string]$_.Name
-                display_name = [string]$_.DisplayName
-                state = if ($_.Installed) { 'Enabled' } else { 'Disabled' }
-              }
-            })
-          } elseif (Get-Command Get-WindowsOptionalFeature -ErrorAction SilentlyContinue) {
-            $features = @(Get-WindowsOptionalFeature -Online | ForEach-Object {
-              [ordered]@{
-                name = [string]$_.FeatureName
-                display_name = [string]$_.FeatureName
-                state = [string]$_.State
-              }
-            })
-          }
-          return $features
-        }
-
-        function Get-LocalGroupsSafe {
-          $groups = @()
-          try {
-            $computer = [ADSI]("WinNT://" + $env:COMPUTERNAME + ",computer")
-            $groups = @($computer.Children | Where-Object {
-              $_.SchemaClassName -eq 'group'
-            } | ForEach-Object { [string]$_.Name })
-          } catch {}
-          return @($groups | Sort-Object -Unique)
-        }
-
-        function Get-NetworkDetailsSafe {
-          $result = @()
-          if (-not (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue)) {
-            return $result
-          }
-
-          foreach ($adapter in Get-NetAdapter -IncludeHidden:$false -ErrorAction SilentlyContinue) {
-            $bindings = @()
-            if (Get-Command Get-NetAdapterBinding -ErrorAction SilentlyContinue) {
-              $bindings = @(Get-NetAdapterBinding -Name $adapter.Name -ErrorAction SilentlyContinue | ForEach-Object {
-                [ordered]@{
-                  display_name = [string]$_.DisplayName
-                  component_id = [string]$_.ComponentID
-                  enabled = [bool]$_.Enabled
-                }
-              })
-            }
-
-            $power = $null
-            if (Get-Command Get-NetAdapterPowerManagement -ErrorAction SilentlyContinue) {
-              $pm = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction SilentlyContinue
-              if ($pm) {
-                $power = [ordered]@{
-                  allow_computer_to_turn_off_device = [string]$pm.AllowComputerToTurnOffDevice
-                  wake_on_magic_packet = [string]$pm.WakeOnMagicPacket
-                  wake_on_pattern = [string]$pm.WakeOnPattern
+            if (Test-Path $root) {
+              Get-ChildItem -Path $root | ForEach-Object {
+                $props = Get-ItemProperty -Path $_.PSPath
+                if ($props.DisplayName) {
+                  [ordered]@{
+                    name = [string]$props.DisplayName
+                    version = [string]$props.DisplayVersion
+                    publisher = [string]$props.Publisher
+                    install_date = [string]$props.InstallDate
+                    install_location = [string]$props.InstallLocation
+                    registry_key = [string]$_.Name
+                  }
                 }
               }
             }
-
-            $result += [ordered]@{
-              name = [string]$adapter.Name
-              description = [string]$adapter.InterfaceDescription
-              status = [string]$adapter.Status
-              mac_address = [string]$adapter.MacAddress
-              link_speed = [string]$adapter.LinkSpeed
-              bindings = $bindings
-              power_management = $power
-            }
-          }
-          return $result
-        }
-
-        function Join-Evidence {
-          param([object[]]$Values)
-          return (@($Values | Where-Object {
-            -not [string]::IsNullOrWhiteSpace([string]$_)
-          } | Select-Object -Unique) -join ' | ')
-        }
-
-        $checks = New-Object System.Collections.Generic.List[object]
-
-        function Add-Check {
-          param(
-            [string]$Id,
-            [string]$Description,
-            [string]$Status,
-            [string]$Actual,
-            [string]$Expected,
-            [string]$SourceSheet
-          )
-          $checks.Add([ordered]@{
-            id = $Id
-            description = $Description
-            status = $Status
-            actual = $Actual
-            expected = $Expected
-            source_sheet = $SourceSheet
-          }) | Out-Null
-        }
-
-        function Find-Evidence {
-          param([string]$Pattern)
-          return @($searchCorpus | Where-Object { [string]$_ -match $Pattern } | Select-Object -First 20 -Unique)
-        }
-
-        function Add-EvidenceCheck {
-          param(
-            [string]$Id,
-            [string]$Description,
-            [string]$Pattern,
-            [string]$Expected,
-            [string]$SourceSheet,
-            [bool]$Relevant = $true
-          )
-          if (-not $Relevant) {
-            Add-Check $Id $Description 'NICHT_RELEVANT' '' $Expected $SourceSheet
-            return
-          }
-          $matches = @(Find-Evidence $Pattern)
-          if ($matches.Count -gt 0) {
-            Add-Check $Id $Description 'OK' (Join-Evidence $matches) $Expected $SourceSheet
-          } else {
-            Add-Check $Id $Description 'NOK' 'Kein passender Installationsnachweis gefunden' $Expected $SourceSheet
           }
         }
 
-        function Add-BoolCheck {
-          param(
-            [string]$Id,
-            [string]$Description,
-            [bool]$Passed,
-            [string]$Actual,
-            [string]$Expected,
-            [string]$SourceSheet,
-            [bool]$Relevant = $true,
-            [bool]$Checkable = $true
-          )
-          if (-not $Relevant) {
-            Add-Check $Id $Description 'NICHT_RELEVANT' '' $Expected $SourceSheet
-          } elseif (-not $Checkable) {
-            Add-Check $Id $Description 'NICHT_PRUEFBAR' $Actual $Expected $SourceSheet
-          } elseif ($Passed) {
-            Add-Check $Id $Description 'OK' $Actual $Expected $SourceSheet
-          } else {
-            Add-Check $Id $Description 'NOK' $Actual $Expected $SourceSheet
+        function Convert-InstallDate {
+          param([string]$Value)
+          if ($Value -match "^\d{8}$") {
+            return ($Value.Substring(0,4) + "-" + $Value.Substring(4,2) + "-" + $Value.Substring(6,2))
           }
+          return $Value
         }
 
-        function Add-ProgramDefinitions {
-          param([object[]]$Definitions, [string]$SourceSheet)
-          foreach ($definition in $Definitions) {
-            $relevant = $true
-            if ($definition.Contains('relevant')) {
-              $relevant = [bool]$definition.relevant
-            }
-            Add-EvidenceCheck `
-              ([string]$definition.id) `
-              ([string]$definition.description) `
-              ([string]$definition.pattern) `
-              ([string]$definition.expected) `
-              $SourceSheet `
-              $relevant
-          }
-        }
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
 
-        $computerSystem = Get-CimInstance Win32_ComputerSystem
-        $operatingSystem = Get-CimInstance Win32_OperatingSystem
-        $programs = @(Get-UninstallPrograms)
-        $features = @(Get-WindowsFeaturesSafe)
-        $services = @(Get-CimInstance Win32_Service | ForEach-Object {
-          [ordered]@{
-            name = [string]$_.Name
-            display_name = [string]$_.DisplayName
-            state = [string]$_.State
-            start_mode = [string]$_.StartMode
-            path_name = [string]$_.PathName
-          }
-        })
-        $localGroups = @(Get-LocalGroupsSafe)
-        $networkAdapters = @(Get-NetworkDetailsSafe)
-
-        $setupLogPath = "{{ effective_pcs7_setup_log_path }}"
-        $setupLogs = @()
-        $setupLogLines = @()
-        if (Test-Path $setupLogPath) {
-          $setupLogs = @(Get-ChildItem -Path $setupLogPath -Filter '*.txt' -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 12 |
-            ForEach-Object {
-              [ordered]@{
-                file_name = [string]$_.Name
-                full_name = [string]$_.FullName
-                last_write_time = $_.LastWriteTime.ToString('yyyy-MM-ddTHH:mm:ss')
-                size_bytes = [int64]$_.Length
-              }
-            })
-
-          foreach ($log in $setupLogs | Select-Object -First 5) {
-            $setupLogLines += @(Select-String -Path $log.full_name `
-              -Pattern '(?i)(PCS\s*7|PCS7|SIMATIC|WinCC|STEP\s*7|CEMAT|Management Agent|Management Console|Industry Library|SENTRON|SIMOCODE|S7 F|Safety Matrix|SITOP|Drive ES|PTE400|PowerControl|PH Ready|Process Historian|UC0?2|SP\s*1)' `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 250 |
-              ForEach-Object { ([string]$_.Line).Trim() } |
-              Where-Object { $_ } |
-              Select-Object -Unique)
-          }
-        }
-
-        $programEvidence = @($programs | ForEach-Object {
-          (([string]$_.name) + ' ' + ([string]$_.version) + ' ' + ([string]$_.publisher)).Trim()
-        })
-        $serviceEvidence = @($services | ForEach-Object {
-          (([string]$_.display_name) + ' ' + ([string]$_.name) + ' ' + ([string]$_.path_name)).Trim()
-        })
-        $featureEvidence = @($features | Where-Object { $_.state -match '(?i)Enabled|Installed' } | ForEach-Object {
-          (([string]$_.display_name) + ' ' + ([string]$_.name)).Trim()
-        })
-        $searchCorpus = @($programEvidence + $serviceEvidence + $featureEvidence + $setupLogLines + @($setupLogs.file_name))
-
-        $manufacturerModel = (([string]$computerSystem.Manufacturer) + ' ' + ([string]$computerSystem.Model)).Trim()
-        $isVirtual = $manufacturerModel -match '(?i)(VMware|Virtual Machine|VirtualBox|KVM|QEMU|Xen|HVM domU|Parallels|Bochs|OpenStack)'
-        $isSiemensIPC = (-not $isVirtual) -and ($manufacturerModel -match '(?i)(Siemens|SIMATIC\s*IPC|IPC[0-9]{2,4})')
-
-        $pcs7CoreEvidence = @(Find-Evidence '(?i)(PCS\s*7|PCS7|WinCC|SIMATIC Manager|STEP\s*7|CFC|SFC|SIMATIC BATCH|Route Control|CEMAT|Process Historian|PH Ready)')
-        $pcs7Detected = $pcs7CoreEvidence.Count -gt 0
-        $engineeringEvidence = @(Find-Evidence '(?i)(PCS\s*7.*Engineering|SIMATIC Manager|STEP\s*7|CFC|SFC|BATCH.*Engineering|Route Control.*Engineering)')
-        $serverEvidence = @(Find-Evidence '(?i)(PCS\s*7.*OS.*Server|OS[- ]?Server|WinCC.*Server|Server Redundancy|WinCC Redundancy)')
-        $clientEvidence = @(Find-Evidence '(?i)(PCS\s*7.*OS.*Client|OS[- ]?Client|WinCC.*Client|WebNavigator Client)')
-        $adFeatureEvidence = @($features | Where-Object {
-          $_.name -match '(?i)(AD-Domain-Services|DirectoryServices-DomainController)' -and
-          $_.state -match '(?i)Enabled|Installed'
-        })
-        $domainControllerDetected = ($computerSystem.DomainRole -ge 4) -or ($adFeatureEvidence.Count -gt 0)
-        $orclaEvidence = @(Find-Evidence '(?i)(ORCLA|Watchdog.*OPC|OPC UA Server)')
-
-        $engineeringScore = 0
-        $serverScore = 0
-        $clientScore = 0
-        if ($engineeringEvidence.Count -gt 0) { $engineeringScore += 6 }
-        if (@(Find-Evidence '(?i)(CFC|SFC|STEP\s*7|SIMATIC Manager)').Count -gt 0) { $engineeringScore += 3 }
-        if (@(Find-Evidence '(?i)SIMATIC.*Management.*Console').Count -gt 0) { $engineeringScore += 1 }
-        if ($serverEvidence.Count -gt 0) { $serverScore += 6 }
-        if (@(Find-Evidence '(?i)(Redundancy|Archive Server|Process Historian|PH Ready)').Count -gt 0) { $serverScore += 2 }
-        if ($clientEvidence.Count -gt 0) { $clientScore += 6 }
-        if (@(Find-Evidence '(?i)WebNavigator Client').Count -gt 0) { $clientScore += 2 }
-
-        $role = 'Unbekannt'
-        $highestScore = [Math]::Max($engineeringScore, [Math]::Max($serverScore, $clientScore))
-        if ($highestScore -gt 0) {
-          if ($engineeringScore -eq $highestScore) {
-            $role = 'ES'
-          } elseif ($serverScore -eq $highestScore) {
-            $role = 'OS Server'
-          } else {
-            $role = 'OS Client'
-          }
-        }
-
-        $category = 'Nicht klassifiziert'
-        $specialSubtype = ''
-        $classificationNote = ''
-        $followUpPlaybooks = @()
-
-        # Die Plattform und die Windows-Rolle werden vor der PCS7-Rolle bewertet.
-        # Dadurch bleiben Rechner ohne PCS 7 gueltige, pruefbare Teilnehmer.
-        if ($isVirtual) {
-          if ($domainControllerDetected) {
-            $category = 'VM DC'
-            $specialSubtype = 'VM DC'
-            $role = 'Keine PCS7-Rolle'
-            $classificationNote = 'Virtuelle Maschine mit Domain-Controller-Rolle; PCS7-Installationspruefungen sind nicht relevant.'
-            $followUpPlaybooks = @('0010Initial', '0030GPO_Guidelines', '0040OS_Server_Systemhardening')
-          } elseif ($role -eq 'ES') {
-            $category = 'VM ES'
-          } elseif ($role -eq 'OS Server') {
-            $category = 'VM OS Server'
-          } elseif ($role -eq 'OS Client') {
-            $category = 'VM OS Client'
-          } elseif (-not $pcs7Detected) {
-            $category = 'VM Windows ohne PCS7'
-            $role = 'Keine PCS7-Rolle'
-            $classificationNote = 'Virtuelle Windows-Maschine ohne erkannten PCS7-Kern; PCS7-IDs werden als NICHT_RELEVANT ausgegeben.'
-            $followUpPlaybooks = @('0010Initial', '0030GPO_Guidelines', '0040OS_Server_Systemhardening')
-          } else {
-            $category = 'VM PCS7-Rolle unklar'
-            $specialSubtype = 'PCS7-Komponenten ohne eindeutige Rolle'
-            $classificationNote = 'PCS7-Komponenten erkannt, aber keine eindeutige Zuordnung zu ES, OS Server oder OS Client moeglich.'
-          }
-        } else {
-          if ($domainControllerDetected -and $isSiemensIPC) {
-            $category = 'IPC besondere Konfiguration'
-            $specialSubtype = 'IPC DC'
-            $role = 'Keine PCS7-Rolle'
-            $classificationNote = 'Siemens IPC mit Domain-Controller-Rolle.'
-            $followUpPlaybooks = @('0010Initial', '0030GPO_Guidelines', '0040OS_Server_Systemhardening', '0070IPC_Windows_Basis', '0080IPC_Patches_GPO_WSUSClient', '0090IPC_ePOPlattform')
-          } elseif ($domainControllerDetected) {
-            $category = 'Physischer Windows DC'
-            $specialSubtype = 'Physischer DC ohne sichere IPC-Erkennung'
-            $role = 'Keine PCS7-Rolle'
-            $classificationNote = 'Domain Controller erkannt, Hardware aber nicht eindeutig als Siemens IPC identifiziert.'
-            $followUpPlaybooks = @('0010Initial', '0030GPO_Guidelines', '0040OS_Server_Systemhardening')
-          } elseif ($role -eq 'ES') {
-            $category = 'IPC besondere Konfiguration'
-            $specialSubtype = 'IPC ES'
-          } elseif ($role -eq 'OS Server') {
-            $category = 'IPC OS Server'
-          } elseif ($role -eq 'OS Client') {
-            $category = 'IPC OS Client'
-          } elseif ($isSiemensIPC -and -not $pcs7Detected -and $orclaEvidence.Count -eq 0) {
-            $category = 'IPC ohne PCS7'
-            $role = 'Keine PCS7-Rolle'
-            $classificationNote = 'Siemens IPC ohne erkannten PCS7-Kern und ohne eindeutige Spezialsoftware; PCS7-IDs werden als NICHT_RELEVANT ausgegeben.'
-            $followUpPlaybooks = @('0010Initial', '0030GPO_Guidelines', '0040OS_Server_Systemhardening', '0070IPC_Windows_Basis', '0080IPC_Patches_GPO_WSUSClient', '0090IPC_ePOPlattform')
-          } elseif ($isSiemensIPC -or $orclaEvidence.Count -gt 0) {
-            $category = 'IPC besondere Konfiguration'
-            $specialSubtype = 'IPC Spezialrolle unbekannt'
-            $classificationNote = 'IPC beziehungsweise ORCLA-Komponenten erkannt, Spezialrolle aber nicht eindeutig bestimmbar.'
-          } elseif (-not $pcs7Detected) {
-            $category = 'Physischer Windows-Rechner ohne PCS7'
-            $role = 'Keine PCS7-Rolle'
-            $classificationNote = 'Physischer Windows-Rechner ohne erkannten PCS7-Kern; keine sichere Siemens-IPC-Erkennung.'
-            $followUpPlaybooks = @('0010Initial', '0030GPO_Guidelines', '0040OS_Server_Systemhardening')
-          } else {
-            $category = 'Physischer PCS7-Rechner Rolle unklar'
-            $specialSubtype = 'PCS7-Komponenten ohne eindeutige Rolle'
-            $classificationNote = 'PCS7-Komponenten erkannt, Plattform beziehungsweise PCS7-Rolle aber nicht eindeutig zuordenbar.'
-          }
-        }
-
-        $scoreValues = @($engineeringScore, $serverScore, $clientScore) | Sort-Object -Descending
-        $scoreDifference = if ($scoreValues.Count -ge 2) { $scoreValues[0] - $scoreValues[1] } else { $scoreValues[0] }
-        $classificationConfidence = 'niedrig'
-        if ($highestScore -ge 6 -and $scoreDifference -ge 3) {
-          $classificationConfidence = 'hoch'
-        } elseif ($highestScore -ge 4) {
-          $classificationConfidence = 'mittel'
-        }
-        if ($domainControllerDetected) {
-          $classificationConfidence = 'hoch'
-        } elseif ($category -in @('VM Windows ohne PCS7', 'IPC ohne PCS7')) {
-          $classificationConfidence = 'mittel'
-        }
-
-        $nonPcs7MtuRequired = [System.Convert]::ToBoolean('{{ effective_non_pcs7_mtu_required }}')
-        $winsServerRequired = [System.Convert]::ToBoolean('{{ effective_wins_server_required }}')
-
-        $expectedAddons = @()
+        $fqdn = $null
         try {
-          $expectedAddons = @(ConvertFrom-Json @'
-        {{ pcs7_expected_addons | default([]) | to_json }}
-        '@)
+          $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName
         } catch {}
-        function Is-AddonRelevant {
-          param([string]$AddonName, [string]$EvidencePattern)
-          return (($expectedAddons -contains $AddonName) -or (@(Find-Evidence $EvidencePattern).Count -gt 0))
-        }
 
-        $pcs7V10Pattern = '(?i)((PCS\s*7|PCS7).*(V?10|10\.)|(V?10|10\.).*(PCS\s*7|PCS7))'
-        $pcs7Sp1Pattern = '(?i)((PCS\s*7|PCS7|SIMATIC).*(SP\s*1|10\.0+\.?1)|SP\s*1.*(PCS\s*7|PCS7|SIMATIC))'
-        $smaPattern = '(?i)SIMATIC.*Management.*Agent'
-        $smcPattern = '(?i)SIMATIC.*Management.*Console'
-        $v7LibraryPattern = '(?i)(PCS\s*7.*(Basis|Base).*Library.*V7|Faceplate.*V7|SIMATIC_PCS7_Lib_V7)'
-        $cematPattern = '(?i)CEMAT'
-        $phReadyPattern = '(?i)(PH\s*Ready|Process Historian)'
-
-        $terminalAdapters = @($networkAdapters | Where-Object { $_.name -match '(?i)terminal' })
-        $terminalProfinetBindings = @($terminalAdapters | ForEach-Object {
-          @($_.bindings | Where-Object {
-            $_.display_name -match '(?i)(PROFINET|PNIO)' -or $_.component_id -match '(?i)(PROFINET|PNIO)'
-          })
-        })
-        $terminalBusCheckable = ($terminalAdapters.Count -gt 0 -and $terminalProfinetBindings.Count -gt 0)
-        $terminalBusPassed = $terminalBusCheckable -and (@($terminalProfinetBindings | Where-Object { $_.enabled }).Count -eq 0)
-        $terminalBusActual = if ($terminalAdapters.Count -eq 0) {
-          'Kein Adapter mit Name Terminalbus gefunden'
-        } elseif ($terminalProfinetBindings.Count -eq 0) {
-          'Terminalbus gefunden, aber keine eindeutig erkennbare PROFINET-/PNIO-Bindung'
-        } else {
-          Join-Evidence @($terminalAdapters | ForEach-Object {
-            $adapter = $_
-            $bindingText = @($adapter.bindings | Where-Object {
-              $_.display_name -match '(?i)(PROFINET|PNIO)' -or $_.component_id -match '(?i)(PROFINET|PNIO)'
-            } | ForEach-Object { $_.display_name + '=' + $_.enabled }) -join ', '
-            $adapter.name + ': ' + $bindingText
-          })
-        }
-
-        $physicalPowerResults = @($networkAdapters | Where-Object {
-          $_.status -match '(?i)Up' -and $_.name -notmatch '(?i)(Loopback|Bluetooth|vEthernet|Teredo|isatap)'
-        } | ForEach-Object {
-          $value = if ($_.power_management) { [string]$_.power_management.allow_computer_to_turn_off_device } else { '' }
+        $adapters = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = True" | ForEach-Object {
+          $allIps = @($_.IPAddress)
           [ordered]@{
-            name = $_.name
-            value = $value
-            enabled = ($value -match '(?i)Enabled|True|1')
-            checkable = -not [string]::IsNullOrWhiteSpace($value)
+            description = $_.Description
+            dns_host_name = $_.DNSHostName
+            dns_domain = $_.DNSDomain
+            mac_address = $_.MACAddress
+            dhcp_enabled = $_.DHCPEnabled
+            dhcp_server = $_.DHCPServer
+            ipv4_address = @($allIps | Where-Object { $_ -match "^\d{1,3}(\.\d{1,3}){3}$" })
+            ipv6_address = @($allIps | Where-Object { $_ -match ":" })
+            ip_subnet = @($_.IPSubnet)
+            default_gateway = @($_.DefaultIPGateway)
+            dns_server = @($_.DNSServerSearchOrder)
+            wins_primary_server = $_.WINSPrimaryServer
+            wins_secondary_server = $_.WINSSecondaryServer
+            tcpip_netbios_options = $_.TcpipNetbiosOptions
           }
         })
-        $powerCheckable = ($physicalPowerResults.Count -gt 0 -and @($physicalPowerResults | Where-Object { -not $_.checkable }).Count -eq 0)
-        $powerPassed = $powerCheckable -and (@($physicalPowerResults | Where-Object { $_.enabled }).Count -eq 0)
-        $powerActual = Join-Evidence @($physicalPowerResults | ForEach-Object { $_.name + '=' + $_.value })
 
-        $mtuInterfaces = @()
-        if (Get-Command Get-NetIPInterface -ErrorAction SilentlyContinue) {
-          $mtuInterfaces = @(Get-NetIPInterface -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
-            $_.InterfaceAlias -notmatch '(?i)(Loopback|Teredo|isatap)'
-          } | ForEach-Object {
+        $setupLogPath = "{{ pcs7_setup_log_path }}"
+        $pcs7SetupLogs = @()
+        if (Test-Path $setupLogPath) {
+          $pcs7SetupLogs = @(Get-ChildItem -Path $setupLogPath -Filter "*.txt" |
+            Where-Object { $_.Name -match "(?i)(^SIMATIC\s+PCS\s*7\s+V|PCS\s*7|PCS7)" } |
+            Sort-Object LastWriteTime -Descending |
+            ForEach-Object {
+              $versionFromName = $null
+              if ($_.Name -match "(?i)^SIMATIC\s+PCS\s*7\s+(?<ver>V.+)\.txt$") {
+                $versionFromName = $Matches["ver"].Trim()
+              }
+              [ordered]@{
+                file_name = $_.Name
+                full_name = $_.FullName
+                version_from_file_name = $versionFromName
+                last_write_time = $_.LastWriteTime.ToString("yyyy-MM-ddTHH:mm:ss")
+                size_bytes = $_.Length
+              }
+            })
+        }
+
+        $allPrograms = @(Get-UninstallPrograms)
+
+        $siemensComponentPattern = "(?i)(Siemens|SIMATIC|PCS\s*7|PCS7|WinCC|STEP\s*7|Process\s*Historian|Information\s*Server|Automation\s+License\s+Manager|Maintenance\s+Station|Maintenance\s+Functions|PH\s*Ready|Route\s*Control|Batch|S7)"
+        $pcs7SpecificPattern = "(?i)(PCS\s*7|PCS7|SIMATIC\s+PCS|Process\s*Historian|Information\s*Server|Maintenance\s+Station|Maintenance\s+Functions|PH\s*Ready|Route\s*Control|SIMATIC\s+BATCH|WinCC|STEP\s*7)"
+
+        $components = @($allPrograms |
+          Where-Object { ($_.name -match $siemensComponentPattern) -or ($_.publisher -match "(?i)Siemens") } |
+          Sort-Object -Property name, version -Unique |
+          ForEach-Object {
             [ordered]@{
-              interface_alias = [string]$_.InterfaceAlias
-              interface_index = [int]$_.InterfaceIndex
-              connection_state = [string]$_.ConnectionState
-              mtu = [int]$_.NlMtuBytes
+              name = $_.name
+              version = $_.version
+              publisher = $_.publisher
+              install_date = Convert-InstallDate $_.install_date
+              install_location = $_.install_location
+              registry_key = $_.registry_key
             }
           })
-        }
-        $mtuTargetInterfaces = @($mtuInterfaces | Where-Object { $_.interface_alias -match '(?i)terminal' })
-        if ($mtuTargetInterfaces.Count -eq 0) {
-          $mtuTargetInterfaces = @($mtuInterfaces | Where-Object { $_.connection_state -match '(?i)Connected' })
-        }
-        $mtuCheckable = $mtuTargetInterfaces.Count -gt 0
-        $mtu1494Passed = $mtuCheckable -and (@($mtuTargetInterfaces | Where-Object { $_.mtu -ne 1494 }).Count -eq 0)
-        $mtuActual = Join-Evidence @($mtuTargetInterfaces | ForEach-Object {
-          $_.interface_alias + '=' + $_.mtu
-        })
-        if ([string]::IsNullOrWhiteSpace($mtuActual)) {
-          $mtuActual = 'Keine geeignete IPv4-Netzwerkschnittstelle fuer die MTU-Pruefung gefunden'
-        }
 
-        $winsFeatureEvidence = @($features | Where-Object {
-          ($_.name + ' ' + $_.display_name) -match '(?i)(^|\s)WINS($|\s|-Server)' -and
-          $_.state -match '(?i)Enabled|Installed'
-        })
-        $winsInstalled = $winsFeatureEvidence.Count -gt 0
-        $winsActual = Join-Evidence @($features | Where-Object {
-          ($_.name + ' ' + $_.display_name) -match '(?i)(^|\s)WINS($|\s|-Server)'
-        } | ForEach-Object { $_.name + '=' + $_.state })
-        if ([string]::IsNullOrWhiteSpace($winsActual)) {
-          $winsActual = 'WINS-Server nicht installiert'
-        }
+        $pcs7RelatedComponents = @($components | Where-Object { $_.name -match $pcs7SpecificPattern })
 
-        $adActual = Join-Evidence @($adFeatureEvidence | ForEach-Object { $_.name + '=' + $_.state })
-        if ([string]::IsNullOrWhiteSpace($adActual)) {
-          $adActual = 'DomainRole=' + [string]$computerSystem.DomainRole
-        }
+        $logProductLines = @()
+        foreach ($logFile in $pcs7SetupLogs | Select-Object -First 3) {
+          try {
+            $matchesInLog = @(Select-String -Path $logFile.full_name -Pattern "(?i)(PCS\s*7|PCS7|SIMATIC|WinCC|STEP\s*7|Process\s*Historian|Information\s*Server|Maintenance|Automation\s+License\s+Manager|Route\s*Control|Batch|Version|Produkt|Product|Paket|Package|Installiert|Installed)" |
+              Select-Object -First 120 |
+              ForEach-Object { $_.Line.Trim() } |
+              Where-Object { $_ -ne "" } |
+              Select-Object -Unique)
 
-        $netFx3Enabled = @($features | Where-Object {
-          $_.name -match '(?i)(NET-Framework-Core|NetFx3)' -and $_.state -match '(?i)Enabled|Installed'
-        }).Count -gt 0
-        $netFx3Actual = Join-Evidence @($features | Where-Object {
-          $_.name -match '(?i)(NET-Framework-Core|NetFx3)'
-        } | ForEach-Object { $_.name + '=' + $_.state })
-
-        $simaticGroups = @($localGroups | Where-Object { $_ -match '(?i)(SIMATIC|WinCC|HMI)' })
-        $simaticGroupsPassed = @($simaticGroups | Where-Object { $_ -match '(?i)SIMATIC HMI' }).Count -gt 0
-        $simaticGroupsActual = Join-Evidence $simaticGroups
-
-        $smaServices = @($services | Where-Object {
-          ($_.name + ' ' + $_.display_name) -match '(?i)SIMATIC.*Management.*Agent'
-        })
-        $smaServiceAutomatic = @($smaServices | Where-Object { $_.start_mode -match '(?i)Auto' }).Count -gt 0
-        $smaServiceActual = Join-Evidence @($smaServices | ForEach-Object {
-          $_.display_name + ': State=' + $_.state + ', StartMode=' + $_.start_mode
-        })
-
-        switch ($category) {
-          'VM DC' {
-            Add-BoolCheck 'VM-DC-0169' 'MTU 1494 bei Systemen ohne PCS 7 einstellen' $mtu1494Passed $mtuActual 'MTU 1494 an den laut TPI betroffenen Netzwerkadaptern' 'VM DC' $nonPcs7MtuRequired $mtuCheckable
-            Add-BoolCheck 'VM-DC-0170' 'Active Directory-Domaenendienste installieren' $domainControllerDetected $adActual 'AD-Domaenendienste installiert beziehungsweise DomainRole >= 4' 'VM DC'
-            Add-BoolCheck 'VM-DC-0171' 'WINS-Server installieren' $winsInstalled $winsActual 'WINS-Server installiert, sofern laut TPI erforderlich' 'VM DC' $winsServerRequired $true
-          }
-
-          'VM OS Server' {
-            Add-ProgramDefinitions @(
-              @{ id='VM-S-0033'; description='Automatische Installation der SIMATIC PCS 7 Komponenten'; pattern=$pcs7V10Pattern; expected='PCS 7 V10-Komponenten vorhanden' },
-              @{ id='VM-S-0076'; description='PCS 7 V10 installieren - OS Server'; pattern='(?i)(PCS\s*7.*OS.*Server|OS[- ]?Server|WinCC.*Server)'; expected='OS-Server-Paket vorhanden' },
-              @{ id='VM-S-0077'; description='PCS 7 V7 Basis Library installieren'; pattern=$v7LibraryPattern; expected='V7 Basis Library beziehungsweise Faceplates vorhanden' },
-              @{ id='VM-S-0078'; description='SIMATIC Management Agent installieren'; pattern=$smaPattern; expected='SIMATIC Management Agent vorhanden' },
-              @{ id='VM-S-0079'; description='PCS 7 Software aktualisieren'; pattern=$pcs7Sp1Pattern; expected='PCS 7 V10 SP1 oder entsprechender freigegebener Stand' },
-              @{ id='VM-S-0080'; description='SIMATIC Management Agent aktualisieren'; pattern='(?i)SIMATIC.*Management.*Agent.*(SP\s*1|10\.0+\.?1)'; expected='SIMATIC Management Agent V10 SP1' },
-              @{ id='VM-S-0081'; description='CEMAT V10 installieren'; pattern=$cematPattern; expected='CEMAT V10 vorhanden' },
-              @{ id='VM-S-0082'; description='PCS 7 Updates beziehungsweise PH Ready installieren'; pattern=$phReadyPattern; expected='PH Ready beziehungsweise Process-Historian-Komponente vorhanden' }
-            ) 'VM OS Server'
-            Add-BoolCheck 'VM-S-0092' 'Einstellungen fuer PCS 7 Benutzer durchfuehren' $simaticGroupsPassed $simaticGroupsActual 'Mindestens die lokalen SIMATIC-HMI-/PCS7-Gruppen vorhanden' 'VM OS Server'
-            Add-BoolCheck 'VM-S-0179' 'PROFINET-IO-Protokoll am Terminalbus deaktivieren' $terminalBusPassed $terminalBusActual 'PROFINET-/PNIO-Bindung am Terminalbus deaktiviert' 'VM OS Server' $true $terminalBusCheckable
-            Add-BoolCheck 'VM-S-0183' '.NET Framework 3.5 aktivieren' $netFx3Enabled $netFx3Actual '.NET Framework 3.5 aktiviert' 'VM OS Server'
-          }
-
-          'VM OS Client' {
-            Add-ProgramDefinitions @(
-              @{ id='VM-C-0033'; description='Automatische Installation der SIMATIC PCS 7 Komponenten'; pattern=$pcs7V10Pattern; expected='PCS 7 V10-Komponenten vorhanden' },
-              @{ id='VM-C-0082'; description='SIMATIC Management Agent installieren'; pattern=$smaPattern; expected='SIMATIC Management Agent vorhanden' },
-              @{ id='VM-C-0083'; description='PCS 7 Software aktualisieren'; pattern=$pcs7Sp1Pattern; expected='PCS 7 V10 SP1 oder entsprechender freigegebener Stand' },
-              @{ id='VM-C-0084'; description='SIMATIC Management Agent aktualisieren'; pattern='(?i)SIMATIC.*Management.*Agent.*(SP\s*1|10\.0+\.?1)'; expected='SIMATIC Management Agent V10 SP1' },
-              @{ id='VM-C-0085'; description='CEMAT V10 installieren'; pattern=$cematPattern; expected='CEMAT V10 vorhanden' }
-            ) 'VM OS Client'
-            Add-BoolCheck 'VM-C-0091' 'Einstellungen fuer PCS 7 Benutzer durchfuehren' $simaticGroupsPassed $simaticGroupsActual 'Mindestens die lokalen SIMATIC-HMI-/PCS7-Gruppen vorhanden' 'VM OS Client'
-            Add-BoolCheck 'VM-C-0155' 'PROFINET-IO-Protokoll am Terminalbus deaktivieren' $terminalBusPassed $terminalBusActual 'PROFINET-/PNIO-Bindung am Terminalbus deaktiviert' 'VM OS Client' $true $terminalBusCheckable
-            Add-BoolCheck 'VM-C-0157' '.NET Framework 3.5 aktivieren' $netFx3Enabled $netFx3Actual '.NET Framework 3.5 aktiviert' 'VM OS Client'
-          }
-
-          'VM ES' {
-            Add-ProgramDefinitions @(
-              @{ id='VM-ES-0031'; description='Automatische Installation der SIMATIC PCS 7 Komponenten'; pattern=$pcs7V10Pattern; expected='PCS 7 V10-Komponenten vorhanden' },
-              @{ id='VM-ES-0073'; description='PCS 7 V10.0 installieren - Management Console'; pattern=$smcPattern; expected='SIMATIC Management Console vorhanden' },
-              @{ id='VM-ES-0074'; description='PCS 7 V7 Basis Library installieren'; pattern=$v7LibraryPattern; expected='V7 Basis Library beziehungsweise Faceplates vorhanden' },
-              @{ id='VM-ES-0075'; description='SIMATIC Management Console installieren'; pattern=$smcPattern; expected='SIMATIC Management Console vorhanden' },
-              @{ id='VM-ES-0076'; description='PCS 7 Software installieren - Engineering'; pattern='(?i)(PCS\s*7.*Engineering|SIMATIC Manager|STEP\s*7|CFC|SFC|SIMATIC BATCH)'; expected='PCS 7 Engineering-Komponenten vorhanden' },
-              @{ id='VM-ES-0079'; description='SIMATIC Management Agent installieren'; pattern=$smaPattern; expected='SIMATIC Management Agent vorhanden' },
-              @{ id='VM-ES-0080'; description='PCS 7 Software mittels SMC aktualisieren'; pattern=$pcs7Sp1Pattern; expected='PCS 7 V10 SP1 oder entsprechender freigegebener Stand' },
-              @{ id='VM-ES-0081'; description='PCS 7 Software manuell aktualisieren'; pattern=$pcs7Sp1Pattern; expected='PCS 7 V10 SP1 oder entsprechender freigegebener Stand' },
-              @{ id='VM-ES-0082'; description='SIMATIC Management Agent aktualisieren'; pattern='(?i)SIMATIC.*Management.*Agent.*(SP\s*1|10\.0+\.?1)'; expected='SIMATIC Management Agent V10 SP1' },
-              @{ id='VM-ES-0083'; description='CEMAT V10 mittels SMC installieren'; pattern=$cematPattern; expected='CEMAT V10 vorhanden' },
-              @{ id='VM-ES-0084'; description='CEMAT V10 mittels Rahmensetup installieren'; pattern=$cematPattern; expected='CEMAT V10 Engineering-Komponenten vorhanden' },
-              @{ id='VM-ES-0085'; description='AS/OS Engineering Update installieren'; pattern='(?i)(AS.OS.Engineering.*SP\s*1.*Upd\s*1|SIMATIC_AS_OS_Engineering_V10_0_SP1_Upd1)'; expected='AS/OS Engineering V10 SP1 Update 1' },
-              @{ id='VM-ES-0086'; description='CFC Update installieren'; pattern='(?i)(CFC.*V?10.*SP\s*1.*Upd\s*1|SIMATIC_CFC_V10_0_SP1_Upd1)'; expected='CFC V10 SP1 Update 1' },
-              @{ id='VM-ES-0087'; description='IEAPO Update installieren'; pattern='(?i)(IEAPO.*V?10.*SP\s*1.*Upd\s*1|SIMATIC_IEAPO_V10_0_SP1_Upd1)'; expected='IEAPO V10 SP1 Update 1' },
-              @{ id='VM-ES-0088'; description='XML Transfer Update installieren'; pattern='(?i)(XML.*Transfer.*V?10.*SP\s*1.*Upd\s*1|SIMATIC_XMLTRANSFER_V10_0_SP1_Upd1)'; expected='XML Transfer V10 SP1 Update 1' },
-              @{ id='VM-ES-0089'; description='PCS 7 Basis Library Update installieren'; pattern='(?i)(PCS\s*7.*Basis.*Library.*V?10.*SP\s*1.*Upd\s*1|SIMATIC_PCS_7_Basis_Library_V10_0_SP1_Upd1)'; expected='PCS 7 Basis Library V10 SP1 Update 1' }
-            ) 'VM ES'
-            Add-BoolCheck 'VM-ES-0077' 'SIMATIC Management Agent Dienst auf Automatisch' $smaServiceAutomatic $smaServiceActual 'SIMATIC Management Agent Dienst: Starttyp Automatisch' 'VM ES'
-            Add-BoolCheck 'VM-ES-0170' 'PROFINET-IO-Protokoll am Terminalbus deaktivieren' $terminalBusPassed $terminalBusActual 'PROFINET-/PNIO-Bindung am Terminalbus deaktiviert' 'VM ES' $true $terminalBusCheckable
-            Add-BoolCheck 'VM-ES-0174' '.NET Framework 3.5 aktivieren' $netFx3Enabled $netFx3Actual '.NET Framework 3.5 aktiviert' 'VM ES'
-          }
-
-          'IPC OS Server' {
-            Add-ProgramDefinitions @(
-              @{ id='IPC-S-0077'; description='PTE400 V10.0 installieren'; pattern='(?i)PTE\s*400'; expected='PTE400 V10 vorhanden' },
-              @{ id='IPC-S-0078'; description='SENTRON 3WL/3VL V10 installieren'; pattern='(?i)SENTRON.*(3WL|3VL)'; expected='SENTRON 3WL/3VL V10 vorhanden' },
-              @{ id='IPC-S-0079'; description='SENTRON PAC V10 installieren'; pattern='(?i)SENTRON.*PAC'; expected='SENTRON PAC V10 vorhanden' },
-              @{ id='IPC-S-0080'; description='SIMOCODE pro PCS7 V10.0 installieren'; pattern='(?i)SIMOCODE.*V?10'; expected='SIMOCODE pro PCS7 V10 vorhanden' },
-              @{ id='IPC-S-0081'; description='SIMOCODE Migration Legacy V10.0 installieren'; pattern='(?i)SIMOCODE.*(Migration|Legacy).*V?10'; expected='SIMOCODE Migration Legacy V10 vorhanden' },
-              @{ id='IPC-S-0083'; description='S7 F Systems V6.4 SP1 installieren'; pattern='(?i)S7\s*F\s*Systems.*6\.4.*SP\s*1'; expected='S7 F Systems V6.4 SP1 vorhanden' },
-              @{ id='IPC-S-0084'; description='Industry Library V10.0 installieren'; pattern='(?i)Industry.*Library.*V?10'; expected='Industry Library V10 vorhanden' },
-              @{ id='IPC-S-0085'; description='PowerControl freigegebenen Stand installieren'; pattern='(?i)PowerControl'; expected='PowerControl laut TPI vorhanden'; relevant=(Is-AddonRelevant 'PowerControl' '(?i)PowerControl') },
-              @{ id='IPC-S-0086'; description='PowerControl Update installieren'; pattern='(?i)PowerControl.*(Update|Upd|SP)'; expected='Freigegebenes PowerControl-Update vorhanden'; relevant=(Is-AddonRelevant 'PowerControl' '(?i)PowerControl') },
-              @{ id='IPC-S-0087'; description='DriveES PCS 7 APL V10.0 installieren'; pattern='(?i)Drive\s*ES.*PCS\s*7.*APL.*V?10'; expected='Drive ES PCS7 APL V10 vorhanden' },
-              @{ id='IPC-S-0088'; description='SITOP PCS 7 APL V4.0 installieren'; pattern='(?i)SITOP.*PCS\s*7.*APL.*V?4'; expected='SITOP PCS7 APL V4 vorhanden' },
-              @{ id='IPC-S-0089'; description='SIMATIC Safety Matrix V6.3 SP1 installieren'; pattern='(?i)Safety.*Matrix.*6\.3.*SP\s*1'; expected='Safety Matrix V6.3 SP1 vorhanden' },
-              @{ id='IPC-S-0092'; description='PCS 7 V10 UC02 installieren'; pattern='(?i)(UC\s*0?2|Update Collection\s*0?2)'; expected='PCS 7 V10 UC02 vorhanden' },
-              @{ id='IPC-S-0094'; description='PCS 7 V10 SP1 installieren'; pattern=$pcs7Sp1Pattern; expected='PCS 7 V10 SP1 vorhanden' },
-              @{ id='IPC-S-0095'; description='Industry Library 10.0 Update 1 installieren'; pattern='(?i)Industry.*Library.*10.*(Upd\s*1|Update\s*1)'; expected='Industry Library 10 Update 1 vorhanden' },
-              @{ id='IPC-S-0096'; description='SENTRON 3WL/3VL V10.0 SP1 installieren'; pattern='(?i)SENTRON.*(3WL|3VL).*V?10.*SP\s*1'; expected='SENTRON 3WL/3VL V10 SP1 vorhanden' },
-              @{ id='IPC-S-0097'; description='SENTRON PAC V10.0 SP1 installieren'; pattern='(?i)SENTRON.*PAC.*V?10.*SP\s*1'; expected='SENTRON PAC V10 SP1 vorhanden' },
-              @{ id='IPC-S-0098'; description='SIMOCODE pro PCS7 V10.0 SP1 installieren'; pattern='(?i)SIMOCODE.*V?10.*SP\s*1'; expected='SIMOCODE V10 SP1 vorhanden' },
-              @{ id='IPC-S-0099'; description='SIMOCODE Migration Legacy V10.0 SP1 installieren'; pattern='(?i)SIMOCODE.*(Migration|Legacy).*V?10.*SP\s*1'; expected='SIMOCODE Migration Legacy V10 SP1 vorhanden' },
-              @{ id='IPC-S-0102'; description='WinCC OPCServer V3.9 SP12 Update 5 installieren'; pattern='(?i)(WinCC.*OPC.*3\.9.*SP\s*12.*(Upd|Update)\s*5|OPCServer.*3\.9)'; expected='WinCC OPCServer V3.9 SP12 Update 5 vorhanden' },
-              @{ id='IPC-S-0103'; description='ORCLA Setupdatei ausfuehren'; pattern='(?i)ORCLA'; expected='ORCLA vorhanden' },
-              @{ id='IPC-S-0105'; description='Watchdog und OPC UA Server aktivieren'; pattern='(?i)(Watchdog|OPC UA Server)'; expected='ORCLA Watchdog und OPC-UA-Komponenten vorhanden' }
-            ) 'IPC OS Server'
-            Add-BoolCheck 'IPC-S-0075' 'SIMATIC Shell Terminalbus konfigurieren' ($terminalAdapters.Count -gt 0) (Join-Evidence @($terminalAdapters.name)) 'Adapter Terminalbus vorhanden' 'IPC OS Server'
-            Add-BoolCheck 'IPC-S-0076' 'SIMATIC Shell Redundanzbus konfigurieren' (@($networkAdapters | Where-Object { $_.name -match '(?i)redundanz' }).Count -gt 0) (Join-Evidence @($networkAdapters.name)) 'Adapter Redundanzbus vorhanden' 'IPC OS Server'
-            Add-BoolCheck 'IPC-S-0200' 'PROFINET-IO-Protokoll am Terminalbus deaktivieren' $terminalBusPassed $terminalBusActual 'PROFINET-/PNIO-Bindung am Terminalbus deaktiviert' 'IPC OS Server' $true $terminalBusCheckable
-            Add-BoolCheck 'IPC-S-0202' 'Energieverwaltung produktiver Netzwerkadapter deaktivieren' $powerPassed $powerActual 'Computer darf produktive Adapter nicht ausschalten' 'IPC OS Server' $true $powerCheckable
-            Add-BoolCheck 'IPC-S-0205' '.NET Framework 3.5 aktivieren' $netFx3Enabled $netFx3Actual '.NET Framework 3.5 aktiviert' 'IPC OS Server'
-          }
-
-          'IPC OS Client' {
-            Add-ProgramDefinitions @(
-              @{ id='IPC-C-0083'; description='PCS 7 V10 installieren - OS Client'; pattern='(?i)(PCS\s*7.*OS.*Client|OS[- ]?Client|WinCC.*Client)'; expected='OS-Client-Paket vorhanden' },
-              @{ id='IPC-C-0087'; description='PTE400 V10.0 installieren'; pattern='(?i)PTE\s*400'; expected='PTE400 V10 vorhanden' },
-              @{ id='IPC-C-0088'; description='SENTRON 3WL/3VL V10 installieren'; pattern='(?i)SENTRON.*(3WL|3VL)'; expected='SENTRON 3WL/3VL V10 vorhanden' },
-              @{ id='IPC-C-0089'; description='SENTRON PAC V10 installieren'; pattern='(?i)SENTRON.*PAC'; expected='SENTRON PAC V10 vorhanden' },
-              @{ id='IPC-C-0090'; description='SIMOCODE pro PCS7 V10.0 installieren'; pattern='(?i)SIMOCODE.*V?10'; expected='SIMOCODE pro PCS7 V10 vorhanden' },
-              @{ id='IPC-C-0091'; description='SIMOCODE Migration Legacy V10.0 installieren'; pattern='(?i)SIMOCODE.*(Migration|Legacy).*V?10'; expected='SIMOCODE Migration Legacy V10 vorhanden' },
-              @{ id='IPC-C-0093'; description='S7 F Systems V6.4 SP1 installieren'; pattern='(?i)S7\s*F\s*Systems.*6\.4.*SP\s*1'; expected='S7 F Systems V6.4 SP1 vorhanden' },
-              @{ id='IPC-C-0094'; description='Industry Library V10.0 installieren'; pattern='(?i)Industry.*Library.*V?10'; expected='Industry Library V10 vorhanden' },
-              @{ id='IPC-C-0095'; description='PowerControl freigegebenen Stand installieren'; pattern='(?i)PowerControl'; expected='PowerControl laut TPI vorhanden'; relevant=(Is-AddonRelevant 'PowerControl' '(?i)PowerControl') },
-              @{ id='IPC-C-0096'; description='PowerControl Update installieren'; pattern='(?i)PowerControl.*(Update|Upd|SP)'; expected='Freigegebenes PowerControl-Update vorhanden'; relevant=(Is-AddonRelevant 'PowerControl' '(?i)PowerControl') },
-              @{ id='IPC-C-0097'; description='DriveES PCS 7 APL V10.0 installieren'; pattern='(?i)Drive\s*ES.*PCS\s*7.*APL.*V?10'; expected='Drive ES PCS7 APL V10 vorhanden' },
-              @{ id='IPC-C-0098'; description='SITOP PCS 7 APL V4.0 installieren'; pattern='(?i)SITOP.*PCS\s*7.*APL.*V?4'; expected='SITOP PCS7 APL V4 vorhanden' },
-              @{ id='IPC-C-0099'; description='SIMATIC Safety Matrix V6.3 SP1 installieren'; pattern='(?i)Safety.*Matrix.*6\.3.*SP\s*1'; expected='Safety Matrix V6.3 SP1 vorhanden' },
-              @{ id='IPC-C-0102'; description='PCS 7 V10 UC02 installieren'; pattern='(?i)(UC\s*0?2|Update Collection\s*0?2)'; expected='PCS 7 V10 UC02 vorhanden' },
-              @{ id='IPC-C-0104'; description='PCS 7 V10 SP1 installieren'; pattern=$pcs7Sp1Pattern; expected='PCS 7 V10 SP1 vorhanden' },
-              @{ id='IPC-C-0105'; description='Industry Library 10.0 Update 1 installieren'; pattern='(?i)Industry.*Library.*10.*(Upd\s*1|Update\s*1)'; expected='Industry Library 10 Update 1 vorhanden' },
-              @{ id='IPC-C-0106'; description='SENTRON 3WL/3VL V10.0 SP1 installieren'; pattern='(?i)SENTRON.*(3WL|3VL).*V?10.*SP\s*1'; expected='SENTRON 3WL/3VL V10 SP1 vorhanden' },
-              @{ id='IPC-C-0107'; description='SENTRON PAC V10.0 SP1 installieren'; pattern='(?i)SENTRON.*PAC.*V?10.*SP\s*1'; expected='SENTRON PAC V10 SP1 vorhanden' },
-              @{ id='IPC-C-0108'; description='SIMOCODE pro PCS7 V10.0 SP1 installieren'; pattern='(?i)SIMOCODE.*V?10.*SP\s*1'; expected='SIMOCODE V10 SP1 vorhanden' },
-              @{ id='IPC-C-0109'; description='SIMOCODE Migration Legacy V10.0 SP1 installieren'; pattern='(?i)SIMOCODE.*(Migration|Legacy).*V?10.*SP\s*1'; expected='SIMOCODE Migration Legacy V10 SP1 vorhanden' },
-              @{ id='IPC-C-0114'; description='WinCC OPCServer V3.9 SP12 Update 5 installieren'; pattern='(?i)(WinCC.*OPC.*3\.9.*SP\s*12.*(Upd|Update)\s*5|OPCServer.*3\.9)'; expected='WinCC OPCServer V3.9 SP12 Update 5 vorhanden' },
-              @{ id='IPC-C-0115'; description='ORCLA Setupdatei ausfuehren'; pattern='(?i)ORCLA'; expected='ORCLA vorhanden' },
-              @{ id='IPC-C-0118'; description='Watchdog und OPC UA Server aktivieren'; pattern='(?i)(Watchdog|OPC UA Server)'; expected='ORCLA Watchdog und OPC-UA-Komponenten vorhanden' }
-            ) 'IPC OS Client'
-            Add-BoolCheck 'IPC-C-0086' 'SIMATIC Shell Terminalbus konfigurieren' ($terminalAdapters.Count -gt 0) (Join-Evidence @($terminalAdapters.name)) 'Adapter Terminalbus vorhanden' 'IPC OS Client'
-            Add-BoolCheck 'IPC-C-0245' 'PROFINET-IO-Protokoll am Terminalbus deaktivieren' $terminalBusPassed $terminalBusActual 'PROFINET-/PNIO-Bindung am Terminalbus deaktiviert' 'IPC OS Client' $true $terminalBusCheckable
-            Add-BoolCheck 'IPC-C-0247' 'Energieverwaltung produktiver Netzwerkadapter deaktivieren' $powerPassed $powerActual 'Computer darf produktive Adapter nicht ausschalten' 'IPC OS Client' $true $powerCheckable
-            Add-BoolCheck 'IPC-C-0248' '.NET Framework 3.5 aktivieren' $netFx3Enabled $netFx3Actual '.NET Framework 3.5 aktiviert' 'IPC OS Client'
-          }
-
-          'IPC besondere Konfiguration' {
-            if ($specialSubtype -eq 'IPC ES') {
-              Add-ProgramDefinitions @(
-                @{ id='IPC-ES-0076'; description='.NET Framework 3.5 SP1 installieren'; pattern='(?i)(NET-Framework-Core|NetFx3|\.NET Framework 3\.5)'; expected='.NET Framework 3.5 vorhanden' },
-                @{ id='IPC-ES-0078'; description='PCS 7 V10 installieren - Engineering Station'; pattern='(?i)(PCS\s*7.*Engineering|SIMATIC Manager|STEP\s*7|CFC|SFC)'; expected='PCS 7 Engineering-Komponenten vorhanden' },
-                @{ id='IPC-ES-0081'; description='PCS 7 V7 Basis Library installieren'; pattern=$v7LibraryPattern; expected='V7 Basis Library vorhanden' },
-                @{ id='IPC-ES-0082'; description='PCS7 Bibliothek ueber Rahmensetup installieren'; pattern='(?i)PCS\s*7.*(Basis|Base).*Library.*V?10'; expected='PCS 7 Basis Library V10 vorhanden' },
-                @{ id='IPC-ES-0083'; description='PTE400 V10.0 installieren'; pattern='(?i)PTE\s*400'; expected='PTE400 V10 vorhanden' },
-                @{ id='IPC-ES-0084'; description='SENTRON 3WL/3VL V10 installieren'; pattern='(?i)SENTRON.*(3WL|3VL)'; expected='SENTRON 3WL/3VL V10 vorhanden' },
-                @{ id='IPC-ES-0085'; description='SENTRON PAC V10 installieren'; pattern='(?i)SENTRON.*PAC'; expected='SENTRON PAC V10 vorhanden' },
-                @{ id='IPC-ES-0086'; description='SIMOCODE pro PCS7 V10.0 installieren'; pattern='(?i)SIMOCODE.*V?10'; expected='SIMOCODE pro PCS7 V10 vorhanden' },
-                @{ id='IPC-ES-0087'; description='SIMOCODE Migration Legacy V10.0 installieren'; pattern='(?i)SIMOCODE.*(Migration|Legacy).*V?10'; expected='SIMOCODE Migration Legacy V10 vorhanden' },
-                @{ id='IPC-ES-0089'; description='S7 F Systems V6.4 SP1 installieren'; pattern='(?i)S7\s*F\s*Systems.*6\.4.*SP\s*1'; expected='S7 F Systems V6.4 SP1 vorhanden' },
-                @{ id='IPC-ES-0091'; description='Industry Library V10.0 installieren'; pattern='(?i)Industry.*Library.*V?10'; expected='Industry Library V10 vorhanden' },
-                @{ id='IPC-ES-0092'; description='PowerControl freigegebenen Stand installieren'; pattern='(?i)PowerControl'; expected='PowerControl laut TPI vorhanden'; relevant=(Is-AddonRelevant 'PowerControl' '(?i)PowerControl') },
-                @{ id='IPC-ES-0093'; description='PowerControl Update installieren'; pattern='(?i)PowerControl.*(Update|Upd|SP)'; expected='Freigegebenes PowerControl-Update vorhanden'; relevant=(Is-AddonRelevant 'PowerControl' '(?i)PowerControl') },
-                @{ id='IPC-ES-0094'; description='DriveES PCS 7 APL V10.0 installieren'; pattern='(?i)Drive\s*ES.*PCS\s*7.*APL.*V?10'; expected='Drive ES PCS7 APL V10 vorhanden' },
-                @{ id='IPC-ES-0095'; description='SITOP PCS 7 APL V4.0 installieren'; pattern='(?i)SITOP.*PCS\s*7.*APL.*V?4'; expected='SITOP PCS7 APL V4 vorhanden' },
-                @{ id='IPC-ES-0096'; description='SIMATIC Safety Matrix V6.3 SP1 installieren'; pattern='(?i)Safety.*Matrix.*6\.3.*SP\s*1'; expected='Safety Matrix V6.3 SP1 vorhanden' },
-                @{ id='IPC-ES-0099'; description='PCS 7 V10 UC02 installieren'; pattern='(?i)(UC\s*0?2|Update Collection\s*0?2)'; expected='PCS 7 V10 UC02 vorhanden' },
-                @{ id='IPC-ES-0134'; description='SIMATIC IPC ORCLA installieren und konfigurieren'; pattern='(?i)ORCLA'; expected='ORCLA vorhanden' }
-              ) 'IPC ES'
-              Add-BoolCheck 'IPC-ES-0080' 'SIMATIC Shell Terminalbus konfigurieren' ($terminalAdapters.Count -gt 0) (Join-Evidence @($terminalAdapters.name)) 'Adapter Terminalbus vorhanden' 'IPC ES'
-              Add-BoolCheck 'IPC-ES-0129' 'PROFINET-IO-Protokoll am Terminalbus deaktivieren' $terminalBusPassed $terminalBusActual 'PROFINET-/PNIO-Bindung am Terminalbus deaktiviert' 'IPC ES' $true $terminalBusCheckable
-              Add-BoolCheck 'IPC-ES-0131' 'Energieverwaltung produktiver Netzwerkadapter deaktivieren' $powerPassed $powerActual 'Computer darf produktive Adapter nicht ausschalten' 'IPC ES' $true $powerCheckable
-              Add-BoolCheck 'IPC-ES-0135' '.NET Framework 3.5 aktivieren' $netFx3Enabled $netFx3Actual '.NET Framework 3.5 aktiviert' 'IPC ES'
-              Add-BoolCheck 'IPC-ES-0138' 'Master-ES-Rolle eindeutig festlegen' ($engineeringScore -gt 0) ('Engineering-Score=' + $engineeringScore) 'Engineering-Station eindeutig erkannt' 'IPC ES'
-            } elseif ($specialSubtype -eq 'IPC DC') {
-              Add-ProgramDefinitions @(
-                @{ id='IPC-DC-0075'; description='ORCLA Setupdatei ausfuehren'; pattern='(?i)ORCLA'; expected='ORCLA vorhanden' },
-                @{ id='IPC-DC-0076'; description='Watchdog und OPC UA Server aktivieren'; pattern='(?i)(Watchdog|OPC UA Server)'; expected='Watchdog und OPC-UA-Komponenten vorhanden' }
-              ) 'IPC DC'
-              Add-BoolCheck 'IPC-DC-0216' 'Energieverwaltung produktiver Netzwerkadapter deaktivieren' $powerPassed $powerActual 'Computer darf produktive Adapter nicht ausschalten' 'IPC DC' $true $powerCheckable
-              Add-BoolCheck 'IPC-DC-0217' 'MTU 1494 bei Systemen ohne PCS 7 einstellen' $mtu1494Passed $mtuActual 'MTU 1494 an den laut TPI betroffenen Netzwerkadaptern' 'IPC DC' $nonPcs7MtuRequired $mtuCheckable
-              Add-BoolCheck 'IPC-DC-0218' 'Active Directory-Domaenendienste installieren' $domainControllerDetected $adActual 'AD-Domaenendienste installiert beziehungsweise DomainRole >= 4' 'IPC DC'
-            } else {
-              # Spezial-IPC erkannt, aber keine eindeutige ES-/DC-Unterrolle.
-              # Die ID-Pruefungen werden im Report als NICHT_PRUEFBAR ausgegeben.
+            foreach ($line in $matchesInLog) {
+              $logProductLines += [ordered]@{
+                source_file = $logFile.file_name
+                line = $line
+              }
             }
-          }
+          } catch {}
         }
 
-        $checkSummary = [ordered]@{
-          ok = @($checks | Where-Object { $_.status -eq 'OK' }).Count
-          nok = @($checks | Where-Object { $_.status -eq 'NOK' }).Count
-          nicht_relevant = @($checks | Where-Object { $_.status -eq 'NICHT_RELEVANT' }).Count
-          nicht_pruefbar = @($checks | Where-Object { $_.status -eq 'NICHT_PRUEFBAR' }).Count
+        $pcs7VersionsFromLogs = @($pcs7SetupLogs |
+          ForEach-Object { $_.version_from_file_name } |
+          Where-Object { $_ -ne $null -and $_ -ne "" } |
+          Select-Object -Unique)
+
+        $pcs7VersionsFromRegistry = @($pcs7RelatedComponents |
+          ForEach-Object { $_.version } |
+          Where-Object { $_ -ne $null -and $_ -ne "" } |
+          Select-Object -Unique)
+
+        $installationPerformed = (($pcs7SetupLogs.Count -gt 0) -or ($pcs7RelatedComponents.Count -gt 0))
+        $evidenceQuality = "nicht_nachgewiesen"
+        if ($pcs7SetupLogs.Count -gt 0 -and $pcs7RelatedComponents.Count -gt 0) {
+          $evidenceQuality = "hoch_Logdatei_und_Registry"
+        } elseif ($pcs7SetupLogs.Count -gt 0) {
+          $evidenceQuality = "hoch_Setup_Logdatei"
+        } elseif ($pcs7RelatedComponents.Count -gt 0) {
+          $evidenceQuality = "mittel_Registry"
+        } elseif ($components.Count -gt 0) {
+          $evidenceQuality = "niedrig_Siemens_Komponenten_ohne_PCS7_Eindeutigkeit"
         }
 
-        $pcs7Components = @($programs | Where-Object {
-          ($_.name + ' ' + $_.publisher) -match '(?i)(Siemens|SIMATIC|PCS\s*7|PCS7|WinCC|STEP\s*7|CEMAT|SENTRON|SIMOCODE|Industry Library|Safety Matrix|SITOP|Drive ES|PTE400|PowerControl|ORCLA)'
-        })
+        $latestLog = $null
+        if ($pcs7SetupLogs.Count -gt 0) {
+          $latestLog = $pcs7SetupLogs[0]
+        }
+
+        $systemLocale = $null
+        $uiCulture = $null
+        $culture = $null
+        $userLanguageList = @()
+
+        try { $systemLocale = Get-WinSystemLocale } catch {}
+        try { $uiCulture = Get-UICulture } catch {}
+        try { $culture = Get-Culture } catch {}
+        try { $userLanguageList = @((Get-WinUserLanguageList).LanguageTag) } catch {}
+
 
         $result = [ordered]@{
-          target_timestamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
+          scan_timestamp = $null 
+          target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
           ip = "{{ inventory_hostname }}"
           ansible_reachable = $true
-          computername = [string]$env:COMPUTERNAME
-          manufacturer = [string]$computerSystem.Manufacturer
-          model = [string]$computerSystem.Model
-          domain = [string]$computerSystem.Domain
-          domain_role = [int]$computerSystem.DomainRole
-          part_of_domain = [bool]$computerSystem.PartOfDomain
-          os_caption = [string]$operatingSystem.Caption
-          os_version = [string]$operatingSystem.Version
-          os_build = [string]$operatingSystem.BuildNumber
-          platform_detected = if ($isVirtual) { 'VM' } elseif ($isSiemensIPC) { 'Siemens IPC' } else { 'Physisch/Unbekannt' }
-          pcs7_detected = [bool]$pcs7Detected
-          pcs7_role_detected = $role
-          category = $category
-          special_subtype = $specialSubtype
-          classification_confidence = $classificationConfidence
-          classification_note = $classificationNote
-          applicable_follow_up_playbooks = $followUpPlaybooks
-          classification_scores = [ordered]@{
-            engineering = $engineeringScore
-            os_server = $serverScore
-            os_client = $clientScore
-          }
-          classification_evidence = [ordered]@{
-            pcs7_core = $pcs7CoreEvidence
-            pcs7_detected = [bool]$pcs7Detected
-            engineering = $engineeringEvidence
-            os_server = $serverEvidence
-            os_client = $clientEvidence
-            domain_controller = $domainControllerDetected
-            orcla = $orclaEvidence
-          }
-          winrm_port = "{{ ansible_port | default('') }}"
-          winrm_scheme = "{{ ansible_winrm_scheme | default('') }}"
-          winrm_open_ports = "{{ discovered_winrm_open_ports | default('') }}"
-          pcs7_setup_log_path = $setupLogPath
-          pcs7_setup_log_exists = (Test-Path $setupLogPath)
-          pcs7_setup_logs = $setupLogs
-          pcs7_components = $pcs7Components
-          installed_programs = $programs
-          windows_features = $features
-          relevant_services = @($services | Where-Object {
-            ($_.name + ' ' + $_.display_name) -match '(?i)(SIMATIC|Siemens|WinCC|PCS|CEMAT|ORCLA|OPC|Sybase|SQL)'
-          })
-          local_pcs7_groups = $simaticGroups
-          network_adapters = $networkAdapters
-          checks = @($checks)
-          check_summary = $checkSummary
+          computername = $env:COMPUTERNAME
+          fqdn = $fqdn
+          domain = $cs.Domain
+          part_of_domain = $cs.PartOfDomain
+          workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { $null }
+          os_caption = $os.Caption
+          os_version = $os.Version
+          pcs7_installation_performed = $installationPerformed
+          evidence_quality = $evidenceQuality
+          setup_log_path = $setupLogPath
+          setup_log_exists = (Test-Path $setupLogPath)
+          latest_pcs7_setup_log = $latestLog
+          pcs7_versions_from_logs = $pcs7VersionsFromLogs
+          pcs7_versions_from_registry = $pcs7VersionsFromRegistry
+          pcs7_setup_logs = $pcs7SetupLogs
+          pcs7_related_component_count = $pcs7RelatedComponents.Count
+          siemens_component_count = $components.Count
+          pcs7_related_components = $pcs7RelatedComponents
+          siemens_components = $components
+          log_product_lines = $logProductLines
+          adapters = $adapters
+          system_locale = if ($systemLocale) { $systemLocale.Name } else { $null }
+          system_locale_display_name = if ($systemLocale) { $systemLocale.DisplayName } else { $null }
+          ui_culture = if ($uiCulture) { $uiCulture.Name } else { $null }
+          ui_culture_display_name = if ($uiCulture) { $uiCulture.DisplayName } else { $null }
+          culture = if ($culture) { $culture.Name } else { $null }
+          culture_display_name = if ($culture) { $culture.DisplayName } else { $null }
+          user_language_list = $userLanguageList
           error = $null
         }
 
-        $result | ConvertTo-Json -Depth 14 -Compress
+        $result | ConvertTo-Json -Depth 10 -Compress
       register: pcs7_raw
-      when: pcs7_ansible_reachable | bool
+      when: win_ping_result is defined and win_ping_result is succeeded
       changed_when: false
-      failed_when: false
 
     - name: PCS7-Pruefergebnis als Host-Fact speichern
       ansible.builtin.set_fact:
-        pcs7_validation_result: "{{ pcs7_raw.stdout | trim | from_json }}"
+        pcs7_info: "{{ pcs7_raw.stdout | trim | from_json }}"
       when:
-        - pcs7_ansible_reachable | bool
         - pcs7_raw is defined
-        - pcs7_raw.rc | default(1) == 0
         - pcs7_raw.stdout is defined
-        - pcs7_raw.stdout | trim | length > 0
+        - pcs7_raw.stdout | length > 0
 
-
-- name: Getrennte VM-, IPC- und Uebersichtsreports erzeugen
+- name: PCS7-Report lokal auf dem Ansible-Controller erzeugen
   hosts: localhost
-  connection: local
   gather_facts: false
-
+  # vars:
+  #   result_dir: "./reports"
   tasks:
-    - name: Pruefen, ob der Ablagepfad vorhanden ist
-      ansible.builtin.stat:
-        path: "{{ result_dir }}"
-      register: report_directory_status
 
-    - name: Abbrechen, wenn der Ablagepfad existiert, aber kein Ordner ist
-      ansible.builtin.fail:
-        msg: >-
-          Der konfigurierte Ablagepfad {{ result_dir }} existiert,
-          ist aber kein Verzeichnis.
-      when:
-        - report_directory_status.stat.exists | bool
-        - not (report_directory_status.stat.isdir | default(false) | bool)
+    - name: Zeitstempel fuer Report sicherstellen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ hostvars['localhost']['report_timestamp'] | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}"
+        report_timestamp_iso: "{{ hostvars['localhost']['report_timestamp_iso'] | default(lookup('pipe', 'date -Iseconds')) }}"
 
-    - name: Ablageordner erzeugen
+    - name: Report-Verzeichnis erzeugen
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        mode: "0750"
+        mode: "0755"
 
-    - name: Temporaeren Rohdaten-JSON-Report erzeugen
+    - name: JSON-Report erzeugen
       ansible.builtin.copy:
-        dest: "{{ result_dir }}/.0020_pcs7_rohdaten_{{ report_file_timestamp }}.json"
+        dest: "{{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.json"
         mode: "0644"
         content: |
           [
-          {% for h in discovered_ips %}
+          {% for h in groups['pcs7_check_targets'] | default([]) %}
           {% set fallback = {
-            'target_timestamp': '',
+            'scan_timestamp': report_timestamp_iso,
             'ip': h,
             'ansible_reachable': false,
-            'computername': '',
-            'manufacturer': '',
-            'model': '',
-            'domain': '',
-            'domain_role': '',
-            'part_of_domain': '',
-            'os_caption': '',
-            'os_version': '',
-            'os_build': '',
-            'platform_detected': 'Nicht pruefbar',
-            'pcs7_detected': false,
-            'pcs7_role_detected': 'Nicht pruefbar',
-            'category': 'Nicht klassifiziert',
-            'special_subtype': '',
-            'classification_confidence': 'keine',
-            'classification_note': 'WinRM nicht erreichbar; keine Klassifikation moeglich',
-            'applicable_follow_up_playbooks': [],
-            'classification_scores': {},
-            'classification_evidence': {},
-            'winrm_port': hostvars[h].discovered_winrm_port | default(''),
-            'winrm_scheme': hostvars[h].discovered_winrm_scheme | default(''),
-            'winrm_open_ports': hostvars[h].discovered_winrm_open_ports | default(''),
-            'pcs7_components': [],
-            'checks': [],
-            'check_summary': {
-              'ok': 0,
-              'nok': 0,
-              'nicht_relevant': 0,
-              'nicht_pruefbar': 0
-            },
-            'error': 'WinRM nicht erreichbar, Zugriff verweigert oder PowerShell-Auswertung fehlgeschlagen'
+            'pcs7_installation_performed': false,
+            'evidence_quality': 'nicht_pruefbar',
+            'error': 'WinRM nicht erreichbar oder Zugriff verweigert'
           } %}
-          {% set host_result = hostvars[h].pcs7_validation_result | default(fallback) %}
-          {{ host_result | combine({'scan_timestamp': report_csv_timestamp}) | to_nice_json }}{% if not loop.last %},{% endif %}
+          {{ ((hostvars[h].pcs7_info | default(fallback)) | combine({'scan_timestamp': report_timestamp_iso})) | to_nice_json }}{% if not loop.last %},{% endif %}
           {% endfor %}
           ]
-
-    - name: CSV-Report mit Status- und Istwertspalte je ID erzeugen
+          
+    - name: CSV-Report aus JSON erzeugen
       ansible.builtin.shell: |
         set -euo pipefail
         "{{ ansible_playbook_python }}" - <<'PY'
-        import copy
         import csv
         import json
-        import re
         from pathlib import Path
 
-        raw_json_path = Path("{{ result_dir }}/.0020_pcs7_rohdaten_{{ report_file_timestamp }}.json")
-        vm_json_path = Path("{{ result_dir }}/0020_pcs7_vm_detail_{{ report_file_timestamp }}.json")
-        vm_csv_path = Path("{{ result_dir }}/0020_pcs7_vm_detail_{{ report_file_timestamp }}.csv")
-        ipc_json_path = Path("{{ result_dir }}/0020_pcs7_ipc_detail_{{ report_file_timestamp }}.json")
-        ipc_csv_path = Path("{{ result_dir }}/0020_pcs7_ipc_detail_{{ report_file_timestamp }}.csv")
-        overview_json_path = Path("{{ result_dir }}/0020_pcs7_uebersicht_{{ report_file_timestamp }}.json")
-        overview_csv_path = Path("{{ result_dir }}/0020_pcs7_uebersicht_{{ report_file_timestamp }}.csv")
-        data = json.loads(raw_json_path.read_text(encoding="utf-8"))
+        json_path = Path("{{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.json")
+        csv_path = Path("{{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.csv")
 
-        def natural_key(value):
-            return [int(part) if part.isdigit() else part.lower()
-                    for part in re.split(r"(\d+)", str(value))]
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        def as_list(value):
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return value
+            return [value]
+
+        def join_values(values, sep=","):
+            return sep.join(str(v) for v in as_list(values) if v not in (None, ""))
 
         def component_text(components):
-            values = []
-            for component in components or []:
-                if not isinstance(component, dict):
+            parts = []
+            for comp in as_list(components):
+                if not isinstance(comp, dict):
                     continue
-                name = str(component.get("name") or "").strip()
-                version = str(component.get("version") or "").strip()
-                if name and version:
-                    values.append(f"{name} ({version})")
+                name = str(comp.get("name") or "").strip()
+                version = str(comp.get("version") or "").strip()
+                install_date = str(comp.get("install_date") or "").strip()
+                if name and version and install_date:
+                    parts.append(f"{name} ({version}, installiert: {install_date})")
+                elif name and version:
+                    parts.append(f"{name} ({version})")
                 elif name:
-                    values.append(name)
-            return " | ".join(values)
+                    parts.append(name)
+            return " | ".join(parts)
 
-        known_ids = ['IPC-C-0083', 'IPC-C-0086', 'IPC-C-0087', 'IPC-C-0088', 'IPC-C-0089', 'IPC-C-0090', 'IPC-C-0091', 'IPC-C-0093', 'IPC-C-0094', 'IPC-C-0095', 'IPC-C-0096', 'IPC-C-0097', 'IPC-C-0098', 'IPC-C-0099', 'IPC-C-0102', 'IPC-C-0104', 'IPC-C-0105', 'IPC-C-0106', 'IPC-C-0107', 'IPC-C-0108', 'IPC-C-0109', 'IPC-C-0114', 'IPC-C-0115', 'IPC-C-0118', 'IPC-C-0245', 'IPC-C-0247', 'IPC-C-0248', 'IPC-DC-0075', 'IPC-DC-0076', 'IPC-DC-0216', 'IPC-DC-0217', 'IPC-DC-0218', 'IPC-ES-0076', 'IPC-ES-0078', 'IPC-ES-0080', 'IPC-ES-0081', 'IPC-ES-0082', 'IPC-ES-0083', 'IPC-ES-0084', 'IPC-ES-0085', 'IPC-ES-0086', 'IPC-ES-0087', 'IPC-ES-0089', 'IPC-ES-0091', 'IPC-ES-0092', 'IPC-ES-0093', 'IPC-ES-0094', 'IPC-ES-0095', 'IPC-ES-0096', 'IPC-ES-0099', 'IPC-ES-0129', 'IPC-ES-0131', 'IPC-ES-0134', 'IPC-ES-0135', 'IPC-ES-0138', 'IPC-S-0075', 'IPC-S-0076', 'IPC-S-0077', 'IPC-S-0078', 'IPC-S-0079', 'IPC-S-0080', 'IPC-S-0081', 'IPC-S-0083', 'IPC-S-0084', 'IPC-S-0085', 'IPC-S-0086', 'IPC-S-0087', 'IPC-S-0088', 'IPC-S-0089', 'IPC-S-0092', 'IPC-S-0094', 'IPC-S-0095', 'IPC-S-0096', 'IPC-S-0097', 'IPC-S-0098', 'IPC-S-0099', 'IPC-S-0102', 'IPC-S-0103', 'IPC-S-0105', 'IPC-S-0200', 'IPC-S-0202', 'IPC-S-0205', 'VM-C-0033', 'VM-C-0082', 'VM-C-0083', 'VM-C-0084', 'VM-C-0085', 'VM-C-0091', 'VM-C-0155', 'VM-C-0157', 'VM-ES-0031', 'VM-ES-0073', 'VM-ES-0074', 'VM-ES-0075', 'VM-ES-0076', 'VM-ES-0077', 'VM-ES-0079', 'VM-ES-0080', 'VM-ES-0081', 'VM-ES-0082', 'VM-ES-0083', 'VM-ES-0084', 'VM-ES-0085', 'VM-ES-0086', 'VM-ES-0087', 'VM-ES-0088', 'VM-ES-0089', 'VM-ES-0170', 'VM-ES-0174', 'VM-S-0033', 'VM-S-0076', 'VM-S-0077', 'VM-S-0078', 'VM-S-0079', 'VM-S-0080', 'VM-S-0081', 'VM-S-0082', 'VM-S-0092', 'VM-S-0179', 'VM-S-0183']
-        known_id_descriptions = {'IPC-C-0083': 'PCS 7 V10 installieren - OS Client', 'IPC-C-0086': 'SIMATIC Shell Terminalbus konfigurieren', 'IPC-C-0087': 'PTE400 V10.0 installieren', 'IPC-C-0088': 'SENTRON 3WL/3VL V10 installieren', 'IPC-C-0089': 'SENTRON PAC V10 installieren', 'IPC-C-0090': 'SIMOCODE pro PCS7 V10.0 installieren', 'IPC-C-0091': 'SIMOCODE Migration Legacy V10.0 installieren', 'IPC-C-0093': 'S7 F Systems V6.4 SP1 installieren', 'IPC-C-0094': 'Industry Library V10.0 installieren', 'IPC-C-0095': 'PowerControl freigegebenen Stand installieren', 'IPC-C-0096': 'PowerControl Update installieren', 'IPC-C-0097': 'DriveES PCS 7 APL V10.0 installieren', 'IPC-C-0098': 'SITOP PCS 7 APL V4.0 installieren', 'IPC-C-0099': 'SIMATIC Safety Matrix V6.3 SP1 installieren', 'IPC-C-0102': 'PCS 7 V10 UC02 installieren', 'IPC-C-0104': 'PCS 7 V10 SP1 installieren', 'IPC-C-0105': 'Industry Library 10.0 Update 1 installieren', 'IPC-C-0106': 'SENTRON 3WL/3VL V10.0 SP1 installieren', 'IPC-C-0107': 'SENTRON PAC V10.0 SP1 installieren', 'IPC-C-0108': 'SIMOCODE pro PCS7 V10.0 SP1 installieren', 'IPC-C-0109': 'SIMOCODE Migration Legacy V10.0 SP1 installieren', 'IPC-C-0114': 'WinCC OPCServer V3.9 SP12 Update 5 installieren', 'IPC-C-0115': 'ORCLA Setupdatei ausfuehren', 'IPC-C-0118': 'Watchdog und OPC UA Server aktivieren', 'IPC-C-0245': 'PROFINET-IO-Protokoll am Terminalbus deaktivieren', 'IPC-C-0247': 'Energieverwaltung produktiver Netzwerkadapter deaktivieren', 'IPC-C-0248': '.NET Framework 3.5 aktivieren', 'IPC-DC-0075': 'ORCLA Setupdatei ausfuehren', 'IPC-DC-0076': 'Watchdog und OPC UA Server aktivieren', 'IPC-DC-0216': 'Energieverwaltung produktiver Netzwerkadapter deaktivieren', 'IPC-DC-0217': 'MTU 1494 bei Systemen ohne PCS 7 einstellen', 'IPC-DC-0218': 'Active Directory-Domaenendienste installieren', 'IPC-ES-0076': '.NET Framework 3.5 SP1 installieren', 'IPC-ES-0078': 'PCS 7 V10 installieren - Engineering Station', 'IPC-ES-0080': 'SIMATIC Shell Terminalbus konfigurieren', 'IPC-ES-0081': 'PCS 7 V7 Basis Library installieren', 'IPC-ES-0082': 'PCS7 Bibliothek ueber Rahmensetup installieren', 'IPC-ES-0083': 'PTE400 V10.0 installieren', 'IPC-ES-0084': 'SENTRON 3WL/3VL V10 installieren', 'IPC-ES-0085': 'SENTRON PAC V10 installieren', 'IPC-ES-0086': 'SIMOCODE pro PCS7 V10.0 installieren', 'IPC-ES-0087': 'SIMOCODE Migration Legacy V10.0 installieren', 'IPC-ES-0089': 'S7 F Systems V6.4 SP1 installieren', 'IPC-ES-0091': 'Industry Library V10.0 installieren', 'IPC-ES-0092': 'PowerControl freigegebenen Stand installieren', 'IPC-ES-0093': 'PowerControl Update installieren', 'IPC-ES-0094': 'DriveES PCS 7 APL V10.0 installieren', 'IPC-ES-0095': 'SITOP PCS 7 APL V4.0 installieren', 'IPC-ES-0096': 'SIMATIC Safety Matrix V6.3 SP1 installieren', 'IPC-ES-0099': 'PCS 7 V10 UC02 installieren', 'IPC-ES-0129': 'PROFINET-IO-Protokoll am Terminalbus deaktivieren', 'IPC-ES-0131': 'Energieverwaltung produktiver Netzwerkadapter deaktivieren', 'IPC-ES-0134': 'SIMATIC IPC ORCLA installieren und konfigurieren', 'IPC-ES-0135': '.NET Framework 3.5 aktivieren', 'IPC-ES-0138': 'Master-ES-Rolle eindeutig festlegen', 'IPC-S-0075': 'SIMATIC Shell Terminalbus konfigurieren', 'IPC-S-0076': 'SIMATIC Shell Redundanzbus konfigurieren', 'IPC-S-0077': 'PTE400 V10.0 installieren', 'IPC-S-0078': 'SENTRON 3WL/3VL V10 installieren', 'IPC-S-0079': 'SENTRON PAC V10 installieren', 'IPC-S-0080': 'SIMOCODE pro PCS7 V10.0 installieren', 'IPC-S-0081': 'SIMOCODE Migration Legacy V10.0 installieren', 'IPC-S-0083': 'S7 F Systems V6.4 SP1 installieren', 'IPC-S-0084': 'Industry Library V10.0 installieren', 'IPC-S-0085': 'PowerControl freigegebenen Stand installieren', 'IPC-S-0086': 'PowerControl Update installieren', 'IPC-S-0087': 'DriveES PCS 7 APL V10.0 installieren', 'IPC-S-0088': 'SITOP PCS 7 APL V4.0 installieren', 'IPC-S-0089': 'SIMATIC Safety Matrix V6.3 SP1 installieren', 'IPC-S-0092': 'PCS 7 V10 UC02 installieren', 'IPC-S-0094': 'PCS 7 V10 SP1 installieren', 'IPC-S-0095': 'Industry Library 10.0 Update 1 installieren', 'IPC-S-0096': 'SENTRON 3WL/3VL V10.0 SP1 installieren', 'IPC-S-0097': 'SENTRON PAC V10.0 SP1 installieren', 'IPC-S-0098': 'SIMOCODE pro PCS7 V10.0 SP1 installieren', 'IPC-S-0099': 'SIMOCODE Migration Legacy V10.0 SP1 installieren', 'IPC-S-0102': 'WinCC OPCServer V3.9 SP12 Update 5 installieren', 'IPC-S-0103': 'ORCLA Setupdatei ausfuehren', 'IPC-S-0105': 'Watchdog und OPC UA Server aktivieren', 'IPC-S-0200': 'PROFINET-IO-Protokoll am Terminalbus deaktivieren', 'IPC-S-0202': 'Energieverwaltung produktiver Netzwerkadapter deaktivieren', 'IPC-S-0205': '.NET Framework 3.5 aktivieren', 'VM-C-0033': 'Automatische Installation der SIMATIC PCS 7 Komponenten', 'VM-C-0082': 'SIMATIC Management Agent installieren', 'VM-C-0083': 'PCS 7 Software aktualisieren', 'VM-C-0084': 'SIMATIC Management Agent aktualisieren', 'VM-C-0085': 'CEMAT V10 installieren', 'VM-C-0091': 'Einstellungen fuer PCS 7 Benutzer durchfuehren', 'VM-C-0155': 'PROFINET-IO-Protokoll am Terminalbus deaktivieren', 'VM-C-0157': '.NET Framework 3.5 aktivieren', 'VM-ES-0031': 'Automatische Installation der SIMATIC PCS 7 Komponenten', 'VM-ES-0073': 'PCS 7 V10.0 installieren - Management Console', 'VM-ES-0074': 'PCS 7 V7 Basis Library installieren', 'VM-ES-0075': 'SIMATIC Management Console installieren', 'VM-ES-0076': 'PCS 7 Software installieren - Engineering', 'VM-ES-0077': 'SIMATIC Management Agent Dienst auf Automatisch', 'VM-ES-0079': 'SIMATIC Management Agent installieren', 'VM-ES-0080': 'PCS 7 Software mittels SMC aktualisieren', 'VM-ES-0081': 'PCS 7 Software manuell aktualisieren', 'VM-ES-0082': 'SIMATIC Management Agent aktualisieren', 'VM-ES-0083': 'CEMAT V10 mittels SMC installieren', 'VM-ES-0084': 'CEMAT V10 mittels Rahmensetup installieren', 'VM-ES-0085': 'AS/OS Engineering Update installieren', 'VM-ES-0086': 'CFC Update installieren', 'VM-ES-0087': 'IEAPO Update installieren', 'VM-ES-0088': 'XML Transfer Update installieren', 'VM-ES-0089': 'PCS 7 Basis Library Update installieren', 'VM-ES-0170': 'PROFINET-IO-Protokoll am Terminalbus deaktivieren', 'VM-ES-0174': '.NET Framework 3.5 aktivieren', 'VM-S-0033': 'Automatische Installation der SIMATIC PCS 7 Komponenten', 'VM-S-0076': 'PCS 7 V10 installieren - OS Server', 'VM-S-0077': 'PCS 7 V7 Basis Library installieren', 'VM-S-0078': 'SIMATIC Management Agent installieren', 'VM-S-0079': 'PCS 7 Software aktualisieren', 'VM-S-0080': 'SIMATIC Management Agent aktualisieren', 'VM-S-0081': 'CEMAT V10 installieren', 'VM-S-0082': 'PCS 7 Updates beziehungsweise PH Ready installieren', 'VM-S-0092': 'Einstellungen fuer PCS 7 Benutzer durchfuehren', 'VM-S-0179': 'PROFINET-IO-Protokoll am Terminalbus deaktivieren', 'VM-S-0183': '.NET Framework 3.5 aktivieren'}
-        known_ids += ['VM-DC-0169', 'VM-DC-0170', 'VM-DC-0171']
-        known_id_descriptions.update({
-            'VM-DC-0169': 'MTU 1494 bei Systemen ohne PCS 7 einstellen',
-            'VM-DC-0170': 'Active Directory-Domaenendienste installieren',
-            'VM-DC-0171': 'WINS-Server installieren',
-        })
+        def adapter_field(row, key):
+            values = []
+            for adapter in as_list(row.get("adapters")):
+                if isinstance(adapter, dict):
+                    values.extend(as_list(adapter.get(key)))
+            return join_values(values, ",")
 
-        all_ids = set(known_ids)
-        descriptions = dict(known_id_descriptions)
+        rows = []
         for item in data:
-            for check in item.get("checks") or []:
-                check_id = str(check.get("id") or "").strip()
-                if not check_id:
-                    continue
-                all_ids.add(check_id)
-                descriptions.setdefault(check_id, str(check.get("description") or ""))
-        all_ids = sorted(all_ids, key=natural_key)
+            latest_log = item.get("latest_pcs7_setup_log") or {}
+            rows.append({
+                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
+                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
+                "IP": item.get("ip", ""),
+                "Ansible_erreichbar": item.get("ansible_reachable", False),
+                "Computername": item.get("computername", ""),
+                "FQDN": item.get("fqdn", ""),
+                "Domaene_Workgroup": item.get("domain") or item.get("workgroup") or "",
+                "Domaenenmitglied": item.get("part_of_domain", ""),
+                "Betriebssystem": item.get("os_caption", ""),
+                "OS_Version": item.get("os_version", ""),
+                "System_Locale": item.get("system_locale", ""),
+                "System_Locale_Anzeige": item.get("system_locale_display_name", ""),
+                "UI_Culture": item.get("ui_culture", ""),
+                "UI_Culture_Anzeige": item.get("ui_culture_display_name", ""),
+                "Culture": item.get("culture", ""),
+                "Culture_Anzeige": item.get("culture_display_name", ""),
+                "Benutzer_Sprachenliste": join_values(item.get("user_language_list"), ","),
+                "PCS7_Installation_nachgewiesen": item.get("pcs7_installation_performed", False),
+                "Nachweisqualitaet": item.get("evidence_quality", ""),
+                "PCS7_Versionen_aus_Setup_Log": join_values(item.get("pcs7_versions_from_logs"), " | "),
+                "PCS7_Versionen_aus_Registry": join_values(item.get("pcs7_versions_from_registry"), " | "),
+                "Letzte_PCS7_Setup_Logdatei": latest_log.get("file_name", "") if isinstance(latest_log, dict) else "",
+                "Letzte_Log_Aenderung": latest_log.get("last_write_time", "") if isinstance(latest_log, dict) else "",
+                "Anzahl_PCS7_Bezugskomponenten": item.get("pcs7_related_component_count", ""),
+                "PCS7_Komponenten_mit_Version": component_text(item.get("pcs7_related_components")),
+                "Anzahl_Siemens_Komponenten": item.get("siemens_component_count", ""),
+                "Alle_Siemens_Komponenten_mit_Version": component_text(item.get("siemens_components")),
+                "Setup_Logpfad_vorhanden": item.get("setup_log_exists", ""),
+                "Setup_Logpfad": item.get("setup_log_path", ""),
+                "Adapterbeschreibung": adapter_field(item, "description"),
+                "DNS_Hostname": adapter_field(item, "dns_host_name"),
+                "DNS_Domain": adapter_field(item, "dns_domain"),
+                "IPv4_Adressen": adapter_field(item, "ipv4_address"),
+                "IPv6_Adressen": adapter_field(item, "ipv6_address"),
+                "Subnetzmasken": adapter_field(item, "ip_subnet"),
+                "Gateway": adapter_field(item, "default_gateway"),
+                "DNS_Server": adapter_field(item, "dns_server"),
+                "MAC_Adressen": adapter_field(item, "mac_address"),
+                "DHCP": adapter_field(item, "dhcp_enabled"),
+                "DHCP_Server": adapter_field(item, "dhcp_server"),
+                "WINS_Primary": adapter_field(item, "wins_primary_server"),
+                "WINS_Secondary": adapter_field(item, "wins_secondary_server"),
+                "NetBIOS_Optionen": adapter_field(item, "tcpip_netbios_options"),
+                "WinRM_Port": item.get("winrm_port", ""),
+                "WinRM_Schema": item.get("winrm_scheme", ""),
+                "WinRM_Offene_Ports": item.get("winrm_open_ports", ""),
+                "Fehler": item.get("error", ""),
+            })
 
-        for item in data:
-            existing = {
-                str(check.get("id")): check
-                for check in (item.get("checks") or [])
-                if check.get("id")
-            }
-            checks_by_id = {}
-            for check_id in all_ids:
-                check = existing.get(check_id)
-                if check:
-                    checks_by_id[check_id] = {
-                        "description": check.get("description", descriptions.get(check_id, "")),
-                        "status": check.get("status", ""),
-                        "actual": check.get("actual", ""),
-                        "expected": check.get("expected", ""),
-                        "source_sheet": check.get("source_sheet", ""),
-                    }
-                elif (
-                    item.get("ansible_reachable")
-                    and item.get("category") in {
-                        "VM DC",
-                        "VM Windows ohne PCS7",
-                        "VM OS Server",
-                        "VM OS Client",
-                        "VM ES",
-                        "IPC ohne PCS7",
-                        "IPC OS Server",
-                        "IPC OS Client",
-                        "Physischer Windows DC",
-                        "Physischer Windows-Rechner ohne PCS7",
-                    }
-                    or (
-                        item.get("ansible_reachable")
-                        and item.get("category") == "IPC besondere Konfiguration"
-                        and item.get("special_subtype") in {"IPC ES", "IPC DC"}
-                    )
-                ):
-                    checks_by_id[check_id] = {
-                        "description": descriptions.get(check_id, ""),
-                        "status": "NICHT_RELEVANT",
-                        "actual": "",
-                        "expected": "",
-                        "source_sheet": "",
-                    }
-                else:
-                    reason = (
-                        "Rechnerart nicht eindeutig klassifiziert"
-                        if item.get("ansible_reachable")
-                        else "WinRM nicht erreichbar oder Auswertung fehlgeschlagen"
-                    )
-                    checks_by_id[check_id] = {
-                        "description": descriptions.get(check_id, ""),
-                        "status": "NICHT_PRUEFBAR",
-                        "actual": reason,
-                        "expected": "",
-                        "source_sheet": "",
-                    }
-            item["checks_by_id"] = checks_by_id
-            item["check_summary"] = {
-                "ok": sum(1 for value in checks_by_id.values() if value["status"] == "OK"),
-                "nok": sum(1 for value in checks_by_id.values() if value["status"] == "NOK"),
-                "nicht_relevant": sum(
-                    1 for value in checks_by_id.values()
-                    if value["status"] == "NICHT_RELEVANT"
-                ),
-                "nicht_pruefbar": sum(
-                    1 for value in checks_by_id.values()
-                    if value["status"] == "NICHT_PRUEFBAR"
-                ),
-            }
-
-        def is_vm_item(item):
-            platform = str(item.get("platform_detected") or "")
-            category = str(item.get("category") or "")
-            return platform == "VM" or category.startswith("VM ")
-
-        def is_ipc_item(item):
-            platform = str(item.get("platform_detected") or "")
-            category = str(item.get("category") or "")
-            return platform == "Siemens IPC" or category.startswith("IPC ")
-
-        vm_ids = [check_id for check_id in all_ids if check_id.startswith("VM-")]
-        ipc_ids = [check_id for check_id in all_ids if check_id.startswith("IPC-")]
-
-        def family_record(item, selected_ids):
-            result = copy.deepcopy(item)
-            selected_id_set = set(selected_ids)
-            family_checks = {
-                check_id: value
-                for check_id, value in (item.get("checks_by_id") or {}).items()
-                if check_id in selected_id_set
-            }
-            result["checks_by_id"] = family_checks
-            result["checks"] = [
-                check for check in (item.get("checks") or [])
-                if str(check.get("id") or "") in selected_id_set
-            ]
-            result["check_summary"] = {
-                "ok": sum(1 for value in family_checks.values() if value.get("status") == "OK"),
-                "nok": sum(1 for value in family_checks.values() if value.get("status") == "NOK"),
-                "nicht_relevant": sum(
-                    1 for value in family_checks.values()
-                    if value.get("status") == "NICHT_RELEVANT"
-                ),
-                "nicht_pruefbar": sum(
-                    1 for value in family_checks.values()
-                    if value.get("status") == "NICHT_PRUEFBAR"
-                ),
-            }
-            return result
-
-        vm_data = [family_record(item, vm_ids) for item in data if is_vm_item(item)]
-        ipc_data = [family_record(item, ipc_ids) for item in data if is_ipc_item(item)]
-
-        def overview_record(item):
-            summary = item.get("check_summary") or {}
-            scores = item.get("classification_scores") or {}
-            if is_vm_item(item):
-                detail_group = "VM"
-            elif is_ipc_item(item):
-                detail_group = "IPC"
-            else:
-                detail_group = "NUR_UEBERSICHT"
-
-            return {
-                "scan_timestamp": item.get("scan_timestamp", ""),
-                "target_timestamp": item.get("target_timestamp", ""),
-                "ip": item.get("ip", ""),
-                "ansible_reachable": item.get("ansible_reachable", False),
-                "computername": item.get("computername", ""),
-                "manufacturer": item.get("manufacturer", ""),
-                "model": item.get("model", ""),
-                "os_caption": item.get("os_caption", ""),
-                "os_version": item.get("os_version", ""),
-                "os_build": item.get("os_build", ""),
-                "domain": item.get("domain", ""),
-                "domain_role": item.get("domain_role", ""),
-                "platform_detected": item.get("platform_detected", ""),
-                "pcs7_detected": item.get("pcs7_detected", False),
-                "pcs7_role_detected": item.get("pcs7_role_detected", ""),
-                "category": item.get("category", ""),
-                "special_subtype": item.get("special_subtype", ""),
-                "classification_confidence": item.get("classification_confidence", ""),
-                "classification_note": item.get("classification_note", ""),
-                "applicable_follow_up_playbooks": item.get("applicable_follow_up_playbooks") or [],
-                "classification_scores": {
-                    "engineering": scores.get("engineering", ""),
-                    "os_server": scores.get("os_server", ""),
-                    "os_client": scores.get("os_client", ""),
-                },
-                "check_summary": {
-                    "ok": summary.get("ok", 0),
-                    "nok": summary.get("nok", 0),
-                    "nicht_relevant": summary.get("nicht_relevant", 0),
-                    "nicht_pruefbar": summary.get("nicht_pruefbar", 0),
-                },
-                "detail_report_group": detail_group,
-                "winrm_port": item.get("winrm_port", ""),
-                "winrm_scheme": item.get("winrm_scheme", ""),
-                "winrm_open_ports": item.get("winrm_open_ports", ""),
-                "error": item.get("error", ""),
-            }
-
-        overview_data = [overview_record(item) for item in data]
-
-        vm_json_path.write_text(
-            json.dumps(vm_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        ipc_json_path.write_text(
-            json.dumps(ipc_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        overview_json_path.write_text(
-            json.dumps(overview_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        detail_base_fields = [
+        fieldnames = [
             "Zeitstempel_Pruefung",
             "Zeitstempel_Zielsystem",
-            "IP_Adresse",
+            "IP",
             "Ansible_erreichbar",
             "Computername",
-            "Hersteller",
-            "Modell",
+            "FQDN",
+            "Domaene_Workgroup",
+            "Domaenenmitglied",
             "Betriebssystem",
             "OS_Version",
-            "OS_Build",
-            "Domaene",
-            "Domaenenrolle",
-            "Plattform_erkannt",
-            "PCS7_erkannt",
-            "PCS7_Rolle_erkannt",
-            "Kategorie",
-            "Spezialtyp",
-            "Klassifikationssicherheit",
-            "Klassifikationshinweis",
-            "Weitere_Pruefplaybooks",
-            "Engineering_Score",
-            "OS_Server_Score",
-            "OS_Client_Score",
-            "PCS7_Komponenten",
-            "Pruefungen_OK",
-            "Pruefungen_NOK",
-            "Pruefungen_NICHT_RELEVANT",
-            "Pruefungen_NICHT_PRUEFBAR",
+            "System_Locale",
+            "System_Locale_Anzeige",
+            "UI_Culture",
+            "UI_Culture_Anzeige",
+            "Culture",
+            "Culture_Anzeige",
+            "Benutzer_Sprachenliste",
+            "PCS7_Installation_nachgewiesen",
+            "Nachweisqualitaet",
+            "PCS7_Versionen_aus_Setup_Log",
+            "PCS7_Versionen_aus_Registry",
+            "Letzte_PCS7_Setup_Logdatei",
+            "Letzte_Log_Aenderung",
+            "Anzahl_PCS7_Bezugskomponenten",
+            "PCS7_Komponenten_mit_Version",
+            "Anzahl_Siemens_Komponenten",
+            "Alle_Siemens_Komponenten_mit_Version",
+            "Setup_Logpfad_vorhanden",
+            "Setup_Logpfad",
+            "Adapterbeschreibung",
+            "DNS_Hostname",
+            "DNS_Domain",
+            "IPv4_Adressen",
+            "IPv6_Adressen",
+            "Subnetzmasken",
+            "Gateway",
+            "DNS_Server",
+            "MAC_Adressen",
+            "DHCP",
+            "DHCP_Server",
+            "WINS_Primary",
+            "WINS_Secondary",
+            "NetBIOS_Optionen",
             "WinRM_Port",
             "WinRM_Schema",
-            "WinRM_offene_Ports",
+            "WinRM_Offene_Ports",
             "Fehler",
         ]
 
-        overview_fields = [
-            "Zeitstempel_Pruefung",
-            "Zeitstempel_Zielsystem",
-            "IP_Adresse",
-            "Ansible_erreichbar",
-            "Computername",
-            "Hersteller",
-            "Modell",
-            "Betriebssystem",
-            "OS_Version",
-            "OS_Build",
-            "Domaene",
-            "Domaenenrolle",
-            "Plattform_erkannt",
-            "PCS7_erkannt",
-            "PCS7_Rolle_erkannt",
-            "Kategorie",
-            "Spezialtyp",
-            "Klassifikationssicherheit",
-            "Klassifikationshinweis",
-            "Detailreport_Gruppe",
-            "Weitere_Pruefplaybooks",
-            "Engineering_Score",
-            "OS_Server_Score",
-            "OS_Client_Score",
-            "Pruefungen_OK",
-            "Pruefungen_NOK",
-            "Pruefungen_NICHT_RELEVANT",
-            "Pruefungen_NICHT_PRUEFBAR",
-            "WinRM_Port",
-            "WinRM_Schema",
-            "WinRM_offene_Ports",
-            "Fehler",
-        ]
-
-        def detail_row(item, selected_ids):
-            scores = item.get("classification_scores") or {}
-            summary = item.get("check_summary") or {}
-            checks = item.get("checks_by_id") or {}
-            row = {
-                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
-                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
-                "IP_Adresse": item.get("ip", ""),
-                "Ansible_erreichbar": item.get("ansible_reachable", False),
-                "Computername": item.get("computername", ""),
-                "Hersteller": item.get("manufacturer", ""),
-                "Modell": item.get("model", ""),
-                "Betriebssystem": item.get("os_caption", ""),
-                "OS_Version": item.get("os_version", ""),
-                "OS_Build": item.get("os_build", ""),
-                "Domaene": item.get("domain", ""),
-                "Domaenenrolle": item.get("domain_role", ""),
-                "Plattform_erkannt": item.get("platform_detected", ""),
-                "PCS7_erkannt": item.get("pcs7_detected", False),
-                "PCS7_Rolle_erkannt": item.get("pcs7_role_detected", ""),
-                "Kategorie": item.get("category", ""),
-                "Spezialtyp": item.get("special_subtype", ""),
-                "Klassifikationssicherheit": item.get("classification_confidence", ""),
-                "Klassifikationshinweis": item.get("classification_note", ""),
-                "Weitere_Pruefplaybooks": " | ".join(item.get("applicable_follow_up_playbooks") or []),
-                "Engineering_Score": scores.get("engineering", ""),
-                "OS_Server_Score": scores.get("os_server", ""),
-                "OS_Client_Score": scores.get("os_client", ""),
-                "PCS7_Komponenten": component_text(item.get("pcs7_components")),
-                "Pruefungen_OK": summary.get("ok", 0),
-                "Pruefungen_NOK": summary.get("nok", 0),
-                "Pruefungen_NICHT_RELEVANT": summary.get("nicht_relevant", 0),
-                "Pruefungen_NICHT_PRUEFBAR": summary.get("nicht_pruefbar", 0),
-                "WinRM_Port": item.get("winrm_port", ""),
-                "WinRM_Schema": item.get("winrm_scheme", ""),
-                "WinRM_offene_Ports": item.get("winrm_open_ports", ""),
-                "Fehler": item.get("error", ""),
-            }
-
-            for check_id in selected_ids:
-                check = checks.get(check_id) or {}
-                row[f"{check_id}_Status"] = check.get("status", "NICHT_PRUEFBAR")
-                row[f"{check_id}_Istwert"] = check.get("actual", "Pruefdefinition fehlt")
-            return row
-
-        def overview_row(item):
-            scores = item.get("classification_scores") or {}
-            summary = item.get("check_summary") or {}
-            return {
-                "Zeitstempel_Pruefung": item.get("scan_timestamp", ""),
-                "Zeitstempel_Zielsystem": item.get("target_timestamp", ""),
-                "IP_Adresse": item.get("ip", ""),
-                "Ansible_erreichbar": item.get("ansible_reachable", False),
-                "Computername": item.get("computername", ""),
-                "Hersteller": item.get("manufacturer", ""),
-                "Modell": item.get("model", ""),
-                "Betriebssystem": item.get("os_caption", ""),
-                "OS_Version": item.get("os_version", ""),
-                "OS_Build": item.get("os_build", ""),
-                "Domaene": item.get("domain", ""),
-                "Domaenenrolle": item.get("domain_role", ""),
-                "Plattform_erkannt": item.get("platform_detected", ""),
-                "PCS7_erkannt": item.get("pcs7_detected", False),
-                "PCS7_Rolle_erkannt": item.get("pcs7_role_detected", ""),
-                "Kategorie": item.get("category", ""),
-                "Spezialtyp": item.get("special_subtype", ""),
-                "Klassifikationssicherheit": item.get("classification_confidence", ""),
-                "Klassifikationshinweis": item.get("classification_note", ""),
-                "Detailreport_Gruppe": item.get("detail_report_group", ""),
-                "Weitere_Pruefplaybooks": " | ".join(item.get("applicable_follow_up_playbooks") or []),
-                "Engineering_Score": scores.get("engineering", ""),
-                "OS_Server_Score": scores.get("os_server", ""),
-                "OS_Client_Score": scores.get("os_client", ""),
-                "Pruefungen_OK": summary.get("ok", 0),
-                "Pruefungen_NOK": summary.get("nok", 0),
-                "Pruefungen_NICHT_RELEVANT": summary.get("nicht_relevant", 0),
-                "Pruefungen_NICHT_PRUEFBAR": summary.get("nicht_pruefbar", 0),
-                "WinRM_Port": item.get("winrm_port", ""),
-                "WinRM_Schema": item.get("winrm_scheme", ""),
-                "WinRM_offene_Ports": item.get("winrm_open_ports", ""),
-                "Fehler": item.get("error", ""),
-            }
-
-        def write_detail_csv(path, items, selected_ids):
-            id_fields = []
-            for check_id in selected_ids:
-                id_fields.extend([f"{check_id}_Status", f"{check_id}_Istwert"])
-            with path.open("w", encoding="utf-8-sig", newline="") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=detail_base_fields + id_fields,
-                    delimiter=";",
-                    extrasaction="ignore",
-                )
-                writer.writeheader()
-                for item in items:
-                    writer.writerow(detail_row(item, selected_ids))
-
-        def write_overview_csv(path, items):
-            with path.open("w", encoding="utf-8-sig", newline="") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=overview_fields,
-                    delimiter=";",
-                    extrasaction="ignore",
-                )
-                writer.writeheader()
-                for item in items:
-                    writer.writerow(overview_row(item))
-
-        write_detail_csv(vm_csv_path, vm_data, vm_ids)
-        write_detail_csv(ipc_csv_path, ipc_data, ipc_ids)
-        write_overview_csv(overview_csv_path, overview_data)
-
-        raw_json_path.unlink(missing_ok=True)
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter=";")
+            writer.writeheader()
+            writer.writerows(rows)
         PY
       args:
         executable: /bin/bash
@@ -1427,9 +582,5 @@
     - name: Pfade der erzeugten Reports anzeigen
       ansible.builtin.debug:
         msg:
-          - "VM JSON Detail:  {{ result_dir }}/0010_pcs7_vm_detail_{{ report_file_timestamp }}.json"
-          - "VM CSV Detail:   {{ result_dir }}/0010_pcs7_vm_detail_{{ report_file_timestamp }}.csv"
-          - "IPC JSON Detail: {{ result_dir }}/0010_pcs7_ipc_detail_{{ report_file_timestamp }}.json"
-          - "IPC CSV Detail:  {{ result_dir }}/0010_pcs7_ipc_detail_{{ report_file_timestamp }}.csv"
-          - "JSON Uebersicht: {{ result_dir }}/0010_pcs7_uebersicht_{{ report_file_timestamp }}.json"
-          - "CSV Uebersicht:  {{ result_dir }}/0010_pcs7_uebersicht_{{ report_file_timestamp }}.csv"
+          - "JSON: {{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/pcs7_installation_check_{{ report_timestamp }}.csv"
