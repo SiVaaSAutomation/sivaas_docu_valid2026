@@ -385,11 +385,41 @@
   gather_facts: false
 
   tasks:
-    - name: Report-Verzeichnis erzeugen, falls es noch nicht existiert
+    - name: Pruefen, ob der Ablagepfad vorhanden ist
+      ansible.builtin.stat:
+        path: "{{ result_dir }}"
+      register: report_directory_status
+
+    - name: Abbrechen, wenn der Ablagepfad existiert, aber kein Ordner ist
+      ansible.builtin.fail:
+        msg: >-
+          Der konfigurierte Ablagepfad {{ result_dir }} existiert,
+          ist aber kein Verzeichnis. Bitte result_dir korrigieren oder
+          die vorhandene Datei entfernen.
+      when:
+        - report_directory_status.stat.exists | bool
+        - not (report_directory_status.stat.isdir | default(false) | bool)
+
+    - name: Ablagepfad mit Ablageordner erzeugen, falls er nicht vorhanden ist
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
         mode: "0750"
+      when: not (report_directory_status.stat.exists | bool)
+
+    - name: Ablagepfad nach dem Erzeugen erneut pruefen
+      ansible.builtin.stat:
+        path: "{{ result_dir }}"
+      register: report_directory_final_status
+
+    - name: Sicherstellen, dass der Ablageordner verwendbar ist
+      ansible.builtin.assert:
+        that:
+          - report_directory_final_status.stat.exists | bool
+          - report_directory_final_status.stat.isdir | bool
+        fail_msg: >-
+          Der Ablageordner {{ result_dir }} konnte nicht erstellt
+          oder nicht als Verzeichnis erkannt werden.
 
     - name: JSON-Report erzeugen
       ansible.builtin.copy:
