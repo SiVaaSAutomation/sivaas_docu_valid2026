@@ -337,35 +337,36 @@
         $ErrorActionPreference = "SilentlyContinue"
         $ProgressPreference = "SilentlyContinue"
 
-        $catalogJson = @'
-        {{ validation_check_catalog | to_json }}
-        '@
+        $catalogJson = [string]$env:VALIDATION_CATALOG_JSON
         $catalog = @($catalogJson | ConvertFrom-Json)
+
         $catalogByKey = @{}
         foreach ($entry in $catalog) {
           $catalogByKey[[string]$entry.key] = $entry
         }
+
         $checks = @()
 
-        $stationType = '{{ validation_station_type | replace("'", "''") }}'
-        $masterColumn = '{{ validation_master_column | replace("'", "''") }}'
-        $expectedComputerName = '{{ validation_expected_computername | replace("'", "''") }}'
-        $expectedOsPattern = '{{ validation_expected_os_pattern | replace("'", "''") }}'
-        $expectedIp = '{{ validation_expected_ip | replace("'", "''") }}'
-        $expectedPrefixLength = [int]'{{ validation_expected_prefix_length }}'
-        $expectedGateway = '{{ validation_expected_gateway | replace("'", "''") }}'
-        $expectedAdapterPattern = '{{ validation_expected_adapter_pattern | replace("'", "''") }}'
-        $expectedBiosPattern = '{{ validation_expected_bios_pattern | replace("'", "''") }}'
-        $expectedBiosReleaseDate = '{{ validation_expected_bios_release_date | replace("'", "''") }}'
-        $expectedUltraVncVersion = '{{ validation_expected_ultravnc_version | replace("'", "''") }}'
-        $expectedAdminName = '{{ validation_expected_admin_name | replace("'", "''") }}'
-        $expectedLocale = '{{ validation_expected_locale | replace("'", "''") }}'
-        $expectedGeoId = [int]'{{ validation_expected_geo_id }}'
-        $expectedTimeZone = '{{ validation_expected_time_zone | replace("'", "''") }}'
-        $commRegistryPath = '{{ validation_comm_registry_path | replace("'", "''") }}'
-        $commRemoteValueName = '{{ validation_comm_remote_value_name | replace("'", "''") }}'
-        $commPskValueName = '{{ validation_comm_psk_value_name | replace("'", "''") }}'
-        $commAdapterValueName = '{{ validation_comm_adapter_value_name | replace("'", "''") }}'
+        $stationType = [string]$env:VALIDATION_STATION_TYPE
+        $masterColumn = [string]$env:VALIDATION_MASTER_COLUMN
+        $expectedComputerName = [string]$env:VALIDATION_EXPECTED_COMPUTERNAME
+        $expectedOsPattern = [string]$env:VALIDATION_EXPECTED_OS_PATTERN
+        $expectedIp = [string]$env:VALIDATION_EXPECTED_IP
+        $expectedPrefixLength = [int]$env:VALIDATION_EXPECTED_PREFIX_LENGTH
+        $expectedGateway = [string]$env:VALIDATION_EXPECTED_GATEWAY
+        $expectedAdapterPattern = [string]$env:VALIDATION_EXPECTED_ADAPTER_PATTERN
+        $expectedBiosPattern = [string]$env:VALIDATION_EXPECTED_BIOS_PATTERN
+        $expectedBiosReleaseDate = [string]$env:VALIDATION_EXPECTED_BIOS_RELEASE_DATE
+        $expectedUltraVncVersion = [string]$env:VALIDATION_EXPECTED_ULTRAVNC_VERSION
+        $expectedAdminName = [string]$env:VALIDATION_EXPECTED_ADMIN_NAME
+        $expectedLocale = [string]$env:VALIDATION_EXPECTED_LOCALE
+        $expectedGeoId = [int]$env:VALIDATION_EXPECTED_GEO_ID
+        $expectedTimeZone = [string]$env:VALIDATION_EXPECTED_TIME_ZONE
+        $commRegistryPath = [string]$env:VALIDATION_COMM_REGISTRY_PATH
+        $commRemoteValueName = [string]$env:VALIDATION_COMM_REMOTE_VALUE_NAME
+        $commPskValueName = [string]$env:VALIDATION_COMM_PSK_VALUE_NAME
+        $commAdapterValueName = [string]$env:VALIDATION_COMM_ADAPTER_VALUE_NAME
+
 
         function Convert-ToText {
           param([object]$Value)
@@ -889,7 +890,7 @@
         $result = [ordered]@{
           scan_timestamp = $null
           target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
-          ip = "{{ inventory_hostname }}"
+          ip = [string]$env:VALIDATION_TARGET_IP
           ansible_reachable = $true
           computername = $env:COMPUTERNAME
           station_type = $stationType
@@ -900,6 +901,32 @@
           error = $null
         }
         $result | ConvertTo-Json -Depth 9 -Compress
+      args:
+        no_profile: true
+
+      environment:
+        VALIDATION_CATALOG_JSON: "{{ validation_check_catalog | to_json }}"
+        VALIDATION_STATION_TYPE: "{{ validation_station_type }}"
+        VALIDATION_MASTER_COLUMN: "{{ validation_master_column }}"
+        VALIDATION_EXPECTED_COMPUTERNAME: "{{ validation_expected_computername }}"
+        VALIDATION_EXPECTED_OS_PATTERN: "{{ validation_expected_os_pattern }}"
+        VALIDATION_EXPECTED_IP: "{{ validation_expected_ip }}"
+        VALIDATION_EXPECTED_PREFIX_LENGTH: "{{ validation_expected_prefix_length | string }}"
+        VALIDATION_EXPECTED_GATEWAY: "{{ validation_expected_gateway }}"
+        VALIDATION_EXPECTED_ADAPTER_PATTERN: "{{ validation_expected_adapter_pattern }}"
+        VALIDATION_EXPECTED_BIOS_PATTERN: "{{ validation_expected_bios_pattern }}"
+        VALIDATION_EXPECTED_BIOS_RELEASE_DATE: "{{ validation_expected_bios_release_date }}"
+        VALIDATION_EXPECTED_ULTRAVNC_VERSION: "{{ validation_expected_ultravnc_version }}"
+        VALIDATION_EXPECTED_ADMIN_NAME: "{{ validation_expected_admin_name }}"
+        VALIDATION_EXPECTED_LOCALE: "{{ validation_expected_locale }}"
+        VALIDATION_EXPECTED_GEO_ID: "{{ validation_expected_geo_id | string }}"
+        VALIDATION_EXPECTED_TIME_ZONE: "{{ validation_expected_time_zone }}"
+        VALIDATION_COMM_REGISTRY_PATH: "{{ validation_comm_registry_path }}"
+        VALIDATION_COMM_REMOTE_VALUE_NAME: "{{ validation_comm_remote_value_name }}"
+        VALIDATION_COMM_PSK_VALUE_NAME: "{{ validation_comm_psk_value_name }}"
+        VALIDATION_COMM_ADAPTER_VALUE_NAME: "{{ validation_comm_adapter_value_name }}"
+        VALIDATION_TARGET_IP: "{{ ansible_host | default(inventory_hostname) }}"
+        
       register: ipc_validation_raw
       when:
         - win_ping_result is defined
