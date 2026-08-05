@@ -150,7 +150,7 @@
         $products = @($products |
           Sort-Object name, version -Unique)
 
-        $servicePattern = "(?i)(Siemens|SIMATIC|WinCC|S7|PCS7|SQL)"
+        $servicePattern = '(?i)(Siemens|SIMATIC|WinCC|S7|PCS7|SQL)'
         $services = @(Get-CimInstance Win32_Service |
           Where-Object {
             ([string]$_.Name -match $servicePattern) -or
@@ -167,7 +167,7 @@
           Sort-Object name -Unique)
 
         $result = [ordered]@{
-          ip = '{{ ansible_host | default(inventory_hostname) | replace("'", "''") }}'
+          ip = [string]$env:ANSIBLE_DISCOVERY_IP
           winrm_reachable = $true
           computername = [string]$env:COMPUTERNAME
           domain = [string]$cs.Domain
@@ -184,6 +184,10 @@
         }
 
         $result | ConvertTo-Json -Depth 8 -Compress
+      args:
+        no_profile: true
+      environment:
+        ANSIBLE_DISCOVERY_IP: "{{ ansible_host | default(inventory_hostname) }}"
       register: discovery_raw
       when:
         - discovery_ping is defined
