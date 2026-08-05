@@ -3,26 +3,22 @@
   hosts: all
   gather_facts: false
   any_errors_fatal: false
-
   vars:
     validation_report_prefix: "0110_ipc_es_validation"
     validation_status_ok: "OK"
     validation_status_nok: "NOK"
     validation_status_info: "Info"
     validation_status_nr: "Nicht relevant"
-
     expected_terminalbus_adapter_name: "{{ expected_terminalbus_adapter_name | default('Terminalbus') }}"
     expected_domain_name: "{{ expected_domain_name | default('') }}"
     expected_terminalbus_ip_regex: "{{ expected_terminalbus_ip_regex | default('^192\\.168\\.210\\.') }}"
     expected_terminalbus_gateway: "{{ expected_terminalbus_gateway | default('') }}"
     expected_terminalbus_dns_servers: "{{ expected_terminalbus_dns_servers | default([]) }}"
     expected_terminalbus_wins_servers: "{{ expected_terminalbus_wins_servers | default([]) }}"
-
   tasks:
     - name: Controller-Hosts aus Validierung ausschließen
       meta: end_host
       when: inventory_hostname in ['localhost', 'ansible_controller']
-
     - name: Ergebnisliste initialisieren
       ansible.builtin.set_fact:
         validation_results: []
@@ -50,18 +46,15 @@
         validation_domain_info: {}
         validation_ou_info: {}
         validation_firewall_profiles: []
-
     - name: Computername lesen
       ansible.windows.win_shell: |
         $env:COMPUTERNAME
       register: validation_hostname_raw
       changed_when: false
       failed_when: false
-
     - name: Computername übernehmen
       ansible.builtin.set_fact:
         validation_hostname: "{{ validation_hostname_raw.stdout | default('') | string | trim }}"
-
     - name: OS-Informationen lesen
       ansible.windows.win_shell: |
         Get-CimInstance Win32_OperatingSystem |
@@ -70,27 +63,22 @@
       register: validation_os_raw
       changed_when: false
       failed_when: false
-
     - name: OS-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_os_stdout: "{{ validation_os_raw.stdout | default('{}') | string }}"
-
     - name: OS-Informationen übernehmen
       ansible.builtin.set_fact:
         validation_os_info: "{{ validation_os_stdout | from_json }}"
       when: validation_os_stdout | trim | length > 0
-
     - name: Zeitzone lesen
       ansible.windows.win_shell: |
         (Get-TimeZone).Id
       register: validation_timezone_raw
       changed_when: false
       failed_when: false
-
     - name: Zeitzone übernehmen
       ansible.builtin.set_fact:
         validation_timezone: "{{ validation_timezone_raw.stdout | default('') | string | trim }}"
-
     - name: Netzwerkadapter lesen
       ansible.windows.win_shell: |
         $items = Get-NetAdapter | Select-Object Name, Status, InterfaceDescription
@@ -98,16 +86,13 @@
       register: validation_netadapters_raw
       changed_when: false
       failed_when: false
-
     - name: Netzwerkadapter-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_netadapters_stdout: "{{ validation_netadapters_raw.stdout | default('[]') | string }}"
-
     - name: Netzwerkadapter übernehmen
       ansible.builtin.set_fact:
         validation_netadapters: "{{ validation_netadapters_stdout | from_json }}"
       when: validation_netadapters_stdout | trim | length > 0
-
     - name: IP, Gateway und DNS lesen
       ansible.windows.win_shell: |
         $adapters = Get-NetIPConfiguration | ForEach-Object {
@@ -122,16 +107,13 @@
       register: validation_netconfig_raw
       changed_when: false
       failed_when: false
-
     - name: Netconfig-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_netconfig_stdout: "{{ validation_netconfig_raw.stdout | default('[]') | string }}"
-
     - name: Netconfig übernehmen
       ansible.builtin.set_fact:
         validation_netconfig: "{{ validation_netconfig_stdout | from_json }}"
       when: validation_netconfig_stdout | trim | length > 0
-
     - name: WINS und Registrywerte lesen
       ansible.windows.win_shell: |
         $result = [ordered]@{}
@@ -157,16 +139,13 @@
       register: validation_registry_raw
       changed_when: false
       failed_when: false
-
     - name: Registry-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_registry_stdout: "{{ validation_registry_raw.stdout | default('{}') | string }}"
-
     - name: Registry übernehmen
       ansible.builtin.set_fact:
         validation_registry: "{{ validation_registry_stdout | from_json }}"
       when: validation_registry_stdout | trim | length > 0
-
     - name: Firewallprofile lesen
       ansible.windows.win_shell: |
         $items = Get-NetFirewallProfile | Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction
@@ -174,16 +153,13 @@
       register: validation_firewall_profiles_raw
       changed_when: false
       failed_when: false
-
     - name: Firewallprofile-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_firewall_profiles_stdout: "{{ validation_firewall_profiles_raw.stdout | default('[]') | string }}"
-
     - name: Firewallprofile übernehmen
       ansible.builtin.set_fact:
         validation_firewall_profiles: "{{ validation_firewall_profiles_stdout | from_json }}"
       when: validation_firewall_profiles_stdout | trim | length > 0
-
     - name: VNC Firewallregeln lesen
       ansible.windows.win_shell: |
         $rules = Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {
@@ -197,16 +173,13 @@
       register: validation_vnc_rules_raw
       changed_when: false
       failed_when: false
-
     - name: VNC-Regeln-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_vnc_rules_stdout: "{{ validation_vnc_rules_raw.stdout | default('[]') | string }}"
-
     - name: VNC-Regeln übernehmen
       ansible.builtin.set_fact:
         validation_vnc_rules: "{{ validation_vnc_rules_stdout | from_json }}"
       when: validation_vnc_rules_stdout | trim | length > 0
-
     - name: UltraVNC Indikatoren lesen
       ansible.windows.win_shell: |
         $service = Get-Service -Name uvnc_service -ErrorAction SilentlyContinue
@@ -227,27 +200,22 @@
       register: validation_ultravnc_raw
       changed_when: false
       failed_when: false
-
     - name: UltraVNC-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_ultravnc_stdout: "{{ validation_ultravnc_raw.stdout | default('{}') | string }}"
-
     - name: UltraVNC übernehmen
       ansible.builtin.set_fact:
         validation_ultravnc: "{{ validation_ultravnc_stdout | from_json }}"
       when: validation_ultravnc_stdout | trim | length > 0
-
     - name: Energieplan lesen
       ansible.windows.win_shell: |
         powercfg /GETACTIVESCHEME
       register: validation_powerplan_raw
       changed_when: false
       failed_when: false
-
     - name: Energieplan übernehmen
       ansible.builtin.set_fact:
         validation_powerplan_text: "{{ validation_powerplan_raw.stdout | default('') | string | trim }}"
-
     - name: Windows Features lesen
       ansible.windows.win_shell: |
         $result = [ordered]@{}
@@ -267,16 +235,13 @@
       register: validation_features_raw
       changed_when: false
       failed_when: false
-
     - name: Feature-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_features_stdout: "{{ validation_features_raw.stdout | default('{}') | string }}"
-
     - name: Features übernehmen
       ansible.builtin.set_fact:
         validation_features: "{{ validation_features_stdout | from_json }}"
       when: validation_features_stdout | trim | length > 0
-
     - name: Dienste lesen
       ansible.windows.win_shell: |
         $items = Get-Service | Select-Object Name, DisplayName, Status, StartType
@@ -284,16 +249,13 @@
       register: validation_services_raw
       changed_when: false
       failed_when: false
-
     - name: Dienste-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_services_stdout: "{{ validation_services_raw.stdout | default('[]') | string }}"
-
     - name: Dienste übernehmen
       ansible.builtin.set_fact:
         validation_services: "{{ validation_services_stdout | from_json }}"
       when: validation_services_stdout | trim | length > 0
-
     - name: TLS Protokolle lesen
       ansible.windows.win_shell: |
         $protocols = @('SSL 2.0','SSL 3.0','TLS 1.0','TLS 1.1','TLS 1.2')
@@ -310,16 +272,13 @@
       register: validation_tls_raw
       changed_when: false
       failed_when: false
-
     - name: TLS-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_tls_stdout: "{{ validation_tls_raw.stdout | default('[]') | string }}"
-
     - name: TLS übernehmen
       ansible.builtin.set_fact:
         validation_tls: "{{ validation_tls_stdout | from_json }}"
       when: validation_tls_stdout | trim | length > 0
-
     - name: Cipher Suites lesen
       ansible.windows.win_shell: |
         $items = Get-TlsCipherSuite | Select-Object -ExpandProperty Name
@@ -327,16 +286,13 @@
       register: validation_cipher_raw
       changed_when: false
       failed_when: false
-
     - name: Cipher-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_cipher_stdout: "{{ validation_cipher_raw.stdout | default('[]') | string }}"
-
     - name: Cipher übernehmen
       ansible.builtin.set_fact:
         validation_cipher_suites: "{{ validation_cipher_stdout | from_json }}"
       when: validation_cipher_stdout | trim | length > 0
-
     - name: Partitionen lesen
       ansible.windows.win_shell: |
         $items = Get-Volume | Where-Object { $_.DriveLetter } | Select-Object DriveLetter, Size, SizeRemaining
@@ -344,16 +300,13 @@
       register: validation_volumes_raw
       changed_when: false
       failed_when: false
-
     - name: Volumes-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_volumes_stdout: "{{ validation_volumes_raw.stdout | default('[]') | string }}"
-
     - name: Volumes übernehmen
       ansible.builtin.set_fact:
         validation_volumes: "{{ validation_volumes_stdout | from_json }}"
       when: validation_volumes_stdout | trim | length > 0
-
     - name: Shares lesen
       ansible.windows.win_shell: |
         $items = Get-SmbShare | Select-Object Name, Path, Description
@@ -361,16 +314,13 @@
       register: validation_shares_raw
       changed_when: false
       failed_when: false
-
     - name: Shares-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_shares_stdout: "{{ validation_shares_raw.stdout | default('[]') | string }}"
-
     - name: Shares übernehmen
       ansible.builtin.set_fact:
         validation_shares: "{{ validation_shares_stdout | from_json }}"
       when: validation_shares_stdout | trim | length > 0
-
     - name: Hotfixes lesen
       ansible.windows.win_shell: |
         $items = Get-HotFix | Select-Object HotFixID, InstalledOn, Description
@@ -378,16 +328,13 @@
       register: validation_hotfixes_raw
       changed_when: false
       failed_when: false
-
     - name: Hotfix-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_hotfixes_stdout: "{{ validation_hotfixes_raw.stdout | default('[]') | string }}"
-
     - name: Hotfixes übernehmen
       ansible.builtin.set_fact:
         validation_hotfixes: "{{ validation_hotfixes_stdout | from_json }}"
       when: validation_hotfixes_stdout | trim | length > 0
-
     - name: Desktop und BGInfo lesen
       ansible.windows.win_shell: |
         $publicDesktop = Join-Path $env:PUBLIC 'Desktop'
@@ -406,16 +353,13 @@
       register: validation_desktop_bginfo_raw
       changed_when: false
       failed_when: false
-
     - name: BGInfo-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_desktop_bginfo_stdout: "{{ validation_desktop_bginfo_raw.stdout | default('{}') | string }}"
-
     - name: BGInfo übernehmen
       ansible.builtin.set_fact:
         validation_desktop_bginfo: "{{ validation_desktop_bginfo_stdout | from_json }}"
       when: validation_desktop_bginfo_stdout | trim | length > 0
-
     - name: SNMP lesen
       ansible.windows.win_shell: |
         $svc = Get-Service -Name SNMP -ErrorAction SilentlyContinue
@@ -424,16 +368,13 @@
       register: validation_snmp_raw
       changed_when: false
       failed_when: false
-
     - name: SNMP-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_snmp_stdout: "{{ validation_snmp_raw.stdout | default('{}') | string }}"
-
     - name: SNMP übernehmen
       ansible.builtin.set_fact:
         validation_snmp: "{{ validation_snmp_stdout | from_json }}"
       when: validation_snmp_stdout | trim | length > 0
-
     - name: W32Time lesen
       ansible.windows.win_shell: |
         $svc = Get-Service -Name W32Time -ErrorAction SilentlyContinue
@@ -441,16 +382,13 @@
       register: validation_w32time_raw
       changed_when: false
       failed_when: false
-
     - name: W32Time-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_w32time_stdout: "{{ validation_w32time_raw.stdout | default('{}') | string }}"
-
     - name: W32Time übernehmen
       ansible.builtin.set_fact:
         validation_w32time: "{{ validation_w32time_stdout | from_json }}"
       when: validation_w32time_stdout | trim | length > 0
-
     - name: Domäne lesen
       ansible.windows.win_shell: |
         $cs = Get-CimInstance Win32_ComputerSystem
@@ -458,16 +396,13 @@
       register: validation_domain_raw
       changed_when: false
       failed_when: false
-
     - name: Domain-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_domain_stdout: "{{ validation_domain_raw.stdout | default('{}') | string }}"
-
     - name: Domäne übernehmen
       ansible.builtin.set_fact:
         validation_domain_info: "{{ validation_domain_stdout | from_json }}"
       when: validation_domain_stdout | trim | length > 0
-
     - name: OU lesen
       ansible.windows.win_shell: |
         try {
@@ -479,16 +414,13 @@
       register: validation_ou_raw
       changed_when: false
       failed_when: false
-
     - name: OU-stdout sicher vorbereiten
       ansible.builtin.set_fact:
         validation_ou_stdout: "{{ validation_ou_raw.stdout | default('{}') | string }}"
-
     - name: OU übernehmen
       ansible.builtin.set_fact:
         validation_ou_info: "{{ validation_ou_stdout | from_json }}"
       when: validation_ou_stdout | trim | length > 0
-
     - name: Terminalbus Konfiguration ableiten
       ansible.builtin.set_fact:
         validation_terminalbus_config: >-
@@ -497,60 +429,47 @@
             if ((validation_netconfig | selectattr('InterfaceAlias', 'equalto', expected_terminalbus_adapter_name) | list | length) > 0)
             else {'InterfaceAlias': expected_terminalbus_adapter_name, 'IPv4Address': [], 'IPv4DefaultGateway': [], 'DnsServer': []}
           }}
-
     - name: IPC0043 Zeitzone
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0043','schritt':'Date and Time','status':(validation_status_ok if validation_timezone == expected_timezone_id else validation_status_nok),'check_type':'direct','istwert':('Zeitzone=' ~ validation_timezone),'sollwert':('Zeitzone=' ~ expected_timezone_id),'pruefmethode':'Get-TimeZone','hinweis':'','evidence':validation_timezone,'timestamp':validation_scan_timestamp} ] }}"
-
     - name: IPC0049 Adapter Namen
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0049','schritt':'Netzwerkadapter umbenennen','status':(validation_status_ok if ((expected_present_adapters | difference(validation_netadapters | map(attribute='Name') | list) | length) == 0) else validation_status_nok),'check_type':'direct','istwert':('Adapter=' ~ ((validation_netadapters | map(attribute='Name') | list) | join(', '))),'sollwert':('Erwartet=' ~ (expected_present_adapters | join(', '))),'pruefmethode':'Get-NetAdapter','hinweis':('Fehlend=' ~ ((expected_present_adapters | difference(validation_netadapters | map(attribute='Name') | list)) | join(', '))),'evidence':(validation_netadapters | to_json),'timestamp':validation_scan_timestamp} ] }}"
-
     - name: IPC0050 Terminalbus IP
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0050','schritt':'Terminalbus-Adresse einstellen','status':(validation_status_ok if (((validation_terminalbus_config.IPv4Address | default([]) | select('match', expected_terminalbus_ip_regex) | list | length) > 0)) else validation_status_nok),'check_type':'direct','istwert':('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; IP=' ~ ((validation_terminalbus_config.IPv4Address | default([])) | join(', '))),'sollwert':('Adapter=' ~ expected_terminalbus_adapter_name ~ '; IP Regex=' ~ expected_terminalbus_ip_regex),'pruefmethode':'Get-NetIPConfiguration','hinweis':'','evidence':(validation_terminalbus_config | to_json),'timestamp':validation_scan_timestamp} ] }}"
-
     - name: IPC0051 Terminalbus Gateway
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0051','schritt':'Terminalbus Gateway korrigieren','status':(validation_status_ok if ((expected_terminalbus_gateway | length > 0) and ((validation_terminalbus_config.IPv4DefaultGateway | default([])) | select('equalto', expected_terminalbus_gateway) | list | length > 0)) else validation_status_nok),'check_type':'direct','istwert':('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; Gateway=' ~ ((validation_terminalbus_config.IPv4DefaultGateway | default([])) | join(', '))),'sollwert':('Gateway=' ~ expected_terminalbus_gateway),'pruefmethode':'Get-NetIPConfiguration','hinweis':'','evidence':(validation_terminalbus_config | to_json),'timestamp':validation_scan_timestamp} ] }}"
-
     - name: IPC0055 DNS und WINS
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0055','schritt':'DNS und WINS-Server eintragen','status':(validation_status_ok if (((expected_terminalbus_dns_servers | difference(validation_terminalbus_config.DnsServer | default([])) | length) == 0) and ((expected_terminalbus_wins_servers | length == 0) or ((expected_terminalbus_wins_servers | join(',')) in ((validation_registry.WINS | default([]) | map(attribute='NameServerList') | list | join(';')))))) else validation_status_nok),'check_type':'direct','istwert':('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; DNS=' ~ ((validation_terminalbus_config.DnsServer | default([])) | join(', ')) ~ '; WINS=' ~ ((validation_registry.WINS | default([]) | map(attribute='NameServerList') | list | join(' | ')))),'sollwert':('DNS=' ~ (expected_terminalbus_dns_servers | join(', ')) ~ '; WINS=' ~ (expected_terminalbus_wins_servers | join(', '))),'pruefmethode':'Get-NetIPConfiguration + Registry','hinweis':'','evidence':(({'netconfig': validation_terminalbus_config, 'wins': validation_registry.WINS | default([])}) | to_json),'timestamp':validation_scan_timestamp} ] }}"
-
     - name: IPC0056 LMHOSTS
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0056','schritt':'LMHOSTS-Abfrage deaktivieren','status':(validation_status_ok if ((validation_registry.LMHOSTS | default([]) | map(attribute='EnableLMHOSTS') | reject('equalto', none) | list | unique) == [expected_enable_lmhosts]) else validation_status_nok),'check_type':'direct','istwert':('LMHOSTS=' ~ ((validation_registry.LMHOSTS | default([])) | to_json)),'sollwert':('EnableLMHOSTS=' ~ (expected_enable_lmhosts | string)),'pruefmethode':'Registry Tcpip NetBT Parameters','hinweis':'','evidence':((validation_registry.LMHOSTS | default([])) | to_json),'timestamp':validation_scan_timestamp} ] }}"
-
     - name: IPC0059 Domäne
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0059','schritt':'Rechner in die Domäne aufnehmen','status':(validation_status_ok if ((expected_domain_name | length > 0) and ((validation_domain_info.Domain | default('')) | lower == (expected_domain_name | lower))) else validation_status_nok),'check_type':'direct','istwert':('PartOfDomain=' ~ (validation_domain_info.PartOfDomain | default(false) | string) ~ '; Domain=' ~ (validation_domain_info.Domain | default(''))),'sollwert':('Domain=' ~ expected_domain_name),'pruefmethode':'Win32_ComputerSystem','hinweis':'','evidence':(validation_domain_info | to_json),'timestamp':validation_scan_timestamp} ] }}"
       when: expected_domain_name | length > 0
-
     - name: IPC0060 OU
       ansible.builtin.set_fact:
         validation_results: "{{ validation_results + [ {'ansible_id':'IPC0060','schritt':'Rechner in der OU einsortieren','status':(validation_status_ok if (((validation_ou_info.DistinguishedName | default('')) is regex(expected_computer_ou_regex))) else validation_status_nok),'check_type':'direct','istwert':('DistinguishedName=' ~ (validation_ou_info.DistinguishedName | default(''))),'sollwert':('OU Regex=' ~ expected_computer_ou_regex),'pruefmethode':'ADSI Searcher','hinweis':'','evidence':(validation_ou_info | to_json),'timestamp':validation_scan_timestamp} ] }}"
       when: expected_computer_ou_regex | default('') | length > 0
-
 - name: "0110 IPC ES Validation Report"
   hosts: localhost
   gather_facts: false
-
   vars:
     validation_report_prefix: "0110_ipc_es_validation"
-
   tasks:
     - name: Report-Zeitstempel setzen
       ansible.builtin.set_fact:
         validation_report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
         validation_report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
-
     - name: Report-Verzeichnis erzeugen
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
         mode: "0755"
-
     - name: Reportdaten sammeln
       ansible.builtin.set_fact:
         validation_report_hosts: >-
@@ -561,7 +480,6 @@
             | selectattr('validation_results', 'defined')
             | list
           }}
-
     - name: JSON Report schreiben
       ansible.builtin.copy:
         dest: "{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.json"
@@ -579,20 +497,21 @@
             }{% if not loop.last %},{% endif %}
           {% endfor %}
           ]
-
-    - name: CSV Report schreiben
+    - name: CSV Reports schreiben
       ansible.builtin.shell: |
         set -euo pipefail
         "{{ ansible_playbook_python }}" - <<'PY'
         import csv, json
         from pathlib import Path
         json_path = Path("{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.json")
-        csv_path = Path("{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.csv")
+        detail_csv_path = Path("{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_details.csv")
+        matrix_csv_path = Path("{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_matrix.csv")
         data = json.loads(json_path.read_text(encoding="utf-8"))
-        rows = []
+        # Detail CSV: bisherige Struktur beibehalten, nur Dateiname geändert
+        detail_rows = []
         for host in data:
             for check in sorted(host.get("checks", []), key=lambda x: str(x.get("ansible_id", ""))):
-                rows.append({
+                detail_rows.append({
                     "pruefzeit": host.get("pruefzeit", ""),
                     "ip": host.get("ip", ""),
                     "computername": host.get("computername", ""),
@@ -607,22 +526,52 @@
                     "evidence": check.get("evidence", ""),
                     "timestamp": check.get("timestamp", ""),
                 })
-        rows.sort(key=lambda r: (str(r["ip"]), str(r["ansible_id"])))
-        fieldnames = ["pruefzeit","ip","computername","ansible_id","schritt","status","check_type","istwert","sollwert","pruefmethode","hinweis","evidence","timestamp"]
-        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+        detail_rows.sort(key=lambda r: (str(r["ip"]), str(r["ansible_id"])))
+        detail_fieldnames = [
+            "pruefzeit", "ip", "computername", "ansible_id", "schritt", "status",
+            "check_type", "istwert", "sollwert", "pruefmethode", "hinweis", "evidence", "timestamp"
+        ]
+        with detail_csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=detail_fieldnames, delimiter=";")
             writer.writeheader()
-            writer.writerows(rows)
-        print(json.dumps({"json": str(json_path), "csv": str(csv_path), "rows": len(rows)}, ensure_ascii=False))
+            writer.writerows(detail_rows)
+        # Matrix CSV: eine Spalte pro ES, eine Zeile pro ID
+        hosts = sorted(data, key=lambda h: (str(h.get("ip", "")), str(h.get("computername", ""))))
+        host_columns = [f"{h.get('ip', '')} | {h.get('computername', '')}" for h in hosts]
+        descriptions = {}
+        check_map = {}
+        for host in hosts:
+            host_key = f"{host.get('ip', '')} | {host.get('computername', '')}"
+            for check in host.get("checks", []):
+                cid = str(check.get("ansible_id", ""))
+                descriptions[cid] = check.get("schritt", "")
+                check_map.setdefault(cid, {})[host_key] = check.get("status", "")
+        sorted_ids = sorted(descriptions.keys())
+        with matrix_csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(["ansible_id", "beschreibung"] + [f"ES_{i+1}" for i in range(len(host_columns))])
+            writer.writerow(["meta", "zielsystem"] + host_columns)
+            for cid in sorted_ids:
+                row = [cid, descriptions.get(cid, "")]
+                for host_col in host_columns:
+                    row.append(check_map.get(cid, {}).get(host_col, ""))
+                writer.writerow(row)
+        print(json.dumps({
+            "json": str(json_path),
+            "detail_csv": str(detail_csv_path),
+            "matrix_csv": str(matrix_csv_path),
+            "detail_rows": len(detail_rows),
+            "matrix_rows": len(sorted_ids)
+        }, ensure_ascii=False))
         PY
       args:
         executable: /bin/bash
       register: validation_csv_result
       changed_when: false
-
     - name: Reportpfade ausgeben
       ansible.builtin.debug:
         msg:
           - "JSON: {{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.json"
-          - "CSV: {{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.csv"
+          - "DETAIL CSV: {{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_details.csv"
+          - "MATRIX CSV: {{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_matrix.csv"
           - "Zusammenfassung: {{ validation_csv_result.stdout }}"
