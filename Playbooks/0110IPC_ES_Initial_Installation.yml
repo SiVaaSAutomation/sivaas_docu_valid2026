@@ -20,7 +20,7 @@
 
   tasks:
     - name: Controller-Hosts aus Validierung ausschließen
-      ansible.meta: end_host
+      meta: end_host
       when: inventory_hostname in ['localhost', 'ansible_controller']
 
     - name: Ergebnisliste initialisieren
