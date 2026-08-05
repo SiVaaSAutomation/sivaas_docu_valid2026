@@ -1,0 +1,4378 @@
+---
+
+- name: "VM-ES-Zielrechner aus Discovery laden und dynamisch aufnehmen"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    station_type: "VM_ES"
+    station_group: "vm_es_validation_targets"
+    masterlist_sheet: "VM ES"
+    masterlist_profile: "{{ vm_es_masterlist_profile | default('ALL') }}"
+    report_prefix: "{{ vm_es_report_prefix | default('0010_vm_es_initial_installation') }}"
+    discovery_latest_file: >-
+      {{ vm_discovery_file
+         | default(result_dir ~ '/vm_discovery_groups_latest.json') }}
+
+    vm_es_default_partitions:
+      - drive: "C:"
+        expected_size_gb: 100
+      - drive: "D:"
+        min_size_gb: 1
+      - drive: "E:"
+        expected_size_gb: 1
+
+    vm_es_expected_partitions_map: >-
+      {{
+        vm_es_expected_partitions_by_host
+        | default({'default': vm_es_default_partitions})
+      }}
+
+    vm_es_validation_parameters:
+      masterlist_profile: "{{ masterlist_profile }}"
+      expected_os_regex: >-
+        {{ vm_es_expected_os_regex | default('(?i)Windows Server 2022') }}
+      expected_cpu_cores: "{{ vm_es_expected_cpu_cores | default(4) }}"
+      expected_ram_gb: "{{ vm_es_expected_ram_gb | default(16) }}"
+      expected_disk_sizes_gb: >-
+        {{ vm_es_expected_disk_sizes_gb | default([125, 100, 1]) }}
+      disk_size_tolerance_gb: >-
+        {{ vm_es_disk_size_tolerance_gb
+           | default(partition_size_tolerance_gb | default(5)) }}
+      expected_locale: "{{ vm_es_expected_locale | default('de-DE') }}"
+      expected_geo_id: "{{ vm_es_expected_geo_id | default(94) }}"
+      expected_timezone_id: >-
+        {{ expected_timezone_id | default('W. Europe Standard Time') }}
+      expected_admin_name: "{{ admin_l_user | default('Admin_L') }}"
+      expected_password_complexity: >-
+        {{ expected_password_complexity | default(0) }}
+      expected_min_password_length: >-
+        {{ expected_min_password_length | default(0) }}
+      expected_max_password_age_days: >-
+        {{ expected_max_password_age_days | default(0) }}
+      expected_min_password_age_days: >-
+        {{ expected_min_password_age_days | default(0) }}
+      expected_admin_password_min_set_date: >-
+        {{ expected_admin_password_min_set_date | default('') }}
+      expected_admin_password_max_age_days: >-
+        {{ expected_admin_password_max_age_days | default(0) }}
+      expected_eventlog_max_kb: "{{ expected_eventlog_max_kb | default(16384) }}"
+      expected_screen_width: "{{ expected_screen_width | default(1920) }}"
+      expected_screen_height: "{{ expected_screen_height | default(1080) }}"
+      expected_power_plan_regex: >-
+        {{ expected_power_plan_regex
+           | default('SIMATIC|High performance|Hoechstleistung|Höchstleistung|Ultimate Performance') }}
+      expected_present_adapters: >-
+        {{
+          vm_es_expected_present_adapters
+          | default(expected_present_adapters | default(['Terminalbus']))
+        }}
+      expected_absent_adapters: >-
+        {{
+          vm_es_expected_absent_adapters
+          | default(expected_absent_adapters | default(['Anlagenbus', 'Plantbus']))
+        }}
+      allowed_enabled_adapter_names: >-
+        {{
+          vm_es_allowed_enabled_adapter_names
+          | default(allowed_enabled_adapter_names | default(['Terminalbus']))
+        }}
+      expected_terminalbus_adapter_regex: >-
+        {{ expected_terminalbus_adapter_regex | default('^Terminalbus$') }}
+      expected_terminalbus_gateway: >-
+        {{ vm_es_expected_terminalbus_gateway | default('') }}
+      expected_dns_servers: >-
+        {{
+          vm_es_expected_dns_servers
+          | default(['10.37.34.11', '10.37.34.12', '10.199.167.12'])
+        }}
+      expected_dns_suffixes: >-
+        {{
+          vm_es_expected_dns_suffixes
+          | default(['lg.grp', 'linde.lds.grp'])
+        }}
+      expected_domain_regex: "{{ vm_es_expected_domain_regex | default('') }}"
+      expected_workgroup: "{{ vm_es_expected_workgroup | default('') }}"
+      expected_computer_ou_regex: >-
+        {{
+          vm_es_expected_computer_ou_regex
+          | default('OU=ES')
+        }}
+      expected_network_binding_component_ids: >-
+        {{ expected_network_binding_component_ids
+           | default(['ms_msclient', 'ms_server']) }}
+      network_adapter_name_regex: >-
+        {{ network_adapter_name_regex | default('.*') }}
+      excluded_network_adapter_name_regex: >-
+        {{ excluded_network_adapter_name_regex
+           | default('(?i)Loopback|isatap|Teredo|Bluetooth') }}
+      expected_vmware_tools_min_version: >-
+        {{ expected_vmware_tools_min_version | default('') }}
+      expected_ultravnc_version: >-
+        {{ vm_es_expected_ultravnc_version | default('1.4.3.6') }}
+      expected_vnc_ini_paths: >-
+        {{ expected_vnc_ini_paths
+           | default([
+             'C:\\Program Files\\uvnc bvba\\UltraVNC\\ultravnc.ini',
+             'C:\\Program Files\\UltraVNC\\ultravnc.ini'
+           ]) }}
+      expected_vnc_group_regex: >-
+        {{ vm_es_expected_vnc_group_regex | default('(?i)GG_VNC_ES') }}
+      expected_firewall_rule_name_patterns: >-
+        {{ expected_firewall_rule_name_patterns
+           | default(['VNC.*5800', 'VNC.*5900']) }}
+      communication_registry_path: >-
+        {{ vm_es_communication_registry_path | default('') }}
+      communication_remote_value_name: >-
+        {{ vm_es_communication_remote_value_name | default('') }}
+      communication_psk_value_name: >-
+        {{ vm_es_communication_psk_value_name | default('') }}
+      communication_adapter_value_name: >-
+        {{ vm_es_communication_adapter_value_name | default('') }}
+      terminalbus_encryption_registry_path: >-
+        {{ vm_es_terminalbus_encryption_registry_path | default('') }}
+      terminalbus_encryption_value_name: >-
+        {{ vm_es_terminalbus_encryption_value_name | default('') }}
+      terminalbus_encryption_expected_value: >-
+        {{ vm_es_terminalbus_encryption_expected_value | default('') }}
+      expected_hosts_lmhosts_required: >-
+        {{ hosts_lmhosts_required | default(false) }}
+      expected_hosts_lmhosts_entries: >-
+        {{ expected_hosts_lmhosts_entries | default([]) }}
+      expected_hosts_lmhosts_min_date_110: >-
+        {{ expected_hosts_lmhosts_min_date_109
+           | default('2025-04-04T11:14:00') }}
+      expected_hosts_lmhosts_min_date_113: >-
+        {{ expected_hosts_lmhosts_min_date_112
+           | default('2025-05-14T11:25:00') }}
+      expected_bginfo_paths: >-
+        {{ expected_bginfo_paths
+           | default([
+             'C:\\Program Files (x86)\\BgInfo',
+             'C:\\Programme (x86)\\BgInfo'
+           ]) }}
+      expected_bginfo_run_contains: >-
+        {{ expected_bginfo_run_contains | default('BgInfo') }}
+      ntp_wizard_required: "{{ ntp_wizard_required | default(false) }}"
+      expected_ntp_wizard_paths: >-
+        {{ expected_ntp_wizard_paths | default(['D:\\Tools']) }}
+      expected_sdt_paths: >-
+        {{ vm_es_expected_sdt_paths
+           | default(['D:\\Siemens', 'D:\\Tools\\Siemens']) }}
+      expected_sinec_pni_paths: >-
+        {{ vm_es_expected_sinec_pni_paths
+           | default(['D:\\Tools\\Siemens']) }}
+      expected_pcs7_user: "{{ expected_pcs7_user | default('LOCadmLS4') }}"
+      expected_pcs7_groups: >-
+        {{ expected_pcs7_groups
+           | default([
+             'SIMATIC HMI',
+             'SIMATIC NET',
+             'SIMATIC Management Users',
+             'SIMATIC Historian Management'
+           ]) }}
+      expected_project_folder: >-
+        {{ expected_project_folder | default('D:\\Projekte') }}
+      expected_project_share: "{{ expected_project_share | default('Projekte') }}"
+      expected_disabled_windows_features: >-
+        {{ expected_disabled_windows_features | default([]) }}
+      expected_disabled_service_patterns: >-
+        {{ expected_disabled_service_patterns | default([]) }}
+      expected_disabled_schannel_protocols: >-
+        {{ expected_disabled_schannel_protocols
+           | default(['SSL 2.0', 'SSL 3.0', 'TLS 1.0', 'TLS 1.1']) }}
+      expected_enabled_schannel_protocols: >-
+        {{ expected_enabled_schannel_protocols | default(['TLS 1.2']) }}
+      expected_allowed_tls12_cipher_suites: >-
+        {{ expected_allowed_tls12_cipher_suites | default([]) }}
+      expected_disabled_cipher_suites: >-
+        {{ expected_disabled_cipher_suites | default([]) }}
+      expected_security_controller_user: >-
+        {{ expected_security_controller_user | default('DOMuserLS4') }}
+      expected_wsus_server: >-
+        {{
+          vm_es_expected_wsus_server
+          | default(expected_wsus_server | default(''))
+        }}
+      expected_wsus_target_group: >-
+        {{ vm_es_expected_wsus_target_group | default('') }}
+      expected_wsus_au_options: >-
+        {{
+          vm_es_expected_wsus_au_options
+          | default(expected_wsus_au_options | default([3, 4]))
+        }}
+      expected_hotfix_ids: "{{ expected_hotfix_ids | default([]) }}"
+      expected_edge_version: >-
+        {{
+          vm_es_expected_edge_version
+          | default(expected_edge_version | default(''))
+        }}
+      perform_windows_update_search: >-
+        {{ perform_windows_update_search | default(true) }}
+      windows_update_search_timeout_seconds: >-
+        {{ windows_update_search_timeout_seconds | default(180) }}
+      expected_lifebeat_dcom_accounts: >-
+        {{
+          vm_es_expected_lifebeat_dcom_accounts
+          | default(expected_lifebeat_dcom_accounts | default([]))
+        }}
+      linde_users_required: "{{ vm_es_linde_users_required | default(false) }}"
+      expected_local_users: "{{ vm_es_expected_local_users | default([]) }}"
+      compatibility_report_paths: >-
+        {{ vm_es_compatibility_report_paths
+           | default([expected_project_folder | default('D:\\Projekte') ~ '\\Customizing\\Inst_SW']) }}
+      installed_software_export_paths: >-
+        {{ vm_es_installed_software_export_paths
+           | default([expected_project_folder | default('D:\\Projekte') ~ '\\Customizing\\Inst_SW']) }}
+      alm_remote_registry_path: >-
+        {{ vm_es_alm_remote_registry_path | default('') }}
+      alm_remote_value_name: >-
+        {{ vm_es_alm_remote_value_name | default('') }}
+      alm_remote_expected_value: >-
+        {{ vm_es_alm_remote_expected_value | default('') }}
+      simatic_logon_registry_path: >-
+        {{ vm_es_simatic_logon_registry_path | default('') }}
+      simatic_logon_auto_logoff_value_name: >-
+        {{ vm_es_simatic_logon_auto_logoff_value_name | default('') }}
+      simatic_logon_auto_logoff_expected_value: >-
+        {{ vm_es_simatic_logon_auto_logoff_expected_value | default(0) }}
+
+    validation_catalog:
+    - key: "VMES0000"
+      row: 3
+      ansible_id: "VMES0000"
+      title: "Namen der VM editieren"
+      description: "1. [Rechte Maus Taste] auf VM\n2. Umbennen -> Name aus [Liste]"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0001"
+      row: 4
+      ansible_id: "VMES0001"
+      title: "Namen der VM editieren"
+      description: "1. VM auswählen\n2. Rechts Option \"Umbenennen\" auswählen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0002"
+      row: 5
+      ansible_id: "VMES0002"
+      title: "Anpassen von Kernen und Arbeitsspeicher"
+      description: "Bei Verwendung von reinen Server 2016 Maschinen ohne vorinstalliertes PCS7:\nEinstellungen bearbeiten > CPU/Arbeitsspeicher\nAnpassung von Kernen und Arbeitsspeicher nach SIVaaS Produktkonfigurator (Projektordner\\Customizing\\VMDaten)\nKerne: __4__\nRAM: ___16__ GB"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0003"
+      row: 6
+      ansible_id: "VMES0003"
+      title: "Überprüfen HW-Einstellungen der VM"
+      description: "Einstellungen bearbeiten > CPU/Arbeitsspeicher\nServer:              _4_ Kerne,  _16_ GB RAM\nClient:                _2_ Kerne,  _4_ GB RAM\nES:                    _4_ Kerne,  _16_ GB RAM\nsonstige VM:      __ Kerne,  __ GB RAM\nAchtung: Änderung der Kerne nur vor Erstinstallation möglich! (Neuinstallation erforderlich)"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0004"
+      row: 7
+      ansible_id: "VMES0004"
+      title: "Kerne pro Sockel einstellen"
+      description: "1. Einstellungen bearbeiten > CPU > Kerne pro Sockel\n2. Alle Kerne einem Sockel zuweisen (z.B. Kerne 4, Sockel1)"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0005"
+      row: 8
+      ansible_id: "VMES0005"
+      title: "CPU-Einstellungen"
+      description: "Einstellungen bearbeiten > CPU\nReservation -> 0 MHz (None)\nOS-Server -> 8000 Shares\nOS-Clients -> 2000 Shares\nES -> 2000 Shares"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0006"
+      row: 9
+      ansible_id: "VMES0006"
+      title: "Festplattengröße"
+      description: "Einstellungen bearbeiten > Festplattengröße\n-> laut Übergabeliste anpassen\nFestplatte 1: 125 GB\nFestplatte 2: 100 GB\nFestplatte 3: 1 GB"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0007"
+      row: 10
+      ansible_id: "VMES0007"
+      title: "DVD-Laufwerk mit VM´s verbinden"
+      description: "Einstellungen bearbeiten > CD/DVD-Laufwerk\n-> „Hostgerät“ anwählen"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0008"
+      row: 12
+      ansible_id: "VMES0008"
+      title: "VM einzeln starten"
+      description: "1. VM einschalten\n2. Konsole > Remotekonsole starten"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0009"
+      row: 14
+      ansible_id: "VMES0009"
+      title: "Anmeldung an der VM"
+      description: "Anmeldung mit Default-Passwort: Siemens1234"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0010"
+      row: 15
+      ansible_id: "VMES0010"
+      title: "Sprache"
+      description: "Installationssprache wählen\n-> Umstellung von Englisch nach Deutsch"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0011"
+      row: 16
+      ansible_id: "VMES0011"
+      title: "Rechnername einstellen"
+      description: "keine Sonderzeichen, Beginn mit Großbuchstaben, maximal 15 Zeichen\nNachträgliche Änderung nicht möglich!"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0012"
+      row: 17
+      ansible_id: "VMES0012"
+      title: "Automatische Installation der SIMATIC PCS 7  Komponenten"
+      description: "Setup-Manager läuft durch.\nNach Fertigmeldung der Erstinstallation den Rechner neu starten."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0013"
+      row: 18
+      ansible_id: "VMES0013"
+      title: "Anmelden mit Passwort"
+      description: "Siemens1234"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0014"
+      row: 19
+      ansible_id: "VMES0014"
+      title: "Passwort"
+      description: "Passwort aus Übergabeliste eingeben\nFalls dieses nicht den Komplexitätsanforderungen entspricht: PLSEngineering.01\nPW:"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0015"
+      row: 20
+      ansible_id: "VMES0015"
+      title: "Kommunikationseinstellungen"
+      description: "Terminalbus auswählen\nPSK: "
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0016"
+      row: 22
+      ansible_id: "VMES0016"
+      title: "Vmware-Tools aktualisieren"
+      description: "Falls nicht aktuell -> Aktionen -> Gastbetriebsystem -> VMwareTools aktualisieren"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0017"
+      row: 23
+      ansible_id: "VMES0017"
+      title: "Arbeitsgruppe"
+      description: "System > Einstellungen für Computernamen, Domäne und Arbeitsgruppe - Einstellungen ändern > Ändern\n-> Arbeitsgruppe aus Übergabeliste einstellen"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Keine Arbeitsgruppe, sondern Domäne"
+    - key: "VMES0018"
+      row: 24
+      ansible_id: "VMES0018"
+      title: "Kennwortrichtlinie anpassen"
+      description: "> Bei Domäne über GPO ausgerollt: Kennwortrichtlinien\n\nWenn Passwort nicht den Komplexitätsvoraussetzungen entspricht (Windows Server Betriebsystem):\nsecpol.msc > Kontorichtlinien > Kennwortrichtlinien\n-> Kennwort muss Komplexitätsanforderungen entsprechen: Deaktiviert\n-> Maximales Kennwortalter: 0\n-> Minimale Kennwortlänge: 6 Zeichen (Empfehlung) 0\n-> Minimales Kennwortalter: 1 Tag 0"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "GPO"
+    - key: "VMES0019"
+      row: 25
+      ansible_id: "VMES0019"
+      title: "Administratorkonto umbenennen"
+      description: "secpol.msc > lokale Richtlinien > Sicherheitsoptionen > Konten: Administrator umbennen > Administratorkonto laut Übergabeliste umbenennen \nNach dem Umbenennen Neustart!"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0020"
+      row: 26
+      ansible_id: "VMES0020"
+      title: "Bestehendes Administrator-Konto aktivieren und Passwort vergeben"
+      description: "Benutzerverwaltung - Eigenschaften vom Administrator-Konto\nComputerverwaltung > Benutzer > Administrator:\n- Kennwort läuft nie ab (Haken setzen)"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0021"
+      row: 27
+      ansible_id: "VMES0021"
+      title: "Passwort für Administrator laut Übergabeliste ändern"
+      description: "<HG>Computerverwaltung > Benutzer > rechtsklick auf Administrator > \"Kennwort festlegen\": Kennwort eingeben\nPW: "
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Wurde beim Installationsautomatismus gemacht"
+    - key: "VMES0022"
+      row: 28
+      ansible_id: "VMES0022"
+      title: "Benutzer anlegen\n(nur bei Arbeitsgruppe)"
+      description: "Benutzer entsprechend der Übergabeliste anlegen.\nVerwendung des Tools \"CreateUsersV1_1.bat\":\n1. Anpassen der Benutzernamen, Beschreibungen und Passwörter\n2. Anpassen der Gruppenmitgliedschaften\n3. Ausführen auf jeder Maschine."
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Keine weiteren lokalen Benutzer"
+    - key: "VMES0023"
+      row: 29
+      ansible_id: "VMES0023"
+      title: "Benutzer anlegen (Ergänzung Linde)"
+      description: "Name: PCS7RT\nPW: \nGruppen: Power Users, Remote Desktop Users, Siemens TIA Engineer, SIMATIC BATCH, SIMATIC HMI, SIMATIC Management Users, SIMATIC NET, Users\n\nName: Admin\nPW: \nGruppen: Administrators, Power Users, Siemens TIA Engineer,SIMATIC BATCH, SIMATIC HMI, SIMATIC Management Administrators, SIMATIC Management Users, SIMATIC NET\n"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Keine weiteren lokalen Benutzer"
+    - key: "VMES0024"
+      row: 30
+      ansible_id: "VMES0024"
+      title: "Festplatte partitionieren"
+      description: "Partitionierung mit Betriebssystem-Tool (Verwaltung - Datenträgerverwaltung)\n\nComputerverwaltung > Datenspeicher > Datenträgerverwaltung\n-> Erst Volume erweitern, dann benötigten Platz verkleinern\n\nVorgabe aus Übergabeliste entnehmen\nEmpfehlung:\n100GB (NTFS) für Partition C, Laufwerksname: SYSTEM\n1GB (NTFS) für Partition E, Laufwerksname: LIZENZEN\nRest (NTFS) für Partition D, Laufwerksname: DATEN\n\nAchtung: Bei Multiprojekt-Engineering ist auf der Engineering Station mehr Speicherplatz empfohlen. Bitte vor der ES-Installation abklären!\nBei Panel-PC wird keine Image Partition angelegt."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0025"
+      row: 31
+      ansible_id: "VMES0025"
+      title: "Ordner Tools"
+      description: "1. Auf der ES unter D einen Ordner \"Tools\" anlegen.\n2. Ordner freigeben.\n3. Benötigte Tools aus \"SoC SiVaaS\\50 AddOn\\Customizing\\Tools\" in den Ordner kopieren.\n4. Kundenspezifische Tools in dem Ordner ablegen.\n5. Verknüpfung auf den Ordner für Zugriff aus dem Netzwerk erstellen und in dem Ordner ablegen."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "x"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0026"
+      row: 32
+      ansible_id: "VMES0026"
+      title: "Ordner Tools"
+      description: "Verknüpfung aus dem Ordner Tools der ES auf dem D-Laufwerk ablegen."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0027"
+      row: 34
+      ansible_id: "VMES0027"
+      title: "Ereignisprotokollierung für Herunterfahren"
+      description: "> Bei Domäne über GPO ausgerollt: Ereignisprotokollierung_Herunterfahren\n\ngpedit.msc > Computerkonfiguration > Administrative Vorlagen > System > \"Ereignisprotokollierung für Herunterfahren anzeigen\" deaktivieren"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "GPO"
+    - key: "VMES0028"
+      row: 35
+      ansible_id: "VMES0028"
+      title: "Windows-Zeitgeber"
+      description: "services.msc > Windows-Zeitgeber\n -> Status: Wird ausgeführt\n -> Starttyp: Automatisch (Verzögerter Start)\noder Verwendung \"SetW32timeToAutoDelayed.bat\" (SoC SiVaaS\\50 AddOn\\Customizing\\Tools)"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0029"
+      row: 36
+      ansible_id: "VMES0029"
+      title: "Maximale Ereignisprotokollgröße"
+      description: "> Bei Domäne über GPO ausgerollt: Ereignisprotokollgröße\n\ngpedit.msc > Computerkonfiguration > Administrative Vorlagen > Windows Komponenten > Ereignisprotokolldienst > Anwendung > \"Maximale Protokolldateigröße\" aktivieren, auf 16384 kByte stellen"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "GPO"
+    - key: "VMES0030"
+      row: 37
+      ansible_id: "VMES0030"
+      title: "Lifebeat Monitoring"
+      description: "1. Ausführen: dcomcnfg\n2. Konsolenstamm > Komponentendienste > Computer > Arbeitsplatz > DCOM-Konfiguration > CCDmRtChannelHost > Eigenschaften\n3. Sicherheit > Start- und Aktivierungsberechtigungen > Bearbeiten\n4. evtl. Gruppe NETWORK/NETZWERK hinzufügen\n5. Benutzergruppe selektieren > Alle Haken bei Zulassen setzen\n6. Punkt 4 und 5 für \"Zugriffsberechtigungen\" und \"Konfigurationsberechtigungen\" wiederholen"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0031"
+      row: 39
+      ansible_id: "VMES0031"
+      title: "Spracheinstellungen"
+      description: "Einstellungen nach Sprachvorgabe (Beispiel: Deutsch)\nSystemsteuerung > Sprache\n1. Deutsch an erster Stelle\n2. Datums-, Uhrzeit-, oder Zahlenformate ändern > Aufenthaltsort -> Deutschland\n3. Datums-, Uhrzeit-, oder Zahlenformate ändern > Verwaltung > Einstellungen kopieren -> Willkommensseite und Neue Benutzerkonten"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0032"
+      row: 40
+      ansible_id: "VMES0032"
+      title: "Zeitzone"
+      description: "timedate.cpl\nUTC +1 Berlin"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0033"
+      row: 41
+      ansible_id: "VMES0033"
+      title: "Starten und Wiederherstellen anpassen"
+      description: "System > Erweiterte Systemeinstellungen > Erweitert > Starten und Wiederherstellen > Einstellungen\n-> \"Anzeigedauer der Betriebssystemliste\" abwählen\n-> \"Anzeigedauer der Wiederherstellungsoptionen\" anwählen, 5 s einstellen\n-> \"Automatisch Neustart durchführen\" anwählen"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0034"
+      row: 43
+      ansible_id: "VMES0034"
+      title: "Netzwerkidentifikation einstellen"
+      description: "Nur bei Arbeitsgruppe\n\nsecpol.msc > Netzwerklisten-Manager-Richtlinien\n-> \"Nicht identifizierte Netzwerke\" privat, Benutzer kann Ort ändern\n-> \"Netzwerke werden identifiziert\" privat"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0035"
+      row: 44
+      ansible_id: "VMES0035"
+      title: "Terminalbus in Simatic Shell"
+      description: "Simatic Shell öffnen\nTerminalbus ist blau"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0036"
+      row: 45
+      ansible_id: "VMES0036"
+      title: "Terminalbus verschlüsseln"
+      description: "Verschlüsselung deaktivieren"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Terminalbus Verschlüsselung aktiviert gelassen"
+    - key: "VMES0037"
+      row: 46
+      ansible_id: "VMES0037"
+      title: "IP-Adressen eintragen"
+      description: "IP-Adressen bei Terminalbus, Anlagenbus und Redundanzbus eintragen.\nSkript \"\\Skripte\\IP_Change.Bat\" bearbeiten, IPs eintragen und als Administrator ausführen.\n\n10.37.34.x\n255.255.255.192\n10.37.34.1\n\nBei Anlagenbus Netzwerkkarte:\nDie Punkte „Client für Microsoft-Netzwerke“ und „Datei- und Druckerfreigabe für Microsoft-Netzwerke“ dürfen nicht aktiviert werden.\n\n192.168.0.x\n255.255.255.0\n\nBei Redundanzbus Netzwerkkarte:\nDie Punkte „Client für Microsoft-Netzwerke“ und „Datei- und Druckerfreigabe für Microsoft-Netzwerke“ dürfen nicht aktiviert werden.\n\nBei Terminalbus:\nIPv6 nicht deaktivieren"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "31"
+        K_ENG4X32: "32"
+      master_note: ""
+    - key: "VMES0038"
+      row: 47
+      ansible_id: "VMES0038"
+      title: "DNS-Server beim Terminalbus eintragen"
+      description: "10.37.34.11 (bevorzugt)\n10.37.34.12 (alternativ)\n10.199.167.12 (erweitert)\n\nDNS-Suffixes unter Reiter \"Erweitert\" eintragen:\nlg.grp\nlinde.lds.grp"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0039"
+      row: 48
+      ansible_id: "VMES0039"
+      title: "Überflüssige Netzwerkkarten entfernen"
+      description: "Netzwerkkarten die nicht benötigt werden sollen entfernt werden (v.a. bei reinen WinServer VMs)\n1. Löschen der Netzwerkkarte im ESXi (Einstellungen bearbeiten > Netzwerkadapter > entfernen)\n2. Systemsteuerung > Gerätemanager > Netzwerkadapter aufklappen\n3. Ansicht > Ausgeblendete Geräte anzeigen\n4. nicht verwendete Netzwerkadapter deinstallieren"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0040"
+      row: 49
+      ansible_id: "VMES0040"
+      title: "Ping auf eigenen Rechnernamen oder IP-Adresse 127.0.0.1"
+      description: "1. Ping auf Adresse 127.0.0.1\n     -> Zeiger auf den eigenen PC\n2. Funktioniert der Ping nicht: Problem am eigenen Rechner (z.B. Netzwerkkarte defekt)"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0041"
+      row: 50
+      ansible_id: "VMES0041"
+      title: "HOSTS/LMHOSTS anpassen bzw. aktualisieren\n"
+      description: "Nur bei Arbeitsgruppe\n\n C:\\Windows\\System32\\drivers\\etc\n\nEmpfehlung SUP PA:\nNach der Rechnerinstallation müssen die HOSTS und LMHOSTS gleich aussehen. Beim Diagnose-Workshop wurde darauf noch extra hingewiesen.\nWir brauchen beide Dateien mit identischem Inhalt.\n\nDie LMHOSTS muss wie folgt aussehen:\n102.54.94.97    OSSERVER1    #PRE    #OS SERVER\nMit der Erweiterung #PRE wird diese Zeile sofort beim Rechnerstart in den NetBios-Cache geladen. Laut CS2 sehr wichtig.\n \nDie HOSTS sieht dann wie folgt aus:\n102.54.94.97    OSSERVER1    #OS SERVER\nDa wird #PRE nicht benötigt, muss entfernt werden!\n \nZusätzlich muss in der HOSTS noch folgende Zeile eingefügt werden:\n127.0.0.1        localhost\nDieser Eintrag wird nur in der HOSTS benötigt!"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Bei Domäne nicht erforderlich"
+    - key: "VMES0042"
+      row: 51
+      ansible_id: "VMES0042"
+      title: "Bildschirmauflösung einstellen"
+      description: "Bildschirmauflösung laut Übergabeliste einstellen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0043"
+      row: 52
+      ansible_id: "VMES0043"
+      title: "STRG+ALT+ENTF deaktivieren"
+      description: "secpol.msc > lokale Richtlinien > Sicherheitsoptionen > Interaktive Anmeldung: Kein STRG+ALT+ENTF erforderlich -> Aktiviert"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "GPO"
+    - key: "VMES0044"
+      row: 53
+      ansible_id: "VMES0044"
+      title: "Internetoptionen des Internet-Explorers\n"
+      description: "> Bei Domäne über GPO ausgerollt: Internetoptionen\n\nEinstellung muss für alle Windows-User erfolgen.\n1. Internet Explorer öffnen\n2. Internetoptionen öffnen\n3. Im Reiter \"Erweitert\" unter \"Sicherheit\":\n          \"Auf gesperrte Serverzertifikate überprüfen\" deaktivieren\n          \"Auf gesperrte Zertifikate von Herausgebern überprüfen\"  deaktivieren"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "GPO"
+    - key: "VMES0045"
+      row: 54
+      ansible_id: "VMES0045"
+      title: "Internetoptionen"
+      description: "Internet Explorer > Internetoptionen > Sicherheit > Stufe anpassen\nDownloads > Dateidownloads ist aktiviert"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0046"
+      row: 55
+      ansible_id: "VMES0046"
+      title: "UltraVNC + Firewall Regeln"
+      description: "UltraVNC_1436_X64_Setup.exe\nVNC Server installieren + Haken setzen (Privat)\nDatei-sharing deaktivieren"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0047"
+      row: 60
+      ansible_id: "VMES0047"
+      title: "AD-Client in Domäne aufnehmen"
+      description: "Systemeigenschaften > Computername > Ändern\n\nMitglied von\nDomäne: PCS-DOM-LS4\n\nBenutzer DOMadm nutzen\n\nNoch kein Neustart!"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0048"
+      row: 61
+      ansible_id: "VMES0048"
+      title: "AD-Client in Domäne zuordnen"
+      description: "Rechner dem Ordner \"ES\" zuordnen\n\nDanach Neustart"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0049"
+      row: 62
+      ansible_id: "VMES0049"
+      title: "Anmeldung als Domänenbenutzer"
+      description: "Benutzer DOMadmLS4"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0050"
+      row: 66
+      ansible_id: "VMES0050"
+      title: "VNC-Server konfigurieren"
+      description: "Reiter \"Security\"\n> Haken bei \"Require MS Logon (User/Password/Domain)\"\n> Haken bei \"New MS Logon (Support multiple domains)\"\n\nGG_VNC_ES"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0051"
+      row: 67
+      ansible_id: "VMES0051"
+      title: "VNC-Verbindungstest"
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0052"
+      row: 70
+      ansible_id: "VMES0052"
+      title: "PCS 7 V10.0 installieren"
+      description: "Programm-Pakete:\n\nOptions\n- SIMATIC Management Console"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0053"
+      row: 71
+      ansible_id: "VMES0053"
+      title: "PCS 7 V7 Basis Library installieren"
+      description: "1. SIMATIC_PCS7_Lib_V7_1_SP3_Upd4 installieren (nur ES)\n2. SIMATIC_PCS7_Faceplates_V7_1_SP3_upd1 installieren\n3. PCS7 Bib erneut über Rahmensetup installieren\n\nPCS 7 Updates dürfen erst danach installiert werden! Ansonsten lässt sich das Rahmensetup nicht mehr starten."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Kunde erfordert diese nicht"
+    - key: "VMES0054"
+      row: 72
+      ansible_id: "VMES0054"
+      title: "SIMATIC Management Console install."
+      description: "SIMATIC Management Console V9.1 SP1 Upd1 installieren\n-> Setup aus PCS 7 DVD \"Additional Products\" starten -> Fehler beim starten\n-> Installation mittels normalem Rahmensetup durchgeführt"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0055"
+      row: 73
+      ansible_id: "VMES0055"
+      title: "PCS 7 Software installieren"
+      description: "PCS 7 V10 Setup ausführen\nBatch Engineering Installation\n\nEngineering\n- BATCH Engineering\n-> BATCH Base V10.0\n-> BATCH Builder V10.0\n-> BATCH WinCC APL Client Options V10.0 (Optional, angehakt)\n-> BATCH WinCC Server Options V10.0"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0056"
+      row: 74
+      ansible_id: "VMES0056"
+      title: "SIMATIC Management Agent Dienst."
+      description: "Starttyp \"Automatisch\""
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0057"
+      row: 75
+      ansible_id: "VMES0057"
+      title: "SIMATIC Management Console konfigurieren"
+      description: "Struktur anlegen, welche die Struktur in der Domäne spiegelt\n\nPSK: SMMC4Dyk@Leng%04\n\nLS4\n    Client\n        WebServer\n    ES\n    Server\n    OpenPCS7"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0058"
+      row: 76
+      ansible_id: "VMES0058"
+      title: "SIMATIC Management Agent Installieren"
+      description: "Setup.exe im Ordner PCS7_V10.0\\Additional_Products\\SMA_V10.0\\Media ausführen\n\nSIMATIC Management Agent V10.0"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0059"
+      row: 77
+      ansible_id: "VMES0059"
+      title: "PCS 7 Software aktualisieren"
+      description: "PCS 7 V10 SP1 Setup ausführen\n-> Installation mittels SIMATIC Management Console\n\n* Ohne Integritätsprüfung\n"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0060"
+      row: 78
+      ansible_id: "VMES0060"
+      title: "PCS 7 Software aktualisieren"
+      description: "PCS 7 V10 SP1 Setup ausführen\n-> Installation manuell ohne SIMATIC Management Console\n-> Option \"Aktualisierung\"\n"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0061"
+      row: 79
+      ansible_id: "VMES0061"
+      title: "SIMATIC Management Agent Aktualisieren"
+      description: "SIMATIC Management Agent V10.0 SP1\n->Installation mittels SIMATIC Management Console"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0062"
+      row: 80
+      ansible_id: "VMES0062"
+      title: "CEMAT V10 Installieren"
+      description: "CEMAT V10 Setup ausführen\n->Installation mittels SIMATIC Management Console\n\n> MinAs Engineering Station\n-> SIMATIC PCS 7 CEMAT Minerals Engineering Package\n\nOptionen\n> Libraries\n-> Minerals Lib V10.0\n-> SPC Lib V10.0\n-> KCS Lib V10.0\n\n> Monitoring and Control\n-> Minerals MC V10.0\n-> SPC MC V10.0\n-> KCS MC V10.0"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0063"
+      row: 81
+      ansible_id: "VMES0063"
+      title: "CEMAT V10 Installieren"
+      description: "CEMAT V10 Setup ausführen\n->Installation mittels Rahmensetup\n\n> MinAs Engineering Station\n-> SIMATIC PCS 7 CEMAT Minerals Engineering Package\n\nOptionen\n> Libraries\n-> Minerals Lib V10.0\n-> SPC Lib V10.0\n-> KCS Lib V10.0\n\n> Monitoring and Control\n-> Minerals MC V10.0\n-> SPC MC V10.0\n-> KCS MC V10.0"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "n"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0064"
+      row: 82
+      ansible_id: "VMES0064"
+      title: "PCS 7 Updates installieren"
+      description: "SIMATIC_AS_OS_Engineering_V10_0_SP1_Upd1_EU_CHS.exe ausführen\n-> Option \"Hochrüsten\""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0065"
+      row: 83
+      ansible_id: "VMES0065"
+      title: "PCS 7 Updates installieren"
+      description: "SIMATIC_CFC_V10_0_SP1_Upd1_EU.exe ausführen\n-> Option \"Hochrüsten\""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0066"
+      row: 84
+      ansible_id: "VMES0066"
+      title: "PCS 7 Updates installieren"
+      description: "SIMATIC_IEAPO_V10_0_SP1_Upd1_EU_CHS.exe ausführen\n-> Alle verfügbaren Sprachen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0067"
+      row: 85
+      ansible_id: "VMES0067"
+      title: "PCS 7 Updates installieren"
+      description: "SIMATIC_XMLTRANSFER_V10_0_SP1_UPd1_EU_CHS.exe ausführen\n-> Option \"Hochrüsten\""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0068"
+      row: 86
+      ansible_id: "VMES0068"
+      title: "PCS 7 Updates installieren"
+      description: "SIMATIC_PCS_7_Basis_Library_V10_0_SP1_Upd1_EU.exe ausführen\n-> Alle verfügbaren Sprachen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0069"
+      row: 87
+      ansible_id: "VMES0069"
+      title: "Kompatibilität prüfen"
+      description: "1. installierte Software von je einem Rechnertyp im Kompa-Tool hochladen\n2. Bei Kompatibilität den Bericht herunterladen und im Projektordner unter Customizing/Inst_SW ablegen. Bei Unstimmigkeiten Kommentar in einem Text-Dokument ablegen."
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "x"
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: "Prüfung mit SIMATIC Management Konsole, Prüfung nur für V10.0 UC02 möglich, für V10.0 SP1 noch keine Kompatibilitätsliste vorhanden"
+    - key: "VMES0070"
+      row: 88
+      ansible_id: "VMES0070"
+      title: "installierte Software exportieren"
+      description: "1. installierte Software auf jedem Rechner öffnen\n2. installierte Software exportieren\n3. Dateien im Projektordner unter Customizing/Inst_SW ablegen."
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "x"
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: "Export mit SIMATIC Management Konsole"
+    - key: "VMES0071"
+      row: 90
+      ansible_id: "VMES0071"
+      title: "BGInfo"
+      description: "> Bei Domäne über GPO ausgerollt: BgInfo\nbei GPO SIVaaS.bgi lokal löschen\n\nOrdner BGInfo in Verzeichnis C:\\Programme (x86)\\BgInfo kopieren\n\nOrdner C:\\Programme\\Siemens\\BGSiVaaS umbenannt in BGSiVaaS_deaktiviert"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0072"
+      row: 91
+      ansible_id: "VMES0072"
+      title: "NTP Wizard"
+      description: "1. NTP Wizard unter D:\\Tools ablegen\n2. OpenIni anwählen und ausfüllen.\n3. Bei Domain Controllern dienen diese als Uhrzeit Master der Anlage. Ansonsten werden die OS-Serverals Uhrzeitmaster der Anlage konfiguriert. Im Anlagenbus ist immer der OS-Server Uhrzeit Master.\n4. NTP Clients konfigurieren."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Domäne daher nicht notwendig"
+    - key: "VMES0073"
+      row: 92
+      ansible_id: "VMES0073"
+      title: "Aktuelles SDT Tool unter D:\\Siemens ablegen"
+      description: "https://support.industry.siemens.com/cs/document/65976201/wie-k%C3%B6nnen-sie-diagnose-und-systeminformationen-effizient-einsammeln-?dti=0&lc=de-WW"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Standardmäßig abgelegt"
+    - key: "VMES0074"
+      row: 93
+      ansible_id: "VMES0074"
+      title: "SINEC PNI"
+      description: "SINEC PNI unter Tools\\Siemens ablegen\nVerknüpfung auf den Desktop\nPST als Zip-Datei unter Tools\\Siemens ablegen"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0075"
+      row: 94
+      ansible_id: "VMES0075"
+      title: "Lizenzen einspielen/migrieren"
+      description: "AS Engineering 10.0\nOS Engineering 10.0\nENG4X31: 10411001136219991057\nENG4X32: 10411001136219991058"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0076"
+      row: 95
+      ansible_id: "VMES0076"
+      title: "Lizenzen einspielen/migrieren"
+      description: "SOFTNET-IE S7 Lean 18.0\nSOFTNET-IE S7 Power Pack 18.0\nSOFTNET-IE S7 Basic 18.0\nENG4X31: 10411001248229924162"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0077"
+      row: 96
+      ansible_id: "VMES0077"
+      title: "Lizenzen einspielen/migrieren"
+      description: "AS RT PO 1000\nENG4X31: 10411000248099991035\nENG4X31: 10411000248099991036\nENG4X31: 10411000248099991037"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "x"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0078"
+      row: 97
+      ansible_id: "VMES0078"
+      title: "Lizenzen einspielen/migrieren"
+      description: "CEMAT Engineering 6.1 / SIMATIC HMI WinCC User Archives 8.0\nENG4X31: 10411000768179991031\nENG4X32: 10411000768179991032"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0079"
+      row: 98
+      ansible_id: "VMES0079"
+      title: "Lizenzen einspielen/migrieren"
+      description: "SIMATIC Management Agent 10 Instanzen\nENG4X32: 10411000248099991059\nENG4X32: 10411000248099991060"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0080"
+      row: 99
+      ansible_id: "VMES0080"
+      title: "Lizenzen einspielen/migrieren"
+      description: "SIMATIC Management Console 10.0\nENG4X32: 10411001136219991061"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0081"
+      row: 100
+      ansible_id: "VMES0081"
+      title: "Einstellungen für PCS 7 Benutzer durchführen"
+      description: "Alle WinCC Mitgliedschaften (SIMATIC HMI, SIMATIC NET, SIMATIC Management User, Siemens TIA Engineer) müssen im Benutzer eingetragen werden!\n\nKontrolle für LOCadmLS4 da dies der einzige lokale Benutzer ist"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0082"
+      row: 101
+      ansible_id: "VMES0082"
+      title: "Projektordner erstellen und Freigabe einrichten"
+      description: "Kann mittels PowerSHell-Skript durchgeführt werden\n\nz.B.: \"D:\\Projekte\"\nProjektordner mit AG / Lead-Engineer abklären!\n\nFreigabe:\nAdministrators > Vollzugriff\nSIMATIC HMI > Vollzugriff\nSIMATIC HMI VIEWER > Lesen\n\nSicherheit:\nSYSTEM > Vollzugriff\nAdministrators > Vollzugriff\nAuthentifizierte Benutzer > außer Vollzugriff\nSIMATIC HMI > Vollzugriff\nSIMATIC HMI CS > Vollzugriff\nUsers > Lesen, Ausführen; Ordnerinhalt anzeigen; Lesen"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0083"
+      row: 103
+      ansible_id: "VMES0083"
+      title: "Deinstallieren von Windows-Komponenten"
+      description: "Kompendium Teil F (V10.0): siehe Kapitel 7.2\n\"Start > Systemsteuerung > Programme >\nProgramme und Funktionen > Windows-Funktionen aktivieren oder\ndeaktivieren\" \n- Alle nicht benötigten Komponenten deaktivieren"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Durch Option \"System Hardening\" erfolgt"
+    - key: "VMES0084"
+      row: 104
+      ansible_id: "VMES0084"
+      title: "Deaktivieren von Diensten"
+      description: "Kompendium Teil F (V10.0): siehe Kapitel 7.2.1\nAb V10: über das SIMATIC PCS 7 Setup mittels Option \"System Hardening\" realisiert. Diese Option ist einmalig auszuführen.\n\nDabei werden die folgenden Dienste deaktiviert:\n• Bluetooth-Audiogateway-Dienst\n• Bluetooth-Unterstützungsdienste\n• Diagnosediensthost\n• Diagnoserichtliniendienst\n• Funkverwaltungsdienst\n• Geolocation-Dienst\n• Leistungsprotokolle und -warnungen\n• Manager für heruntergeladene Karten\n• Siemens Telemetry Connector Service\n• Telefondienst\n• WalletService\n• Windows Media Player-Netzwerkfreigabedienst\n• Windows Presentation Foundation-Schriftartcache\n• Windows-Dienst für mobile Hotspots\n• Windows-Farbsystem\n• Windows-Insider-Dienst\n• Windows-Sofortverbindung - Konfigurationsregistrierungsstelle\n• Xbox Accessory Management Service\n• Xbox Live Authentifizierungs-Manager\n• Xbox Live-Netzwerkservice\n• Xbox Live-Spiele speichern\n• Zahlungs- und NFC/SE-Manager\n• Zertifikatverteilung\n\nOder Auswahl System Hardening im PCS7 Setup\n\nKontrolle dass System Hardening durchgeführt wurde"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Durch Option \"System Hardening\" erfolgt"
+    - key: "VMES0085"
+      row: 105
+      ansible_id: "VMES0085"
+      title: "SMB Signierung aktivieren"
+      description: "Kompendium Teil F (V10.0): siehe Kapitel 7.2.3.1\n\n- \"gpedit.msc > Computerkonfiguration > Windows-Einstellungen > Sicherheitseinstellungen > Lokale Richtlinien > Sicherheitsoptionen\"\n- \"Microsoft-Netzwerk (Client): Kommunikation digital signieren (immer)\" aktivieren\n- \"Microsoft-Netzwerk (Server: Kommunikation digital signieren (immer)\" aktivieren\n- \"Microsoft-Netzwerk (Server): Kommunikation digital signieren (wenn Client zustimmt)\" aktivieren"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Durch GPO \"SMB_Signierung\""
+    - key: "VMES0086"
+      row: 106
+      ansible_id: "VMES0086"
+      title: "Deaktivierung von SMBv1 "
+      description: "Deaktivierung von SMBv1 siehe Kapitel 6.2.4.4 \n- Deaktivieren Sie auf Ihren Systemen eine veraltete Version des SMB-Protokolls, welches bei Kopiervorgängen von Dateien zwischen zwei Systemen verwendet werden kann. Gehen Sie dazu nach der folgenden Anleitung vor: https://support.microsoft.com/de-de/help/2696547 \n\nIm Ordner Scripte gibt es eine Anleitung wie man es übder die PowerShell deaktivieren kann.\nGet-WindowsOptionalFeature -Online -FeatureName SMB1Protocol"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Bereits deaktiviert"
+    - key: "VMES0087"
+      row: 107
+      ansible_id: "VMES0087"
+      title: "SMBv3-Verschlüsselung"
+      description: "Kompendium Teil F (V10.0): siehe Kapitel 7.2.3.2\n\nAuf allen PCS 7 Systemen ist folgender Befehl auszuführen:\nSet-SmbServerConfiguration –EncryptData $true\n\nAuf DCs, WSUS oder Jumphost kann folgender Befehl ausgeführt werden um Shares zu verschlüsseln:\nSet-SmbShare –Name <sharename> -EncryptData $true\n\nDer <sharemame> ist entsprechend der Freigabenamen der benötigten Dateifreigaben anzupassen.\nDie aktuelle Einstellung der SMBv3-Verschlüsselung kann mit folgenden Befehlen überprüft werden.\n\nBei Aktivierung der Verschlüsselung für das komplette System:\nGet-SmbServerConfiguration | Select-Object EncryptData\nBei Verschlüsselung einzelner Dateifreigaben auf einem System:\nGet-SmbConnection | Select-Object -Property Servername, Sharename, encrypted, dialect"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0088"
+      row: 108
+      ansible_id: "VMES0088"
+      title: "Deaktivierung von veralteten SSL-/TLS-Kommunikationsverfahren"
+      description: "Kompendium Teil F (V10.0): siehe Kapitel 7.2.3.7\n\nIn der Registry sollten folgende Verfahren deaktiviert werden:\n\nDeaktivieren von SSL V2.0\nDeaktivieren von SSL V3.0\nDeaktivieren von TLS V1.0\nDeaktivieren von TLS V1.1\nAktivieren von TLS V1.2\n\nNur Kontrolle, auf vorinstallierten IPCs sind diese empfohlenen Einstellungen bereits vorkonfiguriert\n\nKontrolle mittels SSL_TLS_Registry_query.bat"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Registryschlüssel fehlen"
+    - key: "VMES0089"
+      row: 109
+      ansible_id: "VMES0089"
+      title: "Verwendung von sicheren Cipher Suites"
+      description: "Kompendium Teil F (V10.0): siehe Kapitel 7.2.3.8\n\nFolgende TLS V1.2 Cipher Suites (ggf. abhängig von länderspezifischen Anforderungen) mit Perfect Forward\nSecrecy (PFS) wurden auf Kompatibilität mit SIMATIC PCS 7 getestet:\n• TLS_DHE_RSA_WITH_AES_128_GCM_SHA256\n• TLS_DHE_RSA_WITH_AES_128_CBC_SHA256\n• TLS_DHE_RSA_WITH_AES_256_GCM_SHA384\n• TLS_DHE_RSA_WITH_AES_256_CBC_SHA256\n• TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256\n• TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\n• TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256\n• TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384\n• TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384\n• TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256\n\nAndere, oben nicht genannte, Cipher Suites sollen explizit deaktiviert werden, z.B.\nTLS_RSA_WITH_3DES_EDE_CBC_SHA.\n\nDie auf den Systemen aktiven Cipher Suites erhalten Sie mit dem folgenden PowershellBefehl:\nGet-TlsCipherSuite | fw\n\nKontrolle ob Deaktivierung notwendig ist"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0090"
+      row: 110
+      ansible_id: "VMES0090"
+      title: "Verwendung von sicheren Cipher Suites"
+      description: "PowerShell-Befehl Disable-TlsCipherSuite\n- TLS_AES_256_GCM_SHA384\n- TLS_AES_128_GCM_SHA256\n- TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384\n- TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256\n- TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384\n- TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256\n- TLS_RSA_WITH_NULL_SHA256\n- TLS_RSA_WITH_NULL_SHA\n- TLS_PSK_WITH_AES_256_GCM_SHA384\n- TLS_PSK_WITH_AES_128_GCM_SHA256\n- TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA\n- TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA\n- TLS_PSK_WITH_AES_256_CBC_SHA384\n- TLS_PSK_WITH_AES_128_CBC_SHA256\n- TLS_PSK_WITH_NULL_SHA384\n- TLS_PSK_WITH_NULL_SHA256\n- TLS_RSA_WITH_AES_256_GCM_SHA384\n- TLS_RSA_WITH_AES_128_GCM_SHA256\n- TLS_RSA_WITH_AES_256_CBC_SHA256\n- TLS_RSA_WITH_AES_128_CBC_SHA256\n- TLS_RSA_WITH_AES_256_CBC_SHA\n- TLS_RSA_WITH_AES_128_CBC_SHA\n- TLS_RSA_WITH_3DES_EDE_CBC_SHA\n\nDeaktivierung mittels Disable_TLS_Ciphers.ps1"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0091"
+      row: 111
+      ansible_id: "VMES0091"
+      title: "Parametrierung des ALM als Lizenzserver"
+      description: "Kompendium Teil F (V10.0): siehe Kapitel 7.3\n\nAuf allen PCS 7 Rechnern mit ALM soll die Lizenzserver-Funktionalität deaktiviert werden.\n\n- ALM öffnen\n- \"Datei > Einstellungen > Verbindung > Verbindungen\nvon remote erlauben\"\n- Option deaktivieren bzw. Haken entfernen\n- \"Neustart des Services sofort durchführen\" und die Einstellungen übernehmen\n\nDefaullt-Einstellung, daher nur Kontrolle"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Kontrolliert"
+    - key: "VMES0092"
+      row: 112
+      ansible_id: "VMES0092"
+      title: "Energieoptionen auf \"Höchstleistung\" setzen"
+      description: "Energiesparplan „High performance“ auswählen und über „Change plan settings“ anpassen.\nBildschirm einer OS darf niemals ausgeschaltet werden, deshalb bei „Turn off\nthe display“ auf „Never“ einstellen.\nUnter „Change advanced power settings“ das Ausschalten der Festplatte deaktivieren."
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Im Plan \"SIMATIC\" bereits enthalten"
+    - key: "VMES0093"
+      row: 113
+      ansible_id: "VMES0093"
+      title: "Security Controller"
+      description: "Kompendium Teil F (V9.0): siehe Kapitel 6.3\nDie Option, dass der Security Controller die Einstellungen automatisch ausführen darf, muss während der Installation der PCS 7 Programme explizit bestätigt werden."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0094"
+      row: 114
+      ansible_id: "VMES0094"
+      title: "Windows Firewall aktivieren"
+      description: "Kompendium Teil F (V9.0): siehe Kapitel 6.4\nEventuell entsprechend Kundenvorgabe einstellen! \nWenn keine Kundenvorgaben vorhanden sind, Firewall aktivieren."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0095"
+      row: 115
+      ansible_id: "VMES0095"
+      title: "AutoRun / AutoPlay für externe Laufwerke und Speichermedien deaktivieren"
+      description: "> Bei Domäne über GPO ausgerollt\nF_Kompendium.exe aus dem Ordner \"\\Skripte\" als Administrator ausführen.\nKompendium Teil F (V9.0): siehe Kapitel 6.6.3\n- Entsprechend Kundenvorgabe einstellen!\n\n\"Start > Suche > gpedit.msc > Als Administrator ausführen (in einer Domäne können die Einstellungen zentral vorgenommen werden) > Computerkonfiguration > Administrative Vorlagen > Windows-Komponenten > Richtlinien für die automatische Wiedergabe\"\n- Gruppenrichtlinie \"Autoplay deaktivieren\" aktivieren und aus der Klappliste im Bereich \"Autoplay deaktivieren auf:\" die Option \"Alle\nLaufwerke\" auswählen\n- Gruppenrichtlinie \"AutoAusführen-Standardverhalten\" aktivieren und aus der Klappliste im Bereich \"AutoAusführen-Standardverhalten\" die Option\n\"Keine AutoAusführen-Befehle ausführen\" auswählen. \n- Rechner neu starten\n"
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "GPO: AutoRun_AutoPlay_deaktivieren"
+    - key: "VMES0096"
+      row: 116
+      ansible_id: "VMES0096"
+      title: "Image erstellen (nur Systemsoftware)"
+      description: "Ein Image vom Betriebssystem inkl. aller relevanter Einstellungen, gewährleistet im Fehlerfall immer eine gute Betriebssystembasis für eine komplette Neuinstallation."
+      master_values:
+        F_TLGDE1064DE001: "x"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0097"
+      row: 117
+      ansible_id: "VMES0097"
+      title: "PDM Device Library V9.2 installieren"
+      description: "SIMATIC PDM Device Library #1 2020 9.2.0.0 installiert"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0098"
+      row: 118
+      ansible_id: "VMES0098"
+      title: "PDM Device Library V9.2 integriert"
+      description: "SIMATIC PDM Device Integration Manager geöffnet\n-> Gerätebeschreibungen aus Quellverzeichnis einlesen\n-> Gerätebeschreibungen integrieren"
+      master_values:
+        F_TLGDE1064DE001: "n"
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0099"
+      row: 120
+      ansible_id: "VMES0099"
+      title: "WSUS-Server konfigurieren"
+      description: "WSUS Client connect ausführen\n\nWSUS-Server: 192.168.234.199\nWSUS Status-Server: 192.168.234.199\nNotify before download\nZuweisung einer Gruppe: Vibrantz"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "GPO: WSUS_automatischer_Download_und_Install"
+    - key: "VMES0100"
+      row: 121
+      ansible_id: "VMES0100"
+      title: "VEEAM Backup erstellen"
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0101"
+      row: 122
+      ansible_id: "VMES0101"
+      title: "Windows Patches/Hotfix installieren"
+      description: "2025-03 Cumulative Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5053603)"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0102"
+      row: 123
+      ansible_id: "VMES0102"
+      title: "Windows Patches/Hotfix installieren"
+      description: "2025-01 Cumulative Update for .NET Framework 3.5, 4.8 and 4.8.1 for Microsoft server operating system version 21H2 for x64 (KB5050187)"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0103"
+      row: 124
+      ansible_id: "VMES0103"
+      title: "Windows Patches/Hotfix installieren"
+      description: "2025-09 Cumulative Update for Microsoft server operating system version 21H2 for x64-based Systems (KB5065432)"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0104"
+      row: 125
+      ansible_id: "VMES0104"
+      title: "Windows Patches/Hotfix installieren"
+      description: "2025-09 Cumulative Update for .NET Framework 3.5, 4.8 and 4.8.1 for Microsoft server operating system version 21H2 for x64 (KB5065962)"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0105"
+      row: 126
+      ansible_id: "VMES0105"
+      title: "Windows Patches/Hotfix installieren"
+      description: "Microsoft Edge-Stable Channel Version 140 Update for x64 based Editions (Build 140.0.3485.66)"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0106"
+      row: 127
+      ansible_id: "VMES0106"
+      title: "rsop.msc Fehlerbehebung"
+      description: "Kompletten Inhalt aus C:\\Windows\\PolicyDefinitions_backup kopiert\n> Einfügen in C:\\Windows\\PolicyDefinitions"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "n"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: "Fehler beim öffnen von gpedit.msc besteht mit Windows Server 2022 nicht mehr"
+    - key: "VMES0107"
+      row: 128
+      ansible_id: "VMES0107"
+      title: "Firewall aktivieren"
+      description: "1. PCS 7 Security Controller öffnen\n2. Einstellungen wiederholen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0108"
+      row: 129
+      ansible_id: "VMES0108"
+      title: "Security Controller"
+      description: "Security Controller für Benutzer DOMuserLS4 ausführen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0109"
+      row: 130
+      ansible_id: "VMES0109"
+      title: ""
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0110"
+      row: 131
+      ansible_id: "VMES0110"
+      title: "Hosts/LmHosts aktualisieren"
+      description: "Neuen Dateien haben Zeitstempel 04.04.2025 11:14"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0111"
+      row: 132
+      ansible_id: "VMES0111"
+      title: "Terminalbus-Gateway eintragen"
+      description: "192168234251"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0112"
+      row: 133
+      ansible_id: "VMES0112"
+      title: "Kontrolle Windows-Updates"
+      description: "Keine neueren Windows-Updates verfügbar"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0113"
+      row: 134
+      ansible_id: "VMES0113"
+      title: "Hosts/LmHosts aktualisieren"
+      description: "Neuen Dateien haben Zeitstempel 14.05.2025 11:25"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0114"
+      row: 135
+      ansible_id: "VMES0114"
+      title: ""
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0115"
+      row: 136
+      ansible_id: "VMES0115"
+      title: "VEEAM Backup"
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+    - key: "VMES0116"
+      row: 137
+      ansible_id: "VMES0116"
+      title: ""
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0117"
+      row: 138
+      ansible_id: "VMES0117"
+      title: "Freigabe \"Tools\" entfernen"
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: "n"
+        K_ENG4X32: "n"
+      master_note: ""
+    - key: "VMES0118"
+      row: 139
+      ansible_id: "VMES0118"
+      title: ""
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0119"
+      row: 140
+      ansible_id: "VMES0119"
+      title: "VM herunterfahren"
+      description: ""
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: "x"
+        J_ENG4X31: ""
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0120"
+      row: 143
+      ansible_id: "VMES0120"
+      title: "Installation WinSCP"
+      description: "WinSCP-6.3.4-Setup.exe ausführen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: ""
+      master_note: ""
+    - key: "VMES0121"
+      row: 144
+      ansible_id: "VMES0121"
+      title: "SIMATIC Logon konfigurieren"
+      description: "Reiter \"Automatisches Abmelden\"\n-> Haken \"SIMATIC Logon automatisches Abmelden verwende\" entfernen"
+      master_values:
+        F_TLGDE1064DE001: ""
+        H_ES0180705: ""
+        J_ENG4X31: "x"
+        K_ENG4X32: "x"
+      master_note: ""
+
+
+  tasks:
+    - name: Report-Zeitstempel und Katalog persistent speichern
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+        vm_es_validation_catalog: "{{ validation_catalog }}"
+
+    - name: Benoetigte Semaphore-Variablen pruefen
+      ansible.builtin.assert:
+        that:
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - nmap_binary is defined
+          - result_dir is defined
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - nmap_binary | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Erforderlich sind win_user, win_password, winrm_transport,
+          nmap_binary und result_dir.
+
+    - name: Masterlistenprofil pruefen
+      ansible.builtin.assert:
+        that:
+          - masterlist_profile in
+            ['ALL', 'F_TLGDE1064DE001', 'H_ES0180705',
+             'J_ENG4X31', 'K_ENG4X32']
+        fail_msg: >-
+          vm_es_masterlist_profile muss ALL, F_TLGDE1064DE001,
+          H_ES0180705, J_ENG4X31 oder K_ENG4X32 sein.
+
+    - name: Discovery-Gruppendatei pruefen
+      ansible.builtin.stat:
+        path: "{{ discovery_latest_file }}"
+      register: discovery_file_stat
+
+    - name: Abbrechen, wenn die VM-Discovery-Datei fehlt
+      ansible.builtin.assert:
+        that:
+          - discovery_file_stat.stat.exists | default(false)
+          - discovery_file_stat.stat.isreg | default(false)
+        fail_msg: >-
+          {{ discovery_latest_file }} wurde nicht gefunden.
+          Zuerst 0000VM_Discovery_Classification.yml ausfuehren oder
+          vm_discovery_file auf die richtige Datei setzen.
+
+    - name: VM-Discovery-Datei einlesen
+      ansible.builtin.slurp:
+        src: "{{ discovery_latest_file }}"
+      register: discovery_file_raw
+
+    - name: VM-Discovery-Daten aus JSON uebernehmen
+      ansible.builtin.set_fact:
+        vm_discovery_data: >-
+          {{ discovery_file_raw.content | b64decode | from_json }}
+
+    - name: Struktur der VM-Discovery-Datei pruefen
+      ansible.builtin.assert:
+        that:
+          - vm_discovery_data is mapping
+          - vm_discovery_data.groups is defined
+          - vm_discovery_data.groups is mapping
+          - vm_discovery_data.groups.vm_es is defined
+          - vm_discovery_data.groups.vm_es is sequence
+        fail_msg: >-
+          {{ discovery_latest_file }} enthaelt keine gueltige Gruppe
+          groups.vm_es. Bitte 0000VM_Discovery_Classification.yml erneut
+          ausfuehren.
+
+    - name: VM-ES-Teilnehmer aus der Discovery uebernehmen
+      ansible.builtin.set_fact:
+        vm_es_discovery_hosts: >-
+          {{
+            vm_discovery_data.groups.vm_es
+            | selectattr('ip', 'defined')
+            | selectattr('ip', 'string')
+            | unique(attribute='ip')
+            | list
+          }}
+
+    - name: Geladene VM-ES-Zielmenge anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Discovery-Datei: {{ discovery_latest_file }}"
+          - "Discovery-Zeit: {{ vm_discovery_data.generated_at | default('') }}"
+          - "Masterlistenblatt: {{ masterlist_sheet }}"
+          - "Masterlistenprofil: {{ masterlist_profile }}"
+          - "VM-ES-IP-Adressen: {{ vm_es_discovery_hosts | map(attribute='ip') | list }}"
+          - "Anzahl VM-ES-Zielrechner: {{ vm_es_discovery_hosts | length }}"
+          - "Anzahl Ansible-IDs: {{ validation_catalog | length }}"
+
+    - name: Hinweis ausgeben, wenn keine VM ES klassifiziert wurde
+      ansible.builtin.debug:
+        msg: >-
+          groups.vm_es ist leer. JSON und CSV werden mit Kopfzeile, aber
+          ohne Host-Ergebniszeilen erzeugt.
+      when: vm_es_discovery_hosts | length == 0
+
+    - name: nmap auf dem Ansible-Controller pruefen
+      ansible.builtin.command: "{{ nmap_binary }} --version"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap nicht ausfuehrbar ist
+      ansible.builtin.fail:
+        msg: "nmap ist unter {{ nmap_binary }} nicht ausfuehrbar."
+      when: nmap_check.rc != 0
+
+    - name: Alle VM-ES-IP-Adressen erneut mit nmap auf WinRM pruefen
+      ansible.builtin.shell: |
+        set -o pipefail
+        target_ip={{ item.ip | quote }}
+        scan="$({{ nmap_binary }} -n -Pn -p 5985,5986 --open "$target_ip" -oG - 2>/dev/null || true)"
+
+        open_ports=""
+        if grep -q '5985/open/tcp' <<<"$scan"; then
+          open_ports="5985"
+        fi
+        if grep -q '5986/open/tcp' <<<"$scan"; then
+          if [[ -n "$open_ports" ]]; then
+            open_ports="${open_ports},5986"
+          else
+            open_ports="5986"
+          fi
+        fi
+
+        if grep -q '5986/open/tcp' <<<"$scan"; then
+          printf '%s;true;5986;https;%s' "$target_ip" "$open_ports"
+        elif grep -q '5985/open/tcp' <<<"$scan"; then
+          printf '%s;true;5985;http;%s' "$target_ip" "$open_ports"
+        else
+          printf '%s;false;5985;http;' "$target_ip"
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ vm_es_discovery_hosts }}"
+      loop_control:
+        label: "{{ item.ip }}"
+      register: vm_es_nmap_scan_results
+      changed_when: false
+      failed_when: false
+
+    - name: nmap-Ergebnisse der VM-ES-IP-Adressen anzeigen
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.ip }}:
+          erreichbar={{ item.stdout.split(';')[1] | default('false') }},
+          Port={{ item.stdout.split(';')[2] | default('5985') }},
+          Schema={{ item.stdout.split(';')[3] | default('http') }},
+          offene Ports={{ item.stdout.split(';')[4] | default('') }}
+      loop: "{{ vm_es_nmap_scan_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.ip }}"
+
+    - name: Alle VM-ES-Zielrechner dynamisch aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ scan_parts[0] }}"
+        groups: "{{ station_group }}"
+        ansible_host: "{{ scan_parts[0] }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ scan_parts[2] | int }}"
+        ansible_winrm_scheme: "{{ scan_parts[3] }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: >-
+          {{ winrm_operation_timeout_sec | default(60) }}
+        ansible_winrm_read_timeout_sec: >-
+          {{ winrm_read_timeout_sec | default(180) }}
+
+        validation_station_type: "{{ station_type }}"
+        validation_station_group: "{{ station_group }}"
+        validation_masterlist_sheet: "{{ masterlist_sheet }}"
+        validation_masterlist_profile: "{{ masterlist_profile }}"
+        validation_report_prefix: "{{ report_prefix }}"
+        validation_remote_dir: >-
+          {{
+            vm_es_validation_remote_dir
+            | default('C:\\Windows\\Temp\\AnsibleVMESValidation')
+          }}
+        validation_check_catalog: "{{ validation_catalog }}"
+        validation_discovery_group: "vm_es"
+        validation_discovery_file: "{{ discovery_latest_file }}"
+        validation_discovery_generated_at: >-
+          {{ vm_discovery_data.generated_at | default('') }}
+        validation_discovery_computername: >-
+          {{ item.item.computername | default('') }}
+        validation_nmap_reachable: "{{ scan_parts[1] | bool }}"
+        validation_nmap_winrm_port: "{{ scan_parts[2] | int }}"
+        validation_nmap_winrm_scheme: "{{ scan_parts[3] }}"
+        validation_nmap_open_ports: "{{ scan_parts[4] | default('') }}"
+        validation_parameters: >-
+          {{
+            vm_es_validation_parameters
+            | combine({
+                'target_ip': scan_parts[0],
+                'expected_computername':
+                  (
+                    vm_es_expected_computername_by_ip
+                    | default({})
+                  ).get(
+                    item.item.ip,
+                    item.item.computername | default('')
+                  ),
+                'expected_partitions':
+                  (
+                    vm_es_expected_partitions_map.get(
+                      item.item.ip,
+                      vm_es_expected_partitions_map.get(
+                        item.item.computername | default(''),
+                        vm_es_expected_partitions_map.get(
+                          'default',
+                          vm_es_default_partitions
+                        )
+                      )
+                    )
+                  )
+              })
+          }}
+      vars:
+        scan_parts: "{{ (item.stdout | trim).split(';') }}"
+      loop: "{{ vm_es_nmap_scan_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.ip }}"
+      no_log: true
+
+
+- name: "Alle Ansible-IDs des Masterlistenblatts VM ES pruefen"
+  hosts: vm_es_validation_targets
+  gather_facts: false
+  ignore_unreachable: true
+
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: win_ping_result
+      when: validation_nmap_reachable | default(false) | bool
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: Temporaeres VM-ES-Pruefverzeichnis erzeugen
+      ansible.windows.win_file:
+        path: "{{ validation_remote_dir }}"
+        state: directory
+      when:
+        - validation_nmap_reachable | default(false) | bool
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+      failed_when: false
+
+    - name: VM-ES-Pruefkatalog auf Zielsystem kopieren
+      ansible.windows.win_copy:
+        dest: "{{ validation_remote_dir }}\\validation_catalog.json"
+        content: "{{ validation_check_catalog | to_nice_json }}"
+        force: true
+      when:
+        - validation_nmap_reachable | default(false) | bool
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+      failed_when: false
+
+    - name: VM-ES-Pruefparameter auf Zielsystem kopieren
+      ansible.windows.win_copy:
+        dest: "{{ validation_remote_dir }}\\validation_parameters.json"
+        content: "{{ validation_parameters | to_nice_json }}"
+        force: true
+      when:
+        - validation_nmap_reachable | default(false) | bool
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+      failed_when: false
+
+    - name: VM-ES-Einstellungen pruefen und Ergebnis kodiert ausgeben
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "SilentlyContinue"
+        $ProgressPreference = "SilentlyContinue"
+
+        $catalog = @(
+          Get-Content -LiteralPath $env:VALIDATION_CATALOG_PATH -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+        )
+        $params = Get-Content `
+          -LiteralPath $env:VALIDATION_PARAMETERS_PATH `
+          -Raw `
+          -Encoding UTF8 |
+            ConvertFrom-Json
+        $catalogByKey = @{}
+        foreach ($entry in $catalog) {
+          $catalogByKey[[string]$entry.key] = $entry
+        }
+
+        $checks = @()
+        $addedChecks = @{}
+        $masterProfile = [string]$env:VALIDATION_MASTERLIST_PROFILE
+        $masterSheet = [string]$env:VALIDATION_MASTERLIST_SHEET
+
+        function Convert-ToText {
+          param([object]$Value)
+          if ($null -eq $Value) { return "" }
+          if ($Value -is [string]) { return $Value }
+          if ($Value -is [System.Collections.IDictionary]) {
+            return ($Value | ConvertTo-Json -Depth 8 -Compress)
+          }
+          if ($Value -is [System.Management.Automation.PSCustomObject]) {
+            return ($Value | ConvertTo-Json -Depth 8 -Compress)
+          }
+          if (
+            $Value -is [System.Collections.IEnumerable] -and
+            -not ($Value -is [string])
+          ) {
+            return (($Value | ForEach-Object {
+              if ($null -eq $_) { "" }
+              elseif (
+                $_ -is [System.Collections.IDictionary] -or
+                $_ -is [System.Management.Automation.PSCustomObject]
+              ) {
+                $_ | ConvertTo-Json -Depth 8 -Compress
+              } else {
+                [string]$_
+              }
+            }) -join " | ")
+          }
+          return [string]$Value
+        }
+
+        function Get-Param {
+          param([string]$Name, [object]$Default = $null)
+          if ($null -eq $params) { return $Default }
+          $property = $params.PSObject.Properties[$Name]
+          if ($null -eq $property) { return $Default }
+          if ($null -eq $property.Value) { return $Default }
+          return $property.Value
+        }
+
+        function Convert-ToBool {
+          param([object]$Value, [bool]$Default = $false)
+          if ($null -eq $Value) { return $Default }
+          if ($Value -is [bool]) { return [bool]$Value }
+          $text = ([string]$Value).Trim().ToLowerInvariant()
+          if ($text -in @("true", "1", "yes", "ja", "on")) { return $true }
+          if ($text -in @("false", "0", "no", "nein", "off")) { return $false }
+          return $Default
+        }
+
+        function Get-MasterValue {
+          param([object]$Meta)
+          if ($masterProfile -eq "ALL") { return "ALL" }
+          if ($null -eq $Meta.master_values) { return "" }
+          $property = $Meta.master_values.PSObject.Properties[$masterProfile]
+          if ($null -eq $property) { return "" }
+          return [string]$property.Value
+        }
+
+        function Add-Check {
+          param(
+            [string]$Key,
+            [string]$Status,
+            [object]$Actual,
+            [object]$Expected,
+            [string]$Method,
+            [string]$Note = ""
+          )
+          if (-not $catalogByKey.ContainsKey($Key)) { return }
+          if ($addedChecks.ContainsKey($Key)) { return }
+
+          $meta = $catalogByKey[$Key]
+          $masterValue = Get-MasterValue $meta
+          $notes = @()
+          if ($Note) { $notes += $Note }
+          if ([string]$meta.master_note) {
+            $notes += ("Masterlistenhinweis: " + [string]$meta.master_note)
+          }
+
+          if ($masterProfile -ne "ALL") {
+            if (
+              [string]::IsNullOrWhiteSpace($masterValue) -or
+              $masterValue.Trim().ToLowerInvariant() -eq "n"
+            ) {
+              $Status = "Nicht_Pruefbar"
+              $notes += (
+                "Im gewaehlten Masterlistenprofil " + $masterProfile +
+                " ist diese Zeile mit '" + $masterValue +
+                "' markiert und damit nicht als auszufuehrender Schritt vorgegeben."
+              )
+            }
+          }
+
+          $script:checks += [ordered]@{
+            masterlist_sheet = $masterSheet
+            masterlist_profile = $masterProfile
+            masterlist_row = [int]$meta.row
+            master_value = $masterValue
+            ansible_id = [string]$meta.ansible_id
+            schritt = [string]$meta.title
+            master_beschreibung = [string]$meta.description
+            status = $Status
+            istwert = Convert-ToText $Actual
+            sollwert = Convert-ToText $Expected
+            pruefmethode = $Method
+            hinweis = ($notes -join " ")
+          }
+          $script:addedChecks[$Key] = $true
+        }
+
+        function Add-BooleanCheck {
+          param(
+            [string]$Key,
+            [bool]$Condition,
+            [object]$Actual,
+            [object]$Expected,
+            [string]$Method,
+            [string]$Note = ""
+          )
+          $status = "NOK"
+          if ($Condition) { $status = "OK" }
+          Add-Check $Key $status $Actual $Expected $Method $Note
+        }
+
+        function Add-IndirectCheck {
+          param(
+            [string]$Key,
+            [bool]$Condition,
+            [object]$Actual,
+            [object]$Expected,
+            [string]$Method,
+            [string]$Note = ""
+          )
+          $status = "NOK"
+          if ($Condition) { $status = "Indirekt" }
+          Add-Check $Key $status $Actual $Expected $Method $Note
+        }
+
+        function Add-NotTestable {
+          param(
+            [string]$Key,
+            [object]$Actual,
+            [object]$Expected,
+            [string]$Method,
+            [string]$Note
+          )
+          Add-Check $Key "Nicht_Pruefbar" $Actual $Expected $Method $Note
+        }
+
+        function Get-UninstallPrograms {
+          $items = @()
+          $roots = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+          )
+          foreach ($root in $roots) {
+            if (-not (Test-Path $root)) { continue }
+            $items += @(Get-ChildItem -Path $root | ForEach-Object {
+              $p = Get-ItemProperty -Path $_.PSPath
+              if ($p.DisplayName) {
+                [pscustomobject]@{
+                  Name = [string]$p.DisplayName
+                  Version = [string]$p.DisplayVersion
+                  Publisher = [string]$p.Publisher
+                  InstallLocation = [string]$p.InstallLocation
+                }
+              }
+            })
+          }
+          return @($items | Sort-Object Name, Version -Unique)
+        }
+
+        function Find-Programs {
+          param([string]$Pattern)
+          return @($programs | Where-Object {
+            ([string]$_.Name -match $Pattern) -or
+            ([string]$_.Publisher -match $Pattern)
+          })
+        }
+
+        function Programs-ToText {
+          param([object[]]$Items)
+          return (@($Items | ForEach-Object {
+            ([string]$_.Name + " [" + [string]$_.Version + "]").Trim()
+          }) -join " | ")
+        }
+
+        function Get-RegistryValueSafe {
+          param([string]$Path, [string]$Name)
+          if (-not $Path -or -not $Name -or -not (Test-Path $Path)) {
+            return $null
+          }
+          try {
+            return (Get-ItemProperty -Path $Path -Name $Name).$Name
+          } catch {
+            return $null
+          }
+        }
+
+        function Test-VersionAtLeast {
+          param([string]$Actual, [string]$Minimum)
+          if ([string]::IsNullOrWhiteSpace($Minimum)) { return $true }
+          try {
+            return ([version]$Actual -ge [version]$Minimum)
+          } catch {
+            return $false
+          }
+        }
+
+        function Get-FilesUnderPaths {
+          param([object[]]$Paths, [string]$Pattern = "*")
+          $result = @()
+          foreach ($path in @($Paths)) {
+            if (-not $path -or -not (Test-Path ([string]$path))) { continue }
+            try {
+              $result += @(Get-ChildItem -Path ([string]$path) -File -Recurse -Filter $Pattern)
+            } catch {}
+          }
+          return @($result)
+        }
+
+        function Get-IniValues {
+          param([string]$Path)
+          $values = @{}
+          if (-not $Path -or -not (Test-Path $Path)) { return $values }
+          foreach ($line in @(Get-Content -Path $Path)) {
+            if ($line -match "^\s*([^;#][^=]*?)\s*=\s*(.*?)\s*$") {
+              $values[$Matches[1].Trim()] = $Matches[2].Trim()
+            }
+          }
+          return $values
+        }
+
+        # Gemeinsame Istwerte
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+        $bios = Get-CimInstance Win32_BIOS
+        $processors = @(Get-CimInstance Win32_Processor)
+        $programs = @(Get-UninstallPrograms)
+        $services = @(Get-CimInstance Win32_Service)
+        $logicalCores = [int]$cs.NumberOfLogicalProcessors
+        $socketCount = [int]$cs.NumberOfProcessors
+        $ramGb = [math]::Round(([double]$cs.TotalPhysicalMemory / 1GB), 1)
+        $lastBoot = $os.LastBootUpTime
+        if ($lastBoot) {
+          try { $lastBoot = ([datetime]$lastBoot).ToString("yyyy-MM-dd HH:mm:ss") } catch {}
+        }
+
+        $expectedComputerName = [string](Get-Param "expected_computername" "")
+        $expectedCpuCores = [int](Get-Param "expected_cpu_cores" 4)
+        $expectedRamGb = [double](Get-Param "expected_ram_gb" 16)
+        $diskTolerance = [double](Get-Param "disk_size_tolerance_gb" 5)
+        $expectedLocale = [string](Get-Param "expected_locale" "de-DE")
+        $expectedGeoId = [int](Get-Param "expected_geo_id" 94)
+        $expectedTimeZone = [string](Get-Param "expected_timezone_id" "W. Europe Standard Time")
+        $expectedAdminName = [string](Get-Param "expected_admin_name" "Admin_L")
+        $targetIp = [string](Get-Param "target_ip" $env:COMPUTERNAME)
+
+        $physicalDisks = @(Get-CimInstance Win32_DiskDrive | Sort-Object Index)
+        $diskSizes = @($physicalDisks | ForEach-Object {
+          [math]::Round(([double]$_.Size / 1GB), 1)
+        })
+        $volumes = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3")
+        $cdroms = @(Get-CimInstance Win32_CDROMDrive)
+        $videoControllers = @(Get-CimInstance Win32_VideoController)
+        $resolutions = @($videoControllers | ForEach-Object {
+          if ($_.CurrentHorizontalResolution -and $_.CurrentVerticalResolution) {
+            [string]$_.CurrentHorizontalResolution + "x" +
+              [string]$_.CurrentVerticalResolution
+          }
+        })
+
+        $virtualizationText = @(
+          [string]$cs.Manufacturer,
+          [string]$cs.Model,
+          [string]$bios.Manufacturer,
+          [string]$bios.SMBIOSBIOSVersion
+        ) -join " | "
+        $isVmware = ($virtualizationText -match "(?i)VMware")
+        $isHyperV = (
+          $virtualizationText -match
+          "(?i)Microsoft.*Virtual Machine|Hyper-V"
+        )
+
+        $systemLocale = $null
+        $culture = $null
+        $uiCulture = $null
+        $languages = @()
+        $homeLocation = $null
+        $timeZone = $null
+        try { $systemLocale = Get-WinSystemLocale } catch {}
+        try { $culture = Get-Culture } catch {}
+        try { $uiCulture = Get-UICulture } catch {}
+        try { $languages = @(Get-WinUserLanguageList) } catch {}
+        try { $homeLocation = Get-WinHomeLocation } catch {}
+        try { $timeZone = Get-TimeZone } catch {}
+
+        $localUsers = @()
+        try {
+          if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
+            $localUsers = @(Get-LocalUser)
+          }
+        } catch {}
+        $cimLocalUsers = @(Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True")
+        $builtInAdminCim = $cimLocalUsers |
+          Where-Object { [string]$_.SID -match "-500$" } |
+          Select-Object -First 1
+        $builtInAdminLocal = $localUsers |
+          Where-Object { [string]$_.SID -match "-500$" } |
+          Select-Object -First 1
+
+        $localGroupMembership = @{}
+        try {
+          if (Get-Command Get-LocalGroup -ErrorAction SilentlyContinue) {
+            foreach ($group in @(Get-LocalGroup)) {
+              $members = @()
+              try {
+                $members = @(Get-LocalGroupMember -Group $group.Name |
+                  ForEach-Object { [string]$_.Name })
+              } catch {}
+              $localGroupMembership[[string]$group.Name] = $members
+            }
+          }
+        } catch {}
+
+        $securityCfg = Join-Path $env:TEMP "ansible_vm_es_secpol.inf"
+        $securityLines = @{}
+        try {
+          secedit /export /cfg $securityCfg | Out-Null
+          if (Test-Path $securityCfg) {
+            foreach ($line in @(Get-Content $securityCfg)) {
+              if ($line -match "^\s*([^=]+?)\s*=\s*(.*?)\s*$") {
+                $securityLines[$Matches[1].Trim()] = $Matches[2].Trim()
+              }
+            }
+          }
+        } catch {}
+        Remove-Item $securityCfg -Force -ErrorAction SilentlyContinue
+
+        $networkAdapters = @()
+        try { $networkAdapters = @(Get-NetAdapter -IncludeHidden) } catch {}
+        $networkConfigs = @()
+        try { $networkConfigs = @(Get-NetIPConfiguration) } catch {}
+        $connectionProfiles = @()
+        try { $connectionProfiles = @(Get-NetConnectionProfile) } catch {}
+        $firewallProfiles = @()
+        try { $firewallProfiles = @(Get-NetFirewallProfile) } catch {}
+        $firewallRules = @()
+        try { $firewallRules = @(Get-NetFirewallRule) } catch {}
+        $tcpListeners = @()
+        try {
+          $tcpListeners = @(Get-NetTCPConnection -State Listen |
+            Select-Object -ExpandProperty LocalPort -Unique)
+        } catch {}
+
+        $shares = @()
+        try { $shares = @(Get-SmbShare) } catch {}
+        $smbServerConfig = $null
+        try { $smbServerConfig = Get-SmbServerConfiguration } catch {}
+        $smbClientConfig = $null
+        try { $smbClientConfig = Get-SmbClientConfiguration } catch {}
+
+        $hotfixes = @()
+        try { $hotfixes = @(Get-HotFix | Select-Object -ExpandProperty HotFixID) } catch {}
+        $tlsCipherNames = @()
+        try { $tlsCipherNames = @(Get-TlsCipherSuite | Select-Object -ExpandProperty Name) } catch {}
+
+        $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+        $lmhostsPath = "$env:SystemRoot\System32\drivers\etc\lmhosts"
+        $hostsContent = ""
+        $lmhostsContent = ""
+        if (Test-Path $hostsPath) { $hostsContent = Get-Content $hostsPath -Raw }
+        if (Test-Path $lmhostsPath) { $lmhostsContent = Get-Content $lmhostsPath -Raw }
+        $hostsDate = $null
+        $lmhostsDate = $null
+        if (Test-Path $hostsPath) { $hostsDate = (Get-Item $hostsPath).LastWriteTime }
+        if (Test-Path $lmhostsPath) { $lmhostsDate = (Get-Item $lmhostsPath).LastWriteTime }
+
+        $domainDn = ""
+        if ([bool]$cs.PartOfDomain) {
+          try {
+            $searcher = New-Object System.DirectoryServices.DirectorySearcher
+            $searcher.Filter = (
+              "(&(objectCategory=computer)(sAMAccountName=" +
+              $env:COMPUTERNAME + "`$))"
+            )
+            $searchResult = $searcher.FindOne()
+            if ($searchResult) {
+              $domainDn = [string]$searchResult.Properties["distinguishedname"][0]
+            }
+          } catch {}
+        }
+
+        $applicationLog = $null
+        try {
+          $applicationLog = Get-CimInstance Win32_NTEventLogFile |
+            Where-Object { $_.LogFileName -eq "Application" } |
+            Select-Object -First 1
+        } catch {}
+
+        $w32time = $services |
+          Where-Object { $_.Name -eq "W32Time" } |
+          Select-Object -First 1
+        $w32Delayed = Get-RegistryValueSafe `
+          "HKLM:\SYSTEM\CurrentControlSet\Services\W32Time" `
+          "DelayedAutoStart"
+
+        $shutdownReason = Get-RegistryValueSafe `
+          "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Reliability" `
+          "ShutdownReasonOn"
+        $disableCad = Get-RegistryValueSafe `
+          "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+          "DisableCAD"
+        $autoReboot = Get-RegistryValueSafe `
+          "HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl" `
+          "AutoReboot"
+
+        $activePowerPlan = ""
+        try { $activePowerPlan = (powercfg /getactivescheme | Out-String).Trim() } catch {}
+
+        $vncPrograms = @(Find-Programs "(?i)UltraVNC")
+        $vncService = $services |
+          Where-Object {
+            $_.Name -match "(?i)uvnc|winvnc" -or
+            $_.DisplayName -match "(?i)UltraVNC"
+          } |
+          Select-Object -First 1
+        $vncIniPath = ""
+        $vncIni = @{}
+        foreach ($path in @((Get-Param "expected_vnc_ini_paths" @()))) {
+          if (Test-Path ([string]$path)) {
+            $vncIniPath = [string]$path
+            $vncIni = Get-IniValues $vncIniPath
+            break
+          }
+        }
+
+        $vmwarePrograms = @(Find-Programs "(?i)VMware Tools")
+        $vmwareService = $services |
+          Where-Object {
+            $_.Name -eq "VMTools" -or
+            $_.DisplayName -match "(?i)VMware Tools"
+          } |
+          Select-Object -First 1
+
+        $pcs7Programs = @(Find-Programs "(?i)PCS\s*7|PCS7|WinCC|STEP\s*7|SIMATIC")
+        $smaPrograms = @(Find-Programs "(?i)SIMATIC Management Agent")
+        $smaService = $services |
+          Where-Object {
+            $_.Name -match "(?i)SMA|ManagementAgent" -or
+            $_.DisplayName -match "(?i)SIMATIC Management Agent"
+          } |
+          Select-Object -First 1
+        $smcPrograms = @(Find-Programs "(?i)SIMATIC Management Console")
+        $batchPrograms = @(Find-Programs "(?i)SIMATIC BATCH|BATCH Base|BATCH Builder")
+        $cematPrograms = @(Find-Programs "(?i)CEMAT|Minerals Lib|SPC Lib|KCS Lib")
+        $pdmPrograms = @(Find-Programs "(?i)SIMATIC PDM|PDM Device Library")
+        $almPrograms = @(Find-Programs "(?i)Automation License Manager")
+        $edgePrograms = @(Find-Programs "(?i)^Microsoft Edge$")
+        $winscpPrograms = @(Find-Programs "(?i)^WinSCP")
+
+        $dcomPermissionAccounts = @{
+          Launch = @()
+          Access = @()
+          Configuration = @()
+        }
+        try {
+          $dcomApp = Get-CimInstance Win32_DCOMApplicationSetting |
+            Where-Object {
+              $_.Name -match "(?i)CCDmRtChannelHost|Lifebeat" -or
+              $_.Description -match "(?i)CCDmRtChannelHost|Lifebeat"
+            } |
+            Select-Object -First 1
+          if ($dcomApp) {
+            $methodMap = @{
+              Launch = "GetLaunchSecurityDescriptor"
+              Access = "GetAccessSecurityDescriptor"
+              Configuration = "GetConfigurationSecurityDescriptor"
+            }
+            foreach ($permissionName in $methodMap.Keys) {
+              try {
+                $descriptorResult = Invoke-CimMethod `
+                  -InputObject $dcomApp `
+                  -MethodName $methodMap[$permissionName]
+                foreach ($ace in @($descriptorResult.Descriptor.DACL)) {
+                  $trustee = $ace.Trustee
+                  $accountParts = @(
+                    [string]$trustee.Domain,
+                    [string]$trustee.Name
+                  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                  $dcomPermissionAccounts[$permissionName] += ($accountParts -join "\")
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+
+        $windowsUpdateSearch = [ordered]@{
+          performed = $false
+          success = $false
+          missing_count = $null
+          titles = @()
+          error = ""
+        }
+        if (Convert-ToBool (Get-Param "perform_windows_update_search" $true)) {
+          $windowsUpdateSearch.performed = $true
+          try {
+            $session = New-Object -ComObject Microsoft.Update.Session
+            $searcher = $session.CreateUpdateSearcher()
+            $searchResult = $searcher.Search(
+              "IsInstalled=0 and Type='Software' and IsHidden=0"
+            )
+            $windowsUpdateSearch.success = $true
+            $windowsUpdateSearch.missing_count = [int]$searchResult.Updates.Count
+            $windowsUpdateSearch.titles = @(
+              $searchResult.Updates | ForEach-Object { [string]$_.Title }
+            )
+          } catch {
+            $windowsUpdateSearch.error = [string]$_.Exception.Message
+          }
+        }
+
+        # ID-bezogene Pruefungen
+        # VM-/Hypervisor-Basis
+        if ($expectedComputerName) {
+          Add-IndirectCheck "VMES0000" `
+            ($env:COMPUTERNAME -ieq $expectedComputerName) `
+            ("Gast-Computername=" + $env:COMPUTERNAME) `
+            ("VM-Anzeigename laut Uebergabeliste=" + $expectedComputerName) `
+            "Indirekt/Gastbetriebssystem" `
+            "Der Anzeigename im ESXi kann aus dem Gast nicht direkt ausgelesen werden."
+          Add-IndirectCheck "VMES0001" `
+            ($env:COMPUTERNAME -ieq $expectedComputerName) `
+            ("Gast-Computername=" + $env:COMPUTERNAME) `
+            ("Hyper-V-VM-Name laut Uebergabeliste=" + $expectedComputerName) `
+            "Indirekt/Gastbetriebssystem" `
+            "Der Hyper-V-Anzeigename ist aus dem Gast nicht eindeutig nachweisbar."
+        } else {
+          Add-NotTestable "VMES0000" $env:COMPUTERNAME `
+            "VM-Anzeigename aus Uebergabeliste" `
+            "Hypervisor extern" `
+            "vm_es_expected_computername_by_ip ist nicht gesetzt."
+          Add-NotTestable "VMES0001" $env:COMPUTERNAME `
+            "Hyper-V-VM-Anzeigename aus Uebergabeliste" `
+            "Hypervisor extern" `
+            "vm_es_expected_computername_by_ip ist nicht gesetzt."
+        }
+
+        $cpuRamOk = (
+          $logicalCores -eq $expectedCpuCores -and
+          [math]::Abs($ramGb - $expectedRamGb) -le 1
+        )
+        Add-BooleanCheck "VMES0002" $cpuRamOk `
+          ("Logische Prozessoren=" + $logicalCores + "; RAM_GB=" + $ramGb) `
+          ("Kerne=" + $expectedCpuCores + "; RAM_GB=" + $expectedRamGb) `
+          "Direkt/Win32_ComputerSystem"
+        Add-BooleanCheck "VMES0003" $cpuRamOk `
+          ("Logische Prozessoren=" + $logicalCores + "; RAM_GB=" + $ramGb) `
+          ("VM ES: Kerne=" + $expectedCpuCores + "; RAM_GB=" + $expectedRamGb) `
+          "Direkt/Win32_ComputerSystem"
+
+        Add-IndirectCheck "VMES0004" `
+          ($socketCount -eq 1 -and $logicalCores -eq $expectedCpuCores) `
+          ("Virtuelle Sockel=" + $socketCount + "; logische Prozessoren=" + $logicalCores) `
+          ("Ein Sockel mit " + $expectedCpuCores + " Kernen") `
+          "Indirekt/Win32_ComputerSystem" `
+          "Die Gastansicht kann von der Hypervisor-Topologie abweichen."
+
+        Add-NotTestable "VMES0005" $virtualizationText `
+          "CPU-Reservation 0 MHz und 2000 Shares" `
+          "Hypervisor extern" `
+          "CPU-Reservation und Shares sind ohne vCenter-/Hyper-V-API nicht aus dem Gast auslesbar."
+
+        $expectedDiskSizes = @((Get-Param "expected_disk_sizes_gb" @()))
+        $diskSizeOk = ($diskSizes.Count -ge $expectedDiskSizes.Count)
+        for ($i = 0; $i -lt $expectedDiskSizes.Count; $i++) {
+          if ($i -ge $diskSizes.Count) {
+            $diskSizeOk = $false
+            continue
+          }
+          if (
+            [math]::Abs(
+              [double]$diskSizes[$i] - [double]$expectedDiskSizes[$i]
+            ) -gt $diskTolerance
+          ) {
+            $diskSizeOk = $false
+          }
+        }
+        Add-BooleanCheck "VMES0006" $diskSizeOk `
+          ("Datentraeger_GB=" + ($diskSizes -join ",")) `
+          ("Datentraeger_GB=" + ($expectedDiskSizes -join ",") +
+           "; Toleranz_GB=" + $diskTolerance) `
+          "Direkt/Win32_DiskDrive"
+
+        Add-IndirectCheck "VMES0007" ($cdroms.Count -gt 0) `
+          ("CD/DVD-Laufwerke=" + $cdroms.Count) `
+          "Virtuelles DVD-Laufwerk mit Hostgeraet verbunden" `
+          "Indirekt/Win32_CDROMDrive" `
+          "Das Vorhandensein beweist nicht, dass aktuell Hostgeraet statt ISO ausgewaehlt ist."
+
+        Add-IndirectCheck "VMES0008" $true `
+          ("WinRM erreichbar; letzter Systemstart=" + $lastBoot) `
+          "VM gestartet" `
+          "Indirekt/Erreichbarkeit" `
+          "Die geoeffnete Remotekonsole ist nicht aus dem Gast nachweisbar."
+
+        Add-NotTestable "VMES0009" `
+          "Die fuer WinRM verwendeten Zugangsdaten werden nicht protokolliert." `
+          "Anmeldung mit Default-Passwort" `
+          "Sicherheitsbedingt nicht pruefbar" `
+          "Passwoerter werden weder ausgelesen noch als Klartext getestet."
+
+        $languageActual = (
+          "SystemLocale=" + [string]$systemLocale.Name +
+          "; Culture=" + [string]$culture.Name +
+          "; UICulture=" + [string]$uiCulture.Name +
+          "; Sprachen=" +
+          (@($languages | ForEach-Object { $_.LanguageTag }) -join ",")
+        )
+        $languageOk = (
+          [string]$systemLocale.Name -ieq $expectedLocale -and
+          [string]$uiCulture.Name -ieq $expectedLocale -and
+          @($languages).Count -gt 0 -and
+          [string]$languages[0].LanguageTag -ieq $expectedLocale
+        )
+        Add-BooleanCheck "VMES0010" $languageOk $languageActual `
+          ($expectedLocale + " als System-, UI- und primaere Benutzersprache") `
+          "Direkt/Windows-Locale"
+
+        $nameRuleOk = (
+          $env:COMPUTERNAME.Length -le 15 -and
+          $env:COMPUTERNAME -match "^[A-Z][A-Za-z0-9-]*$"
+        )
+        if ($expectedComputerName) {
+          $nameRuleOk = (
+            $nameRuleOk -and
+            $env:COMPUTERNAME -ieq $expectedComputerName
+          )
+        }
+        $nameExpectedText = "Maximal 15 Zeichen, Beginn mit Grossbuchstaben, keine Sonderzeichen"
+        if ($expectedComputerName) {
+          $nameExpectedText = $expectedComputerName + "; " + $nameExpectedText
+        }
+        Add-BooleanCheck "VMES0011" $nameRuleOk $env:COMPUTERNAME `
+          $nameExpectedText `
+          "Direkt/Computername"
+
+        Add-IndirectCheck "VMES0012" ($pcs7Programs.Count -gt 0) `
+          (Programs-ToText $pcs7Programs) `
+          "SIMATIC PCS 7 Komponenten installiert und Setup abgeschlossen" `
+          "Indirekt/Uninstall-Registry" `
+          "Der konkrete automatische Setup-Ablauf und der danach erfolgte Neustart sind nicht eindeutig protokolliert."
+
+        Add-NotTestable "VMES0013" `
+          ("Administratorkonto=" + [string]$builtInAdminCim.Name) `
+          "Anmeldung mit vorgegebenem Passwort" `
+          "Sicherheitsbedingt nicht pruefbar" `
+          "Passwoerter werden nicht ausgelesen oder durch einen Anmeldeversuch validiert."
+
+        $passwordLastSet = $null
+        if ($builtInAdminLocal) { $passwordLastSet = $builtInAdminLocal.PasswordLastSet }
+        Add-IndirectCheck "VMES0014" ($null -ne $passwordLastSet) `
+          ("PasswordLastSet=" + [string]$passwordLastSet) `
+          "Passwort laut Uebergabeliste gesetzt" `
+          "Indirekt/Get-LocalUser" `
+          "Der Passwortinhalt wird nicht ausgelesen."
+
+        $terminalRegex = [string](Get-Param "expected_terminalbus_adapter_regex" "^Terminalbus$")
+        $terminalAdapters = @($networkAdapters | Where-Object {
+          $_.Name -match $terminalRegex -or
+          $_.InterfaceDescription -match $terminalRegex
+        })
+        $commPath = [string](Get-Param "communication_registry_path" "")
+        $commRemoteName = [string](Get-Param "communication_remote_value_name" "")
+        $commPskName = [string](Get-Param "communication_psk_value_name" "")
+        $commAdapterName = [string](Get-Param "communication_adapter_value_name" "")
+        if ($commPath -and $commRemoteName -and $commPskName -and $commAdapterName) {
+          $commRemote = Get-RegistryValueSafe $commPath $commRemoteName
+          $commPsk = Get-RegistryValueSafe $commPath $commPskName
+          $commAdapter = Get-RegistryValueSafe $commPath $commAdapterName
+          $commOk = (
+            $terminalAdapters.Count -gt 0 -and
+            $null -ne $commRemote -and
+            -not [string]::IsNullOrWhiteSpace([string]$commPsk) -and
+            [string]$commAdapter -match $terminalRegex
+          )
+          Add-BooleanCheck "VMES0015" $commOk `
+            ("Remote=" + $commRemote + "; PSK_vorhanden=" +
+             (-not [string]::IsNullOrWhiteSpace([string]$commPsk)) +
+             "; Adapter=" + $commAdapter) `
+            "Terminalbus ausgewaehlt; Remote-Kommunikation aktiv; PSK gesetzt" `
+            "Direkt/Registry und Netzwerkadapter"
+        } else {
+          Add-IndirectCheck "VMES0015" ($terminalAdapters.Count -gt 0) `
+            ("Terminalbusadapter=" + (@($terminalAdapters.Name) -join ",")) `
+            "Terminalbus ausgewaehlt und PSK gesetzt" `
+            "Indirekt/Netzwerkadapter" `
+            "Fuer die direkte PSK-/Remote-Pruefung muessen die optionalen Kommunikations-Registryvariablen gesetzt werden."
+        }
+
+        if ($isVmware) {
+          $vmwareVersions = @($vmwarePrograms | ForEach-Object { $_.Version })
+          $minimumVmware = [string](Get-Param "expected_vmware_tools_min_version" "")
+          $vmwareVersionOk = $true
+          if ($minimumVmware) {
+            $vmwareVersionOk = @($vmwareVersions | Where-Object {
+              Test-VersionAtLeast ([string]$_) $minimumVmware
+            }).Count -gt 0
+          }
+          $vmwareOk = (
+            $vmwareService -and
+            $vmwareService.State -eq "Running" -and
+            $vmwareVersionOk
+          )
+          $vmwareExpectedText = "VMware Tools installiert und Dienst laeuft"
+          if ($minimumVmware) {
+            $vmwareExpectedText = "VMware Tools mindestens " + $minimumVmware + " und Dienst laeuft"
+          }
+          Add-BooleanCheck "VMES0016" $vmwareOk `
+            ("Versionen=" + ($vmwareVersions -join ",") +
+             "; Dienst=" + [string]$vmwareService.State) `
+            $vmwareExpectedText `
+            "Direkt/Uninstall-Registry und Dienst"
+        } else {
+          Add-NotTestable "VMES0016" $virtualizationText `
+            "Aktuelle VMware Tools" `
+            "Nicht anwendbar" `
+            "Die VM wurde nicht als VMware-Gast erkannt."
+        }
+
+        $expectedWorkgroup = [string](Get-Param "expected_workgroup" "")
+        if ($expectedWorkgroup) {
+          Add-BooleanCheck "VMES0017" `
+            (-not [bool]$cs.PartOfDomain -and [string]$cs.Workgroup -ieq $expectedWorkgroup) `
+            ("PartOfDomain=" + [bool]$cs.PartOfDomain + "; Workgroup=" + [string]$cs.Workgroup) `
+            ("Arbeitsgruppe=" + $expectedWorkgroup) `
+            "Direkt/Win32_ComputerSystem"
+        } else {
+          Add-BooleanCheck "VMES0017" ([bool]$cs.PartOfDomain) `
+            ("PartOfDomain=" + [bool]$cs.PartOfDomain + "; Domain=" + [string]$cs.Domain) `
+            "Domaenenmitglied; keine separate Arbeitsgruppe erforderlich" `
+            "Direkt/Win32_ComputerSystem"
+        }
+
+        $passwordPolicyActual = [ordered]@{
+          PasswordComplexity = $securityLines["PasswordComplexity"]
+          MinimumPasswordLength = $securityLines["MinimumPasswordLength"]
+          MaximumPasswordAge = $securityLines["MaximumPasswordAge"]
+          MinimumPasswordAge = $securityLines["MinimumPasswordAge"]
+        }
+        $passwordPolicyOk = (
+          [int]$securityLines["PasswordComplexity"] -eq
+            [int](Get-Param "expected_password_complexity" 0) -and
+          [int]$securityLines["MinimumPasswordLength"] -eq
+            [int](Get-Param "expected_min_password_length" 0) -and
+          [int]$securityLines["MaximumPasswordAge"] -eq
+            [int](Get-Param "expected_max_password_age_days" 0) -and
+          [int]$securityLines["MinimumPasswordAge"] -eq
+            [int](Get-Param "expected_min_password_age_days" 0)
+        )
+        Add-BooleanCheck "VMES0018" $passwordPolicyOk $passwordPolicyActual `
+          ([ordered]@{
+            PasswordComplexity = [int](Get-Param "expected_password_complexity" 0)
+            MinimumPasswordLength = [int](Get-Param "expected_min_password_length" 0)
+            MaximumPasswordAge = [int](Get-Param "expected_max_password_age_days" 0)
+            MinimumPasswordAge = [int](Get-Param "expected_min_password_age_days" 0)
+          }) `
+          "Direkt/secedit"
+
+        Add-BooleanCheck "VMES0019" `
+          ($builtInAdminCim -and [string]$builtInAdminCim.Name -ieq $expectedAdminName) `
+          ("SID-500-Konto=" + [string]$builtInAdminCim.Name) `
+          $expectedAdminName `
+          "Direkt/SID des integrierten Administrators"
+
+        $adminEnabled = (
+          $builtInAdminCim -and
+          -not [bool]$builtInAdminCim.Disabled
+        )
+        $adminNeverExpires = (
+          $builtInAdminLocal -and
+          [bool]$builtInAdminLocal.PasswordNeverExpires
+        )
+        Add-BooleanCheck "VMES0020" `
+          ($adminEnabled -and $adminNeverExpires) `
+          ("Aktiv=" + $adminEnabled +
+           "; Kennwort_laeuft_nie_ab=" + $adminNeverExpires) `
+          "Administratorkonto aktiv; Kennwort laeuft nie ab" `
+          "Direkt/Win32_UserAccount und Get-LocalUser"
+
+        $adminPasswordDateOk = ($null -ne $passwordLastSet)
+        $minAdminDateText = [string](Get-Param "expected_admin_password_min_set_date" "")
+        $maxAdminAge = [int](Get-Param "expected_admin_password_max_age_days" 0)
+        if ($passwordLastSet -and $minAdminDateText) {
+          try {
+            $adminPasswordDateOk = (
+              [datetime]$passwordLastSet -ge [datetime]$minAdminDateText
+            )
+          } catch { $adminPasswordDateOk = $false }
+        }
+        if ($passwordLastSet -and $maxAdminAge -gt 0) {
+          $adminPasswordDateOk = (
+            $adminPasswordDateOk -and
+            ((Get-Date) - [datetime]$passwordLastSet).TotalDays -le $maxAdminAge
+          )
+        }
+        Add-IndirectCheck "VMES0021" $adminPasswordDateOk `
+          ("PasswordLastSet=" + [string]$passwordLastSet) `
+          "Administratorpasswort laut Uebergabeliste gesetzt" `
+          "Indirekt/Get-LocalUser" `
+          "Der Passwortinhalt wird nicht ausgelesen."
+
+        $expectedLocalUsers = @((Get-Param "expected_local_users" @()))
+        if ($expectedLocalUsers.Count -gt 0) {
+          $actualLocalNames = @($cimLocalUsers | ForEach-Object { [string]$_.Name })
+          $missingLocalUsers = @($expectedLocalUsers | Where-Object {
+            $actualLocalNames -notcontains [string]$_
+          })
+          Add-BooleanCheck "VMES0022" ($missingLocalUsers.Count -eq 0) `
+            ("Lokale Benutzer=" + ($actualLocalNames -join ",")) `
+            ("Erwartete Benutzer=" + ($expectedLocalUsers -join ",")) `
+            "Direkt/Win32_UserAccount"
+        } else {
+          Add-NotTestable "VMES0022" `
+            ("Lokale Benutzer=" +
+             (@($cimLocalUsers | ForEach-Object { $_.Name }) -join ",")) `
+            "Benutzer laut Uebergabeliste" `
+            "Sollwert fehlt" `
+            "vm_es_expected_local_users ist nicht gesetzt."
+        }
+
+        if (Convert-ToBool (Get-Param "linde_users_required" $false)) {
+          $requiredLindeUsers = @("PCS7RT", "Admin")
+          $actualLocalNames = @($cimLocalUsers | ForEach-Object { [string]$_.Name })
+          $missingLindeUsers = @($requiredLindeUsers | Where-Object {
+            $actualLocalNames -notcontains $_
+          })
+          Add-BooleanCheck "VMES0023" ($missingLindeUsers.Count -eq 0) `
+            ("Lokale Benutzer=" + ($actualLocalNames -join ",")) `
+            ("Erwartete Benutzer=" + ($requiredLindeUsers -join ",")) `
+            "Direkt/Win32_UserAccount"
+        } else {
+          Add-NotTestable "VMES0023" `
+            ("Lokale Benutzer=" +
+             (@($cimLocalUsers | ForEach-Object { $_.Name }) -join ",")) `
+            "PCS7RT und Admin nur bei Linde-Ergaenzung" `
+            "Nicht anwendbar" `
+            "vm_es_linde_users_required ist false."
+        }
+
+        $expectedPartitions = @((Get-Param "expected_partitions" @()))
+        $partitionResults = @()
+        $partitionsOk = $true
+        foreach ($expectedPartition in $expectedPartitions) {
+          $drive = [string]$expectedPartition.drive
+          $volume = $volumes |
+            Where-Object { [string]$_.DeviceID -ieq $drive } |
+            Select-Object -First 1
+          if (-not $volume) {
+            $partitionResults += ($drive + "=FEHLT")
+            $partitionsOk = $false
+            continue
+          }
+          $sizeGb = [math]::Round(([double]$volume.Size / 1GB), 1)
+          $partitionResults += ($drive + "=" + $sizeGb + "GB")
+          if ($null -ne $expectedPartition.expected_size_gb) {
+            if (
+              [math]::Abs(
+                $sizeGb - [double]$expectedPartition.expected_size_gb
+              ) -gt $diskTolerance
+            ) {
+              $partitionsOk = $false
+            }
+          }
+          if ($null -ne $expectedPartition.min_size_gb) {
+            if ($sizeGb -lt [double]$expectedPartition.min_size_gb) {
+              $partitionsOk = $false
+            }
+          }
+        }
+        Add-BooleanCheck "VMES0024" $partitionsOk `
+          ($partitionResults -join "; ") `
+          ($expectedPartitions | ConvertTo-Json -Depth 5 -Compress) `
+          "Direkt/Win32_LogicalDisk"
+
+        $toolsFolder = "D:\Tools"
+        $toolsExists = Test-Path $toolsFolder
+        $toolsCount = 0
+        if ($toolsExists) {
+          try { $toolsCount = @(Get-ChildItem $toolsFolder -Force).Count } catch {}
+        }
+        Add-IndirectCheck "VMES0025" $toolsExists `
+          ("Ordner_vorhanden=" + $toolsExists + "; Eintraege=" + $toolsCount) `
+          "D:\Tools vorhanden und mit benoetigten Werkzeugen befuellt" `
+          "Indirekt/Dateisystem" `
+          "Die fruehere Freigabe kann gemaess VMES0117 spaeter wieder entfernt worden sein."
+
+        $toolsShortcuts = @()
+        try {
+          $toolsShortcuts = @(Get-ChildItem "D:\" -Filter "*.lnk" -File |
+            Where-Object { $_.Name -match "(?i)Tools" })
+        } catch {}
+        Add-BooleanCheck "VMES0026" ($toolsShortcuts.Count -gt 0) `
+          (@($toolsShortcuts.FullName) -join ",") `
+          "Verknuepfung zum ES-Tools-Ordner auf D:\" `
+          "Direkt/Dateisystem"
+
+        Add-BooleanCheck "VMES0027" ([int]$shutdownReason -eq 0) `
+          ("ShutdownReasonOn=" + [string]$shutdownReason) `
+          "Ereignisprotokollierung fuer Herunterfahren deaktiviert" `
+          "Direkt/Registry"
+
+        $w32TimeOk = (
+          $w32time -and
+          [string]$w32time.State -eq "Running" -and
+          [string]$w32time.StartMode -eq "Auto" -and
+          [int]$w32Delayed -eq 1
+        )
+        Add-BooleanCheck "VMES0028" $w32TimeOk `
+          ("State=" + [string]$w32time.State +
+           "; StartMode=" + [string]$w32time.StartMode +
+           "; DelayedAutoStart=" + [string]$w32Delayed) `
+          "Windows-Zeitgeber laeuft; Automatisch (Verzoegerter Start)" `
+          "Direkt/Win32_Service und Registry"
+
+        $applicationMaxKb = $null
+        if ($applicationLog) {
+          $applicationMaxKb = [math]::Round(
+            ([double]$applicationLog.MaxFileSize / 1KB), 0
+          )
+        }
+        Add-BooleanCheck "VMES0029" `
+          ([int64]$applicationMaxKb -ge
+           [int64](Get-Param "expected_eventlog_max_kb" 16384)) `
+          ("Application_Max_KB=" + [string]$applicationMaxKb) `
+          ("Mindestens " + [string](Get-Param "expected_eventlog_max_kb" 16384) + " KB") `
+          "Direkt/Win32_NTEventLogFile"
+
+        $expectedDcomAccounts = @((Get-Param "expected_lifebeat_dcom_accounts" @()))
+        if ($expectedDcomAccounts.Count -gt 0) {
+          $dcomOk = $true
+          foreach ($expectedAccount in $expectedDcomAccounts) {
+            foreach ($permissionName in @("Launch", "Access", "Configuration")) {
+              if (
+                @($dcomPermissionAccounts[$permissionName] | Where-Object {
+                  $_ -match [regex]::Escape([string]$expectedAccount)
+                }).Count -eq 0
+              ) {
+                $dcomOk = $false
+              }
+            }
+          }
+          Add-BooleanCheck "VMES0030" $dcomOk $dcomPermissionAccounts `
+            ("Konten in Start-, Zugriffs- und Konfigurationsberechtigungen: " +
+             ($expectedDcomAccounts -join ",")) `
+            "Direkt/Win32_DCOMApplicationSetting"
+        } else {
+          Add-NotTestable "VMES0030" $dcomPermissionAccounts `
+            "Lifebeat-DCOM-Konten laut Projekt" `
+            "Sollwert fehlt" `
+            "expected_lifebeat_dcom_accounts ist leer."
+        }
+
+        $defaultUserLocale = Get-RegistryValueSafe `
+          "Registry::HKEY_USERS\.DEFAULT\Control Panel\International" `
+          "LocaleName"
+        $localeCopyOk = (
+          [string]$systemLocale.Name -ieq $expectedLocale -and
+          [int]$homeLocation.GeoId -eq $expectedGeoId -and
+          [string]$defaultUserLocale -ieq $expectedLocale
+        )
+        Add-BooleanCheck "VMES0031" $localeCopyOk `
+          ("SystemLocale=" + [string]$systemLocale.Name +
+           "; GeoId=" + [string]$homeLocation.GeoId +
+           "; DefaultUserLocale=" + [string]$defaultUserLocale) `
+          ("Locale=" + $expectedLocale +
+           "; GeoId=" + $expectedGeoId +
+           "; fuer Willkommensseite und neue Benutzer kopiert") `
+          "Direkt/Windows-Locale und .DEFAULT-Profil"
+
+        Add-BooleanCheck "VMES0032" `
+          ([string]$timeZone.Id -ieq $expectedTimeZone) `
+          ("Zeitzone=" + [string]$timeZone.Id +
+           "; Uhrzeit=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")) `
+          $expectedTimeZone `
+          "Direkt/Get-TimeZone"
+
+        $bootTimeout = ""
+        try {
+          $bcdText = (bcdedit /enum "{bootmgr}" | Out-String)
+          if ($bcdText -match "(?im)^\s*timeout\s+(\d+)\s*$") {
+            $bootTimeout = $Matches[1]
+          }
+        } catch {}
+        Add-IndirectCheck "VMES0033" ([int]$autoReboot -eq 1) `
+          ("AutoReboot=" + [string]$autoReboot +
+           "; Bootmenue_Timeout=" + [string]$bootTimeout) `
+          "Automatischer Neustart aktiv; Wiederherstellungsoptionen 5 s" `
+          "Indirekt/Registry und BCD" `
+          "Die beiden GUI-Anzeigedauern sind je nach Windows-Version nicht vollstaendig als getrennte Werte auslesbar."
+        $profileCategories = @($connectionProfiles | ForEach-Object {
+          [string]$_.NetworkCategory
+        })
+        $networkLocationOk = (
+          $profileCategories.Count -gt 0 -and
+          @($profileCategories | Where-Object {
+            $_ -notin @("Private", "DomainAuthenticated")
+          }).Count -eq 0
+        )
+        Add-BooleanCheck "VMES0034" $networkLocationOk `
+          ("Netzwerkkategorien=" + ($profileCategories -join ",")) `
+          "Private oder domaenenauthentifizierte Netzwerke" `
+          "Direkt/Get-NetConnectionProfile"
+
+        Add-IndirectCheck "VMES0035" `
+          ($terminalAdapters.Count -gt 0 -and $pcs7Programs.Count -gt 0) `
+          ("Terminalbus=" + (@($terminalAdapters.Name) -join ",") +
+           "; SIMATIC-Komponenten=" + $pcs7Programs.Count) `
+          "Terminalbus in SIMATIC Shell ausgewaehlt/blau" `
+          "Indirekt/Netzwerkadapter und Softwareinventar" `
+          "Die Farbe und Auswahl in der SIMATIC-Shell-GUI ist nicht direkt automatisierbar."
+
+        $tbEncryptPath = [string](Get-Param "terminalbus_encryption_registry_path" "")
+        $tbEncryptName = [string](Get-Param "terminalbus_encryption_value_name" "")
+        if ($tbEncryptPath -and $tbEncryptName) {
+          $tbEncryptActual = Get-RegistryValueSafe $tbEncryptPath $tbEncryptName
+          $tbEncryptExpected = Get-Param "terminalbus_encryption_expected_value" ""
+          Add-BooleanCheck "VMES0036" `
+            ([string]$tbEncryptActual -eq [string]$tbEncryptExpected) `
+            $tbEncryptActual $tbEncryptExpected `
+            "Direkt/Registry"
+        } else {
+          Add-NotTestable "VMES0036" `
+            ("Terminalbusadapter=" + (@($terminalAdapters.Name) -join ",")) `
+            "Projektvorgabe zur Terminalbusverschluesselung" `
+            "Herstellerspezifische Konfiguration" `
+            "Die optionalen Registryvariablen fuer die Terminalbusverschluesselung sind nicht gesetzt."
+        }
+
+        $presentAdapterNames = @((Get-Param "expected_present_adapters" @()))
+        $absentAdapterNames = @((Get-Param "expected_absent_adapters" @()))
+        $allowedEnabled = @((Get-Param "allowed_enabled_adapter_names" @()))
+        $excludedAdapterRegex = [string](Get-Param "excluded_network_adapter_name_regex" "(?i)Loopback")
+        $actualAdapterNames = @($networkAdapters | Where-Object {
+          $_.Name -notmatch $excludedAdapterRegex
+        } | ForEach-Object { [string]$_.Name })
+        $enabledAdapterNames = @($networkAdapters | Where-Object {
+          $_.Status -eq "Up" -and $_.Name -notmatch $excludedAdapterRegex
+        } | ForEach-Object { [string]$_.Name })
+        $adapterRulesOk = $true
+        foreach ($name in $presentAdapterNames) {
+          if (@($actualAdapterNames | Where-Object { $_ -ieq [string]$name }).Count -eq 0) {
+            $adapterRulesOk = $false
+          }
+        }
+        foreach ($name in $absentAdapterNames) {
+          if (@($actualAdapterNames | Where-Object { $_ -ieq [string]$name }).Count -gt 0) {
+            $adapterRulesOk = $false
+          }
+        }
+        if ($allowedEnabled.Count -gt 0) {
+          foreach ($name in $enabledAdapterNames) {
+            if (@($allowedEnabled | Where-Object { [string]$_ -ieq $name }).Count -eq 0) {
+              $adapterRulesOk = $false
+            }
+          }
+        }
+
+        $bindingResults = @()
+        $bindingOk = $true
+        foreach ($adapter in @($networkAdapters | Where-Object {
+          $_.Name -notmatch $terminalRegex -and
+          $_.Name -notmatch $excludedAdapterRegex
+        })) {
+          foreach ($componentId in @((Get-Param "expected_network_binding_component_ids" @()))) {
+            try {
+              $binding = Get-NetAdapterBinding `
+                -Name $adapter.Name `
+                -ComponentID ([string]$componentId)
+              $bindingResults += (
+                $adapter.Name + "/" + $componentId + "=" + $binding.Enabled
+              )
+              if ([bool]$binding.Enabled) { $bindingOk = $false }
+            } catch {}
+          }
+        }
+
+        $profileMasterValue = ""
+        if ($masterProfile -ne "ALL") {
+          $profileMasterValue = Get-MasterValue $catalogByKey["VMES0037"]
+        }
+        $ipLastOctetOk = $true
+        if ($profileMasterValue -match "^\d{1,3}$") {
+          $ipLastOctetOk = ($targetIp -match ("\." + $profileMasterValue + "$"))
+        }
+        Add-BooleanCheck "VMES0037" `
+          ($adapterRulesOk -and $bindingOk -and $ipLastOctetOk) `
+          ("Adapter=" + ($actualAdapterNames -join ",") +
+           "; Aktiv=" + ($enabledAdapterNames -join ",") +
+           "; Bindings=" + ($bindingResults -join ",") +
+           "; Ziel-IP=" + $targetIp) `
+          "Vorgegebene Adapter/IPs; auf Nicht-Terminalbus-Adaptern Client- und Dateifreigabebindung deaktiviert" `
+          "Direkt/Get-NetAdapter, Get-NetIPConfiguration und Get-NetAdapterBinding"
+
+        $expectedDnsServers = @((Get-Param "expected_dns_servers" @()))
+        $expectedDnsSuffixes = @((Get-Param "expected_dns_suffixes" @()))
+        $terminalConfigs = @($networkConfigs | Where-Object {
+          $_.InterfaceAlias -match $terminalRegex -or
+          $_.InterfaceDescription -match $terminalRegex
+        })
+        $actualDnsServers = @($terminalConfigs | ForEach-Object {
+          $_.DNSServer.ServerAddresses
+        })
+        $dnsSuffixSearchList = @()
+        try {
+          $dnsSuffixSearchList = @(
+            Get-DnsClientGlobalSetting |
+              Select-Object -ExpandProperty SuffixSearchList
+          )
+        } catch {}
+        if ($expectedDnsServers.Count -gt 0 -or $expectedDnsSuffixes.Count -gt 0) {
+          $dnsOk = $true
+          foreach ($server in $expectedDnsServers) {
+            if ($actualDnsServers -notcontains [string]$server) { $dnsOk = $false }
+          }
+          foreach ($suffix in $expectedDnsSuffixes) {
+            if ($dnsSuffixSearchList -notcontains [string]$suffix) { $dnsOk = $false }
+          }
+          Add-BooleanCheck "VMES0038" $dnsOk `
+            ("DNS=" + ($actualDnsServers -join ",") +
+             "; Suffixe=" + ($dnsSuffixSearchList -join ",")) `
+            ("DNS=" + ($expectedDnsServers -join ",") +
+             "; Suffixe=" + ($expectedDnsSuffixes -join ",")) `
+            "Direkt/Get-DnsClientServerAddress und Get-DnsClientGlobalSetting"
+        } else {
+          Add-NotTestable "VMES0038" `
+            ("DNS=" + ($actualDnsServers -join ",") +
+             "; Suffixe=" + ($dnsSuffixSearchList -join ",")) `
+            "DNS-Server und DNS-Suffixe laut Projekt" `
+            "Sollwert fehlt" `
+            "vm_es_expected_dns_servers und vm_es_expected_dns_suffixes sind leer."
+        }
+
+        $extraAdapterMatches = @()
+        foreach ($name in $absentAdapterNames) {
+          $extraAdapterMatches += @($actualAdapterNames | Where-Object {
+            $_ -ieq [string]$name
+          })
+        }
+        Add-BooleanCheck "VMES0039" ($extraAdapterMatches.Count -eq 0) `
+          ("Adapter=" + ($actualAdapterNames -join ",")) `
+          ("Nicht vorhanden=" + ($absentAdapterNames -join ",")) `
+          "Direkt/Get-NetAdapter"
+
+        $loopbackOk = $false
+        try {
+          $loopbackOk = Test-Connection 127.0.0.1 -Count 1 -Quiet
+        } catch {}
+        Add-BooleanCheck "VMES0040" $loopbackOk `
+          ("Ping_127.0.0.1=" + $loopbackOk) `
+          "Ping auf 127.0.0.1 erfolgreich" `
+          "Direkt/Test-Connection"
+
+        $hostsRequired = Convert-ToBool (Get-Param "expected_hosts_lmhosts_required" $false)
+        $expectedHostEntries = @((Get-Param "expected_hosts_lmhosts_entries" @()))
+        if ($hostsRequired -or $expectedHostEntries.Count -gt 0) {
+          $hostsLmhostsOk = (Test-Path $hostsPath) -and (Test-Path $lmhostsPath)
+          foreach ($entry in $expectedHostEntries) {
+            if ($hostsContent -notmatch [regex]::Escape([string]$entry)) {
+              $hostsLmhostsOk = $false
+            }
+            if ($lmhostsContent -notmatch [regex]::Escape([string]$entry)) {
+              $hostsLmhostsOk = $false
+            }
+          }
+          Add-BooleanCheck "VMES0041" $hostsLmhostsOk `
+            ("HOSTS_Datum=" + [string]$hostsDate +
+             "; LMHOSTS_Datum=" + [string]$lmhostsDate) `
+            "HOSTS und LMHOSTS vorhanden und enthalten die erwarteten Eintraege" `
+            "Direkt/Dateisystem"
+        } else {
+          Add-NotTestable "VMES0041" `
+            ("HOSTS_vorhanden=" + (Test-Path $hostsPath) +
+             "; LMHOSTS_vorhanden=" + (Test-Path $lmhostsPath)) `
+            "Nur bei Arbeitsgruppe erforderlich" `
+            "Nicht anwendbar" `
+            "hosts_lmhosts_required ist false und es sind keine Soll-Eintraege gesetzt."
+        }
+
+        $expectedWidth = [int](Get-Param "expected_screen_width" 1920)
+        $expectedHeight = [int](Get-Param "expected_screen_height" 1080)
+        $resolutionOk = @($resolutions | Where-Object {
+          $_ -eq ($expectedWidth.ToString() + "x" + $expectedHeight.ToString())
+        }).Count -gt 0
+        Add-BooleanCheck "VMES0042" $resolutionOk `
+          ("Aufloesungen=" + ($resolutions -join ",")) `
+          ($expectedWidth.ToString() + "x" + $expectedHeight.ToString()) `
+          "Direkt/Win32_VideoController" `
+          "Bei getrennten RDP-/Konsolensitzungen kann die aktive Benutzeraufloesung abweichen."
+
+        Add-BooleanCheck "VMES0043" ([int]$disableCad -eq 1) `
+          ("DisableCAD=" + [string]$disableCad) `
+          "Kein STRG+ALT+ENTF erforderlich" `
+          "Direkt/Registry"
+
+        $loadedUserSids = @(Get-ChildItem Registry::HKEY_USERS |
+          Where-Object { $_.PSChildName -match "^S-1-5-21-" } |
+          Select-Object -ExpandProperty PSChildName)
+        $ieCertResults = @()
+        $ieCertOk = ($loadedUserSids.Count -gt 0)
+        foreach ($sid in $loadedUserSids) {
+          $certRevocation = Get-RegistryValueSafe `
+            ("Registry::HKEY_USERS\" + $sid +
+             "\Software\Microsoft\Windows\CurrentVersion\Internet Settings") `
+            "CertificateRevocation"
+          $checkExe = Get-RegistryValueSafe `
+            ("Registry::HKEY_USERS\" + $sid +
+             "\Software\Microsoft\Internet Explorer\Download") `
+            "CheckExeSignatures"
+          $ieCertResults += (
+            $sid + ":CertificateRevocation=" + [string]$certRevocation +
+            ",CheckExeSignatures=" + [string]$checkExe
+          )
+          if (
+            [int]$certRevocation -ne 0 -or
+            ([string]$checkExe -and [string]$checkExe -notmatch "(?i)^no$")
+          ) {
+            $ieCertOk = $false
+          }
+        }
+        Add-IndirectCheck "VMES0044" $ieCertOk `
+          ($ieCertResults -join " | ") `
+          "Zertifikatsperrlistenpruefungen fuer Server und Herausgeber deaktiviert" `
+          "Indirekt/Registry geladener Benutzerprofile" `
+          "Nicht geladene Benutzerprofile werden nicht vollstaendig erfasst."
+
+        $downloadResults = @()
+        $downloadOk = ($loadedUserSids.Count -gt 0)
+        foreach ($sid in $loadedUserSids) {
+          $downloadValue = Get-RegistryValueSafe `
+            ("Registry::HKEY_USERS\" + $sid +
+             "\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Zones\3") `
+            "1803"
+          $downloadResults += ($sid + ":1803=" + [string]$downloadValue)
+          if ([int]$downloadValue -ne 0) { $downloadOk = $false }
+        }
+        Add-IndirectCheck "VMES0045" $downloadOk `
+          ($downloadResults -join " | ") `
+          "Dateidownloads in der Internetzone aktiviert (1803=0)" `
+          "Indirekt/Registry geladener Benutzerprofile"
+
+        $vncVersions = @($vncPrograms | ForEach-Object { [string]$_.Version })
+        $vncVersionExpected = [string](Get-Param "expected_ultravnc_version" "1.4.3.6")
+        $vncVersionOk = @($vncVersions | Where-Object {
+          [string]$_ -eq $vncVersionExpected
+        }).Count -gt 0
+        $vncRulePatterns = @((Get-Param "expected_firewall_rule_name_patterns" @()))
+        $vncFirewallMatches = @()
+        foreach ($pattern in $vncRulePatterns) {
+          $vncFirewallMatches += @($firewallRules | Where-Object {
+            $_.DisplayName -match [string]$pattern -and
+            $_.Enabled -eq "True"
+          })
+        }
+        $vncFileTransferDisabled = $true
+        if ($vncIni.Count -gt 0) {
+          foreach ($key in @("FileTransferEnabled", "EnableFileTransfer")) {
+            if ($vncIni.ContainsKey($key) -and [int]$vncIni[$key] -ne 0) {
+              $vncFileTransferDisabled = $false
+            }
+          }
+        }
+        $vncInstallOk = (
+          $vncPrograms.Count -gt 0 -and
+          $vncVersionOk -and
+          $vncFirewallMatches.Count -ge $vncRulePatterns.Count -and
+          $vncFileTransferDisabled
+        )
+        Add-BooleanCheck "VMES0046" $vncInstallOk `
+          ("Versionen=" + ($vncVersions -join ",") +
+           "; Firewallregeln=" + $vncFirewallMatches.Count +
+           "; INI=" + $vncIniPath +
+           "; FileTransferDisabled=" + $vncFileTransferDisabled) `
+          ("UltraVNC " + $vncVersionExpected +
+           "; VNC-Firewallregeln aktiv; File-Sharing deaktiviert") `
+          "Direkt/Uninstall-Registry, Firewall und INI"
+
+        $expectedDomainRegex = [string](Get-Param "expected_domain_regex" "")
+        $domainOk = [bool]$cs.PartOfDomain
+        if ($expectedDomainRegex) {
+          $domainOk = (
+            $domainOk -and
+            [string]$cs.Domain -match $expectedDomainRegex
+          )
+        }
+        $domainExpectedText = "VM ist Domaenenmitglied"
+        if ($expectedDomainRegex) {
+          $domainExpectedText = "Domaene passend zu " + $expectedDomainRegex
+        }
+        Add-BooleanCheck "VMES0047" $domainOk `
+          ("PartOfDomain=" + [bool]$cs.PartOfDomain +
+           "; Domain=" + [string]$cs.Domain) `
+          $domainExpectedText `
+          "Direkt/Win32_ComputerSystem"
+
+        $ouRegex = [string](Get-Param "expected_computer_ou_regex" "")
+        if ($ouRegex) {
+          Add-BooleanCheck "VMES0048" `
+            ($domainDn -and $domainDn -match $ouRegex) `
+            $domainDn `
+            ("Computerobjekt passend zu " + $ouRegex) `
+            "Direkt/Active Directory"
+        } else {
+          Add-IndirectCheck "VMES0048" ([bool]$domainDn) $domainDn `
+            "Computerobjekt dem Ordner ES zugeordnet" `
+            "Indirekt/Active Directory" `
+            "expected_computer_ou_regex ist nicht gesetzt."
+        }
+
+        Add-NotTestable "VMES0049" `
+          ("Domaene=" + [string]$cs.Domain +
+           "; WinRM-Benutzer wird aus Sicherheitsgruenden nicht protokolliert") `
+          "Anmeldung als vorgesehener Domaenenbenutzer" `
+          "Sitzungshistorie" `
+          "Eine fruehere interaktive Anmeldung ist nicht eindeutig nachweisbar."
+
+        $msLogonRequired = $null
+        $newMsLogon = $null
+        foreach ($key in @("MSLogonRequired", "RequireMSLogon")) {
+          if ($vncIni.ContainsKey($key)) { $msLogonRequired = $vncIni[$key] }
+        }
+        foreach ($key in @("NewMSLogon", "NewMSLogonRequired")) {
+          if ($vncIni.ContainsKey($key)) { $newMsLogon = $vncIni[$key] }
+        }
+        $vncGroupRegex = [string](Get-Param "expected_vnc_group_regex" "(?i)GG_VNC_ES")
+        $vncIniText = ""
+        if ($vncIniPath) { $vncIniText = Get-Content $vncIniPath -Raw }
+        $vncConfigOk = (
+          $vncIniPath -and
+          [int]$msLogonRequired -eq 1 -and
+          [int]$newMsLogon -eq 1 -and
+          (
+            -not $vncGroupRegex -or
+            $vncIniText -match $vncGroupRegex
+          )
+        )
+        Add-BooleanCheck "VMES0050" $vncConfigOk `
+          ("INI=" + $vncIniPath +
+           "; MSLogonRequired=" + [string]$msLogonRequired +
+           "; NewMSLogon=" + [string]$newMsLogon) `
+          "MS Logon und New MS Logon aktiv; VNC-Gruppe fuer ES konfiguriert" `
+          "Direkt/UltraVNC-INI"
+
+        $vncListenerOk = (
+          $vncService -and
+          [string]$vncService.State -eq "Running" -and
+          (@($tcpListeners | Where-Object { $_ -in @(5800, 5900) }).Count -gt 0)
+        )
+        Add-IndirectCheck "VMES0051" $vncListenerOk `
+          ("Dienst=" + [string]$vncService.State +
+           "; Listener=" +
+           (@($tcpListeners | Where-Object { $_ -in @(5800, 5900) }) -join ",")) `
+          "VNC-Verbindungstest erfolgreich" `
+          "Indirekt/Dienst und TCP-Listener" `
+          "Bildaufbau und Authentifizierung werden nicht von extern getestet."
+
+        $pcs7V10 = @(Find-Programs "(?i)PCS\s*7.*10|PCS7.*10|SIMATIC.*V10")
+        Add-BooleanCheck "VMES0052" ($pcs7V10.Count -gt 0) `
+          (Programs-ToText $pcs7V10) `
+          "SIMATIC PCS 7 V10.0 / Engineering-Komponenten installiert" `
+          "Direkt/Uninstall-Registry"
+
+        $pcs7V7 = @(Find-Programs "(?i)PCS\s*7.*V?7|PCS7.*V?7|Basis Library.*V?7|Faceplates.*V?7")
+        Add-BooleanCheck "VMES0053" ($pcs7V7.Count -gt 0) `
+          (Programs-ToText $pcs7V7) `
+          "PCS 7 V7 Basis Library und Faceplates installiert" `
+          "Direkt/Uninstall-Registry"
+
+        Add-BooleanCheck "VMES0054" ($smcPrograms.Count -gt 0) `
+          (Programs-ToText $smcPrograms) `
+          "SIMATIC Management Console installiert" `
+          "Direkt/Uninstall-Registry"
+
+        Add-BooleanCheck "VMES0055" ($batchPrograms.Count -gt 0) `
+          (Programs-ToText $batchPrograms) `
+          "SIMATIC BATCH Engineering-Komponenten installiert" `
+          "Direkt/Uninstall-Registry"
+
+        Add-BooleanCheck "VMES0056" `
+          ($smaService -and [string]$smaService.StartMode -eq "Auto") `
+          ("Dienst=" + [string]$smaService.Name +
+           "; State=" + [string]$smaService.State +
+           "; StartMode=" + [string]$smaService.StartMode) `
+          "SIMATIC Management Agent Dienst Starttyp Automatisch" `
+          "Direkt/Win32_Service"
+
+        Add-IndirectCheck "VMES0057" ($smcPrograms.Count -gt 0) `
+          (Programs-ToText $smcPrograms) `
+          "SIMATIC Management Console mit Projektstruktur und PSK konfiguriert" `
+          "Indirekt/Softwareinventar" `
+          "Die konkrete SMC-Struktur und der PSK werden nicht sicher ausgelesen."
+
+        Add-BooleanCheck "VMES0058" ($smaPrograms.Count -gt 0) `
+          (Programs-ToText $smaPrograms) `
+          "SIMATIC Management Agent V10.0 installiert" `
+          "Direkt/Uninstall-Registry"
+
+        $pcs7Sp1 = @(Find-Programs "(?i)PCS\s*7.*(SP\s*1|10\.0\.1)|SIMATIC.*V10.*SP\s*1")
+        Add-IndirectCheck "VMES0059" ($pcs7Sp1.Count -gt 0) `
+          (Programs-ToText $pcs7Sp1) `
+          "PCS 7 V10 SP1 installiert/aktualisiert" `
+          "Indirekt/Uninstall-Registry" `
+          "Die Installation mittels SIMATIC Management Console ist vom Endzustand nicht unterscheidbar."
+        Add-IndirectCheck "VMES0060" ($pcs7Sp1.Count -gt 0) `
+          (Programs-ToText $pcs7Sp1) `
+          "PCS 7 V10 SP1 installiert/aktualisiert" `
+          "Indirekt/Uninstall-Registry" `
+          "Die manuelle Aktualisierung ist vom Endzustand nicht unterscheidbar."
+
+        $smaSp1 = @($smaPrograms | Where-Object {
+          $_.Name -match "(?i)SP\s*1" -or
+          $_.Version -match "^10\.(1|0\.1)"
+        })
+        Add-BooleanCheck "VMES0061" ($smaSp1.Count -gt 0) `
+          (Programs-ToText $smaPrograms) `
+          "SIMATIC Management Agent V10.0 SP1" `
+          "Direkt/Uninstall-Registry"
+
+        Add-IndirectCheck "VMES0062" ($cematPrograms.Count -gt 0) `
+          (Programs-ToText $cematPrograms) `
+          "CEMAT V10 Engineering, Libraries und Monitoring-Komponenten installiert" `
+          "Indirekt/Uninstall-Registry" `
+          "Die Installation mittels SMC ist vom Endzustand nicht unterscheidbar."
+        Add-IndirectCheck "VMES0063" ($cematPrograms.Count -gt 0) `
+          (Programs-ToText $cematPrograms) `
+          "CEMAT V10 Engineering, Libraries und Monitoring-Komponenten installiert" `
+          "Indirekt/Uninstall-Registry" `
+          "Die Installation mittels Rahmensetup ist vom Endzustand nicht unterscheidbar."
+
+        $asOsUpdate = @(Find-Programs "(?i)AS.?OS.*Engineering.*(Upd|Update)|SIMATIC_AS_OS_Engineering")
+        $cfcUpdate = @(Find-Programs "(?i)CFC.*(Upd|Update)|SIMATIC_CFC")
+        $ieapoUpdate = @(Find-Programs "(?i)IEAPO.*(Upd|Update)|SIMATIC_IEAPO")
+        $xmlUpdate = @(Find-Programs "(?i)XML.*Transfer.*(Upd|Update)|SIMATIC_XMLTRANSFER")
+        $basisUpdate = @(Find-Programs "(?i)PCS.?7.*Basis Library.*(Upd|Update)|Basis_Library")
+        Add-BooleanCheck "VMES0064" ($asOsUpdate.Count -gt 0) `
+          (Programs-ToText $asOsUpdate) `
+          "SIMATIC AS/OS Engineering V10.0 SP1 Update 1" `
+          "Direkt/Uninstall-Registry"
+        Add-BooleanCheck "VMES0065" ($cfcUpdate.Count -gt 0) `
+          (Programs-ToText $cfcUpdate) `
+          "SIMATIC CFC V10.0 SP1 Update 1" `
+          "Direkt/Uninstall-Registry"
+        Add-BooleanCheck "VMES0066" ($ieapoUpdate.Count -gt 0) `
+          (Programs-ToText $ieapoUpdate) `
+          "SIMATIC IEAPO V10.0 SP1 Update 1" `
+          "Direkt/Uninstall-Registry"
+        Add-BooleanCheck "VMES0067" ($xmlUpdate.Count -gt 0) `
+          (Programs-ToText $xmlUpdate) `
+          "SIMATIC XML Transfer V10.0 SP1 Update 1" `
+          "Direkt/Uninstall-Registry"
+        Add-BooleanCheck "VMES0068" ($basisUpdate.Count -gt 0) `
+          (Programs-ToText $basisUpdate) `
+          "SIMATIC PCS 7 Basis Library V10.0 SP1 Update 1" `
+          "Direkt/Uninstall-Registry"
+        $compatibilityFiles = @(Get-FilesUnderPaths `
+          @((Get-Param "compatibility_report_paths" @())) "*")
+        $compatibilityFiles = @($compatibilityFiles | Where-Object {
+          $_.Name -match "(?i)kompa|compat|bericht|report"
+        })
+        Add-IndirectCheck "VMES0069" ($compatibilityFiles.Count -gt 0) `
+          (@($compatibilityFiles.FullName) -join ",") `
+          "Kompatibilitaetsbericht im Projektordner abgelegt" `
+          "Indirekt/Dateisystem" `
+          "Der Berichtinhalt wird nicht fachlich bewertet."
+
+        $softwareExportFiles = @(Get-FilesUnderPaths `
+          @((Get-Param "installed_software_export_paths" @())) "*")
+        $softwareExportFiles = @($softwareExportFiles | Where-Object {
+          $_.Name -match "(?i)install|software|program|inventar|inventory"
+        })
+        Add-BooleanCheck "VMES0070" ($softwareExportFiles.Count -gt 0) `
+          (@($softwareExportFiles.FullName) -join ",") `
+          "Export der installierten Software im Projektordner vorhanden" `
+          "Direkt/Dateisystem"
+
+        $bgInfoPaths = @((Get-Param "expected_bginfo_paths" @()))
+        $bgInfoExisting = @($bgInfoPaths | Where-Object {
+          Test-Path ([string]$_)
+        })
+        $runEntries = @()
+        foreach ($runPath in @(
+          "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+          "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
+        )) {
+          if (Test-Path $runPath) {
+            $runObject = Get-ItemProperty $runPath
+            $runEntries += @($runObject.PSObject.Properties | ForEach-Object {
+              $_.Name + "=" + [string]$_.Value
+            })
+          }
+        }
+        $bgRunContains = [string](Get-Param "expected_bginfo_run_contains" "BgInfo")
+        $bgInfoOk = (
+          $bgInfoExisting.Count -gt 0 -and
+          @($runEntries | Where-Object {
+            $_ -match [regex]::Escape($bgRunContains)
+          }).Count -gt 0
+        )
+        Add-BooleanCheck "VMES0071" $bgInfoOk `
+          ("Pfade=" + ($bgInfoExisting -join ",") +
+           "; Run=" + ($runEntries -join " | ")) `
+          "BGInfo installiert und Autostart vorhanden" `
+          "Direkt/Dateisystem und Registry"
+
+        if (Convert-ToBool (Get-Param "ntp_wizard_required" $false)) {
+          $ntpPaths = @((Get-Param "expected_ntp_wizard_paths" @()))
+          $ntpFiles = @(Get-FilesUnderPaths $ntpPaths "*NTP*")
+          Add-BooleanCheck "VMES0072" ($ntpFiles.Count -gt 0) `
+            (@($ntpFiles.FullName) -join ",") `
+            "NTP Wizard in einem erwarteten Pfad vorhanden" `
+            "Direkt/Dateisystem"
+        } else {
+          Add-NotTestable "VMES0072" `
+            ("Domaenenmitglied=" + [bool]$cs.PartOfDomain) `
+            "NTP Wizard nur falls projektseitig erforderlich" `
+            "Nicht anwendbar" `
+            "ntp_wizard_required ist false."
+        }
+
+        $sdtFiles = @(Get-FilesUnderPaths `
+          @((Get-Param "expected_sdt_paths" @())) "*SDT*")
+        Add-BooleanCheck "VMES0073" ($sdtFiles.Count -gt 0) `
+          (@($sdtFiles.FullName) -join ",") `
+          "Aktuelles SDT Tool unter D:\Siemens oder projektspezifischem Pfad" `
+          "Direkt/Dateisystem"
+
+        $sinecFiles = @(Get-FilesUnderPaths `
+          @((Get-Param "expected_sinec_pni_paths" @())) "*")
+        $sinecFiles = @($sinecFiles | Where-Object {
+          $_.Name -match "(?i)SINEC|PNI|PST"
+        })
+        Add-BooleanCheck "VMES0074" ($sinecFiles.Count -gt 0) `
+          (@($sinecFiles.FullName) -join ",") `
+          "SINEC PNI/PST und Desktopverknuepfung vorhanden" `
+          "Direkt/Dateisystem"
+
+        $almEvidence = Programs-ToText $almPrograms
+        foreach ($licenseId in @(
+          "VMES0075", "VMES0076", "VMES0077",
+          "VMES0078", "VMES0079", "VMES0080"
+        )) {
+          Add-NotTestable $licenseId $almEvidence `
+            "Vorgegebene Siemens-Lizenz(en) eingespielt bzw. migriert" `
+            "Automation License Manager" `
+            "Die vorhandenen Lizenzschluessel und deren Gueltigkeit werden lokal nicht verlaesslich und sicher ausgelesen."
+        }
+
+        $pcs7User = [string](Get-Param "expected_pcs7_user" "LOCadmLS4")
+        $expectedPcs7Groups = @((Get-Param "expected_pcs7_groups" @()))
+        $userGroupActual = @()
+        foreach ($groupName in $localGroupMembership.Keys) {
+          if (@($localGroupMembership[$groupName] | Where-Object {
+            $_ -match ("\\" + [regex]::Escape($pcs7User) + "$") -or
+            $_ -ieq $pcs7User
+          }).Count -gt 0) {
+            $userGroupActual += $groupName
+          }
+        }
+        $missingPcs7Groups = @($expectedPcs7Groups | Where-Object {
+          $userGroupActual -notcontains [string]$_
+        })
+        Add-BooleanCheck "VMES0081" ($missingPcs7Groups.Count -eq 0) `
+          ("Benutzer=" + $pcs7User +
+           "; Gruppen=" + ($userGroupActual -join ",")) `
+          ("Gruppen=" + ($expectedPcs7Groups -join ",")) `
+          "Direkt/Lokale Gruppenmitgliedschaften"
+
+        $projectFolder = [string](Get-Param "expected_project_folder" "D:\Projekte")
+        $projectShare = [string](Get-Param "expected_project_share" "Projekte")
+        $projectShareObject = $shares |
+          Where-Object { $_.Name -ieq $projectShare } |
+          Select-Object -First 1
+        $projectAclText = ""
+        if (Test-Path $projectFolder) {
+          try { $projectAclText = (Get-Acl $projectFolder | Format-List | Out-String).Trim() } catch {}
+        }
+        Add-BooleanCheck "VMES0082" `
+          ((Test-Path $projectFolder) -and $projectShareObject) `
+          ("Ordner=" + (Test-Path $projectFolder) +
+           "; Share=" + [bool]$projectShareObject +
+           "; SharePfad=" + [string]$projectShareObject.Path +
+           "; ACL=" + $projectAclText) `
+          ("Projektordner=" + $projectFolder +
+           "; Freigabe=" + $projectShare) `
+          "Direkt/Dateisystem, SMB-Freigabe und ACL"
+
+        $disabledFeatures = @((Get-Param "expected_disabled_windows_features" @()))
+        $featureStates = @()
+        $featuresOk = $true
+        foreach ($featureName in $disabledFeatures) {
+          try {
+            $feature = Get-WindowsOptionalFeature `
+              -Online `
+              -FeatureName ([string]$featureName)
+            $featureStates += (
+              [string]$featureName + "=" + [string]$feature.State
+            )
+            if ($feature.State -notin @("Disabled", "DisabledWithPayloadRemoved")) {
+              $featuresOk = $false
+            }
+          } catch {
+            $featureStates += ([string]$featureName + "=Nicht gefunden")
+            $featuresOk = $false
+          }
+        }
+        if ($disabledFeatures.Count -eq 0) { $featuresOk = $false }
+        Add-BooleanCheck "VMES0083" $featuresOk `
+          ($featureStates -join ",") `
+          ("Deaktiviert=" + ($disabledFeatures -join ",")) `
+          "Direkt/Get-WindowsOptionalFeature" `
+          "Bei leerer Sollwertliste ist die Pruefung NOK, damit die Hardening-Vorgabe nicht unbemerkt ausfaellt."
+
+        $disabledServicePatterns = @((Get-Param "expected_disabled_service_patterns" @()))
+        $serviceStates = @()
+        $servicesDisabledOk = $true
+        foreach ($pattern in $disabledServicePatterns) {
+          $matchingServices = @($services | Where-Object {
+            $_.Name -match [string]$pattern -or
+            $_.DisplayName -match [string]$pattern
+          })
+          if ($matchingServices.Count -eq 0) {
+            $serviceStates += ([string]$pattern + "=nicht installiert")
+            continue
+          }
+          foreach ($service in $matchingServices) {
+            $serviceStates += (
+              $service.Name + "=" + $service.StartMode + "/" + $service.State
+            )
+            if ($service.StartMode -ne "Disabled") {
+              $servicesDisabledOk = $false
+            }
+          }
+        }
+        if ($disabledServicePatterns.Count -eq 0) { $servicesDisabledOk = $false }
+        Add-BooleanCheck "VMES0084" $servicesDisabledOk `
+          ($serviceStates -join ",") `
+          "Alle vorgegebenen Dienste deaktiviert" `
+          "Direkt/Win32_Service"
+
+        $smbSigningOk = (
+          $smbClientConfig -and
+          [bool]$smbClientConfig.RequireSecuritySignature -and
+          $smbServerConfig -and
+          [bool]$smbServerConfig.RequireSecuritySignature -and
+          [bool]$smbServerConfig.EnableSecuritySignature
+        )
+        Add-BooleanCheck "VMES0085" $smbSigningOk `
+          ("ClientRequire=" + [string]$smbClientConfig.RequireSecuritySignature +
+           "; ServerRequire=" + [string]$smbServerConfig.RequireSecuritySignature +
+           "; ServerEnable=" + [string]$smbServerConfig.EnableSecuritySignature) `
+          "SMB-Signierung fuer Client und Server erforderlich/aktiv" `
+          "Direkt/Get-SmbClientConfiguration und Get-SmbServerConfiguration"
+
+        $smb1FeatureState = ""
+        try {
+          $smb1FeatureState = [string](
+            Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol
+          ).State
+        } catch {}
+        $smb1Ok = (
+          $smb1FeatureState -in @("Disabled", "DisabledWithPayloadRemoved") -and
+          (
+            $null -eq $smbServerConfig.EnableSMB1Protocol -or
+            -not [bool]$smbServerConfig.EnableSMB1Protocol
+          )
+        )
+        Add-BooleanCheck "VMES0086" $smb1Ok `
+          ("Feature=" + $smb1FeatureState +
+           "; ServerEnableSMB1=" + [string]$smbServerConfig.EnableSMB1Protocol) `
+          "SMBv1 deaktiviert" `
+          "Direkt/Windows-Feature und SMB-Konfiguration"
+
+        Add-BooleanCheck "VMES0087" `
+          ($smbServerConfig -and [bool]$smbServerConfig.EncryptData) `
+          ("EncryptData=" + [string]$smbServerConfig.EncryptData) `
+          "SMBv3-Verschluesselung systemweit aktiviert" `
+          "Direkt/Get-SmbServerConfiguration"
+
+        $disabledProtocols = @((Get-Param "expected_disabled_schannel_protocols" @()))
+        $enabledProtocols = @((Get-Param "expected_enabled_schannel_protocols" @()))
+        $protocolStates = @()
+        $protocolsOk = $true
+        foreach ($protocol in $disabledProtocols) {
+          foreach ($side in @("Client", "Server")) {
+            $path = (
+              "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\" +
+              [string]$protocol + "\" + $side
+            )
+            $enabled = Get-RegistryValueSafe $path "Enabled"
+            $disabledByDefault = Get-RegistryValueSafe $path "DisabledByDefault"
+            $protocolStates += (
+              [string]$protocol + "/" + $side +
+              ":Enabled=" + [string]$enabled +
+              ",DisabledByDefault=" + [string]$disabledByDefault
+            )
+            if (
+              [int]$enabled -ne 0 -or
+              [int]$disabledByDefault -ne 1
+            ) {
+              $protocolsOk = $false
+            }
+          }
+        }
+        foreach ($protocol in $enabledProtocols) {
+          foreach ($side in @("Client", "Server")) {
+            $path = (
+              "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\" +
+              [string]$protocol + "\" + $side
+            )
+            $enabled = Get-RegistryValueSafe $path "Enabled"
+            $disabledByDefault = Get-RegistryValueSafe $path "DisabledByDefault"
+            $protocolStates += (
+              [string]$protocol + "/" + $side +
+              ":Enabled=" + [string]$enabled +
+              ",DisabledByDefault=" + [string]$disabledByDefault
+            )
+            if (
+              [int]$enabled -ne 1 -or
+              [int]$disabledByDefault -ne 0
+            ) {
+              $protocolsOk = $false
+            }
+          }
+        }
+        Add-BooleanCheck "VMES0088" $protocolsOk `
+          ($protocolStates -join " | ") `
+          ("Deaktiviert=" + ($disabledProtocols -join ",") +
+           "; Aktiviert=" + ($enabledProtocols -join ",")) `
+          "Direkt/SCHANNEL-Registry"
+
+        $allowedCipherSuites = @((Get-Param "expected_allowed_tls12_cipher_suites" @()))
+        if ($allowedCipherSuites.Count -gt 0) {
+          $missingAllowedCiphers = @($allowedCipherSuites | Where-Object {
+            $tlsCipherNames -notcontains [string]$_
+          })
+          Add-BooleanCheck "VMES0089" `
+            ($missingAllowedCiphers.Count -eq 0) `
+            ("Aktive Cipher Suites=" + ($tlsCipherNames -join ",")) `
+            ("Erwartete sichere Cipher Suites=" + ($allowedCipherSuites -join ",")) `
+            "Direkt/Get-TlsCipherSuite"
+        } else {
+          Add-NotTestable "VMES0089" `
+            ("Aktive Cipher Suites=" + ($tlsCipherNames -join ",")) `
+            "Projektfreigabe fuer sichere Cipher Suites" `
+            "Sollwert fehlt" `
+            "expected_allowed_tls12_cipher_suites ist leer."
+        }
+
+        $disabledCipherSuites = @((Get-Param "expected_disabled_cipher_suites" @()))
+        if ($disabledCipherSuites.Count -gt 0) {
+          $stillActiveDisabledCiphers = @($disabledCipherSuites | Where-Object {
+            $tlsCipherNames -contains [string]$_
+          })
+          Add-BooleanCheck "VMES0090" `
+            ($stillActiveDisabledCiphers.Count -eq 0) `
+            ("Noch aktiv=" + ($stillActiveDisabledCiphers -join ",")) `
+            ("Deaktiviert=" + ($disabledCipherSuites -join ",")) `
+            "Direkt/Get-TlsCipherSuite"
+        } else {
+          Add-NotTestable "VMES0090" `
+            ("Aktive Cipher Suites=" + ($tlsCipherNames -join ",")) `
+            "Zu deaktivierende Cipher Suites" `
+            "Sollwert fehlt" `
+            "expected_disabled_cipher_suites ist leer."
+        }
+
+        $almPath = [string](Get-Param "alm_remote_registry_path" "")
+        $almName = [string](Get-Param "alm_remote_value_name" "")
+        if ($almPath -and $almName) {
+          $almActual = Get-RegistryValueSafe $almPath $almName
+          $almExpected = Get-Param "alm_remote_expected_value" ""
+          Add-BooleanCheck "VMES0091" `
+            ([string]$almActual -eq [string]$almExpected) `
+            $almActual $almExpected `
+            "Direkt/Registry"
+        } else {
+          Add-NotTestable "VMES0091" (Programs-ToText $almPrograms) `
+            "ALM-Verbindungen von remote deaktiviert" `
+            "Herstellerspezifische ALM-Konfiguration" `
+            "Die optionalen ALM-Registryvariablen sind nicht gesetzt."
+        }
+
+        $powerRegex = [string](Get-Param "expected_power_plan_regex" "High performance")
+        Add-BooleanCheck "VMES0092" `
+          ($activePowerPlan -match $powerRegex) `
+          $activePowerPlan `
+          ("Aktiver Energieplan passend zu " + $powerRegex) `
+          "Direkt/powercfg"
+
+        Add-NotTestable "VMES0093" `
+          ("PCS7-Komponenten=" + $pcs7Programs.Count) `
+          "Security Controller durfte Einstellungen waehrend der Installation ausfuehren" `
+          "Installationsdialog" `
+          "Die Bestaetigung des Installationsdialogs wird nicht eindeutig gespeichert."
+
+        $firewallOk = (
+          $firewallProfiles.Count -gt 0 -and
+          @($firewallProfiles | Where-Object { -not [bool]$_.Enabled }).Count -eq 0
+        )
+        Add-BooleanCheck "VMES0094" $firewallOk `
+          (@($firewallProfiles | ForEach-Object {
+            $_.Name + "=" + $_.Enabled
+          }) -join ",") `
+          "Alle Windows-Firewallprofile aktiviert" `
+          "Direkt/Get-NetFirewallProfile"
+
+        $noDriveTypeAutoRun = Get-RegistryValueSafe `
+          "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+          "NoDriveTypeAutoRun"
+        $noAutorun = Get-RegistryValueSafe `
+          "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+          "NoAutorun"
+        $autoplayOk = (
+          [int]$noDriveTypeAutoRun -eq 255 -and
+          [int]$noAutorun -eq 1
+        )
+        Add-BooleanCheck "VMES0095" $autoplayOk `
+          ("NoDriveTypeAutoRun=" + [string]$noDriveTypeAutoRun +
+           "; NoAutorun=" + [string]$noAutorun) `
+          "AutoPlay fuer alle Laufwerke deaktiviert; keine AutoRun-Befehle" `
+          "Direkt/Registry"
+
+        Add-NotTestable "VMES0096" `
+          "Lokale Betriebssystemdaten vorhanden" `
+          "Image nur mit Systemsoftware erstellt" `
+          "Externes Backup-/Hypervisorsystem" `
+          "Das Image befindet sich nicht zwingend auf der VM und ist lokal nicht eindeutig nachweisbar."
+
+        $pdmLibrary = @($pdmPrograms | Where-Object {
+          $_.Name -match "(?i)Device Library|PDM"
+        })
+        Add-BooleanCheck "VMES0097" ($pdmLibrary.Count -gt 0) `
+          (Programs-ToText $pdmLibrary) `
+          "SIMATIC PDM Device Library V9.2 installiert" `
+          "Direkt/Uninstall-Registry"
+
+        $pdmDataFiles = @()
+        foreach ($path in @(
+          "C:\ProgramData\Siemens\Automation\PDM",
+          "C:\Program Files\Siemens\Automation\PDM",
+          "C:\Program Files (x86)\Siemens\Automation\PDM"
+        )) {
+          $pdmDataFiles += @(Get-FilesUnderPaths @($path) "*")
+        }
+        Add-IndirectCheck "VMES0098" ($pdmDataFiles.Count -gt 0) `
+          ("PDM-Dateien=" + $pdmDataFiles.Count) `
+          "PDM-Geraetebeschreibungen integriert" `
+          "Indirekt/Dateisystem" `
+          "Vorhandene PDM-Dateien sind ein Indiz; der Integrationsvorgang wird nicht separat protokolliert."
+
+        $wuPolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+        $wuAuPath = $wuPolicyPath + "\AU"
+        $wuServer = Get-RegistryValueSafe $wuPolicyPath "WUServer"
+        $wuStatusServer = Get-RegistryValueSafe $wuPolicyPath "WUStatusServer"
+        $wuTargetGroup = Get-RegistryValueSafe $wuPolicyPath "TargetGroup"
+        $wuTargetGroupEnabled = Get-RegistryValueSafe $wuPolicyPath "TargetGroupEnabled"
+        $wuAuOptions = Get-RegistryValueSafe $wuAuPath "AUOptions"
+        $expectedWsusServer = [string](Get-Param "expected_wsus_server" "")
+        $expectedWsusTargetGroup = [string](Get-Param "expected_wsus_target_group" "")
+        $expectedAuOptions = @((Get-Param "expected_wsus_au_options" @(3, 4)))
+        if ($expectedWsusServer) {
+          $wsusOk = (
+            [string]$wuServer -ieq $expectedWsusServer -and
+            [string]$wuStatusServer -ieq $expectedWsusServer -and
+            [int]$wuAuOptions -in @($expectedAuOptions | ForEach-Object { [int]$_ })
+          )
+          if ($expectedWsusTargetGroup) {
+            $wsusOk = (
+              $wsusOk -and
+              [int]$wuTargetGroupEnabled -eq 1 -and
+              [string]$wuTargetGroup -ieq $expectedWsusTargetGroup
+            )
+          }
+          Add-BooleanCheck "VMES0099" $wsusOk `
+            ("WUServer=" + [string]$wuServer +
+             "; WUStatusServer=" + [string]$wuStatusServer +
+             "; TargetGroup=" + [string]$wuTargetGroup +
+             "; TargetGroupEnabled=" + [string]$wuTargetGroupEnabled +
+             "; AUOptions=" + [string]$wuAuOptions) `
+            ("WSUS=" + $expectedWsusServer +
+             "; TargetGroup=" + $expectedWsusTargetGroup +
+             "; AUOptions=" + ($expectedAuOptions -join ",")) `
+            "Direkt/Windows-Update-Registry"
+        } else {
+          Add-NotTestable "VMES0099" `
+            ("WUServer=" + [string]$wuServer +
+             "; TargetGroup=" + [string]$wuTargetGroup +
+             "; AUOptions=" + [string]$wuAuOptions) `
+            "Projekt-WSUS-Konfiguration" `
+            "Sollwert fehlt" `
+            "expected_wsus_server ist leer."
+        }
+
+        Add-NotTestable "VMES0100" `
+          "Lokale VEEAM-Komponenten sind kein Nachweis eines Backups." `
+          "VEEAM Backup erstellt" `
+          "Externes VEEAM-System" `
+          "Der erfolgreiche Backup-Job muss auf dem VEEAM-Server geprueft werden."
+
+        $hotfixMap = @{
+          "VMES0101" = "KB5053603"
+          "VMES0102" = "KB5050187"
+          "VMES0103" = "KB5065432"
+          "VMES0104" = "KB5065962"
+        }
+        foreach ($key in $hotfixMap.Keys) {
+          $kb = $hotfixMap[$key]
+          Add-BooleanCheck $key ($hotfixes -contains $kb) `
+            ("Installierte Hotfixes=" + ($hotfixes -join ",")) `
+            $kb `
+            "Direkt/Get-HotFix"
+        }
+
+        $expectedEdgeVersion = [string](Get-Param "expected_edge_version" "")
+        $edgeVersions = @($edgePrograms | ForEach-Object { [string]$_.Version })
+        if ($expectedEdgeVersion) {
+          Add-BooleanCheck "VMES0105" `
+            ($edgeVersions -contains $expectedEdgeVersion) `
+            ("Edge-Versionen=" + ($edgeVersions -join ",")) `
+            $expectedEdgeVersion `
+            "Direkt/Uninstall-Registry"
+        } else {
+          Add-NotTestable "VMES0105" `
+            ("Edge-Versionen=" + ($edgeVersions -join ",")) `
+            "Vorgegebene Edge-Version" `
+            "Sollwert fehlt" `
+            "expected_edge_version ist leer."
+        }
+
+        $policyDefinitions = "$env:SystemRoot\PolicyDefinitions"
+        $policyDefinitionCount = 0
+        if (Test-Path $policyDefinitions) {
+          try {
+            $policyDefinitionCount = @(
+              Get-ChildItem $policyDefinitions -Filter "*.admx" -File
+            ).Count
+          } catch {}
+        }
+        Add-BooleanCheck "VMES0106" `
+          ((Test-Path $policyDefinitions) -and $policyDefinitionCount -gt 0) `
+          ("Pfad=" + $policyDefinitions +
+           "; ADMX-Dateien=" + $policyDefinitionCount) `
+          "C:\Windows\PolicyDefinitions vorhanden und befuellt" `
+          "Direkt/Dateisystem"
+
+        Add-BooleanCheck "VMES0107" $firewallOk `
+          (@($firewallProfiles | ForEach-Object {
+            $_.Name + "=" + $_.Enabled
+          }) -join ",") `
+          "Firewall nach Security Controller aktiv" `
+          "Direkt/Get-NetFirewallProfile"
+
+        $securityUser = [string](Get-Param "expected_security_controller_user" "")
+        $securityUserProfile = $null
+        if ($securityUser) {
+          try {
+            $account = New-Object System.Security.Principal.NTAccount($securityUser)
+            $sid = $account.Translate(
+              [System.Security.Principal.SecurityIdentifier]
+            ).Value
+            $securityUserProfile = Get-CimInstance Win32_UserProfile |
+              Where-Object { $_.SID -eq $sid } |
+              Select-Object -First 1
+          } catch {}
+        }
+        Add-IndirectCheck "VMES0108" `
+          ($securityUserProfile -and $firewallOk) `
+          ("Benutzerprofil=" + [string]$securityUserProfile.LocalPath +
+           "; Firewall_OK=" + $firewallOk) `
+          ("Security Controller fuer " + $securityUser + " ausgefuehrt") `
+          "Indirekt/Benutzerprofil und Firewallstatus" `
+          "Ein vorhandenes Profil und der Firewall-Endzustand beweisen den konkreten GUI-Aufruf nicht."
+
+        Add-NotTestable "VMES0109" "" `
+          "Masterlistenzeile besitzt keine Beschreibung" `
+          "Keine pruefbare Vorgabe" `
+          "Die Ansible-ID ist vorhanden, aber Beschreibung und Sollzustand sind leer."
+
+        function Test-HostsDates {
+          param([string]$MinDateText)
+          if (-not $hostsDate -or -not $lmhostsDate -or -not $MinDateText) {
+            return $false
+          }
+          try {
+            $minDate = [datetime]$MinDateText
+            return (
+              [datetime]$hostsDate -ge $minDate -and
+              [datetime]$lmhostsDate -ge $minDate
+            )
+          } catch {
+            return $false
+          }
+        }
+
+        $minHostsDate110 = [string](Get-Param "expected_hosts_lmhosts_min_date_110" "")
+        Add-BooleanCheck "VMES0110" `
+          (Test-HostsDates $minHostsDate110) `
+          ("HOSTS=" + [string]$hostsDate +
+           "; LMHOSTS=" + [string]$lmhostsDate) `
+          ("Beide Dateien mindestens vom " + $minHostsDate110) `
+          "Direkt/Dateizeitstempel"
+
+        $expectedGateway = [string](Get-Param "expected_terminalbus_gateway" "")
+        $actualGateways = @($terminalConfigs | ForEach-Object {
+          $_.IPv4DefaultGateway.NextHop
+        })
+        if ($expectedGateway) {
+          Add-BooleanCheck "VMES0111" `
+            ($actualGateways -contains $expectedGateway) `
+            ("Gateways=" + ($actualGateways -join ",")) `
+            $expectedGateway `
+            "Direkt/Get-NetIPConfiguration"
+        } else {
+          Add-NotTestable "VMES0111" `
+            ("Gateways=" + ($actualGateways -join ",")) `
+            "Terminalbus-Gateway laut Projekt" `
+            "Sollwert fehlt" `
+            "vm_es_expected_terminalbus_gateway ist nicht gesetzt."
+        }
+
+        if (-not $windowsUpdateSearch.performed) {
+          Add-NotTestable "VMES0112" $windowsUpdateSearch `
+            "Keine neueren Windows-Updates verfuegbar" `
+            "Windows Update Agent" `
+            "perform_windows_update_search ist false."
+        } elseif (-not $windowsUpdateSearch.success) {
+          Add-Check "VMES0112" "Nicht_Pruefbar" $windowsUpdateSearch `
+            "Keine neueren Windows-Updates verfuegbar" `
+            "Windows Update Agent" `
+            "Die Updatesuche ist fehlgeschlagen."
+        } else {
+          Add-BooleanCheck "VMES0112" `
+            ([int]$windowsUpdateSearch.missing_count -eq 0) `
+            $windowsUpdateSearch `
+            "Keine fehlenden, sichtbaren Softwareupdates" `
+            "Direkt/Microsoft.Update.Session"
+        }
+
+        $minHostsDate113 = [string](Get-Param "expected_hosts_lmhosts_min_date_113" "")
+        Add-BooleanCheck "VMES0113" `
+          (Test-HostsDates $minHostsDate113) `
+          ("HOSTS=" + [string]$hostsDate +
+           "; LMHOSTS=" + [string]$lmhostsDate) `
+          ("Beide Dateien mindestens vom " + $minHostsDate113) `
+          "Direkt/Dateizeitstempel"
+
+        Add-NotTestable "VMES0114" "" `
+          "Masterlistenzeile besitzt keine Beschreibung" `
+          "Keine pruefbare Vorgabe" `
+          "Die Ansible-ID ist vorhanden, aber Beschreibung und Sollzustand sind leer."
+
+        Add-NotTestable "VMES0115" `
+          "Lokale VEEAM-Komponenten sind kein Nachweis eines Backups." `
+          "VEEAM Backup erstellt" `
+          "Externes VEEAM-System" `
+          "Der erfolgreiche Backup-Job muss auf dem VEEAM-Server geprueft werden."
+
+        Add-NotTestable "VMES0116" "" `
+          "Masterlistenzeile besitzt keine Beschreibung" `
+          "Keine pruefbare Vorgabe" `
+          "Die Ansible-ID ist vorhanden, aber Beschreibung und Sollzustand sind leer."
+
+        $toolsShare = $shares |
+          Where-Object {
+            $_.Name -ieq "Tools" -or
+            [string]$_.Path -ieq $toolsFolder
+          }
+        Add-BooleanCheck "VMES0117" (@($toolsShare).Count -eq 0) `
+          ("Tools-Freigaben=" +
+           (@($toolsShare | ForEach-Object {
+             $_.Name + "=" + $_.Path
+           }) -join ",")) `
+          "Freigabe Tools entfernt; Ordner darf lokal bestehen bleiben" `
+          "Direkt/Get-SmbShare"
+
+        Add-NotTestable "VMES0118" "" `
+          "Masterlistenzeile besitzt keine Beschreibung" `
+          "Keine pruefbare Vorgabe" `
+          "Die Ansible-ID ist vorhanden, aber Beschreibung und Sollzustand sind leer."
+
+        Add-NotTestable "VMES0119" `
+          ("VM ist fuer diese Online-Pruefung erreichbar; letzter Systemstart=" + $lastBoot) `
+          "VM heruntergefahren" `
+          "Zeitlich nachgelagerter Schritt" `
+          "Eine heruntergefahrene VM kann nicht gleichzeitig per WinRM geprueft werden."
+
+        $winscpVersions = @($winscpPrograms | ForEach-Object { [string]$_.Version })
+        Add-BooleanCheck "VMES0120" `
+          (@($winscpVersions | Where-Object {
+            $_ -eq "6.3.4" -or (Test-VersionAtLeast $_ "6.3.4")
+          }).Count -gt 0) `
+          ("WinSCP-Versionen=" + ($winscpVersions -join ",")) `
+          "WinSCP mindestens Version 6.3.4" `
+          "Direkt/Uninstall-Registry"
+
+        $simaticLogonPath = [string](Get-Param "simatic_logon_registry_path" "")
+        $simaticLogonName = [string](Get-Param "simatic_logon_auto_logoff_value_name" "")
+        if ($simaticLogonPath -and $simaticLogonName) {
+          $simaticLogonActual = Get-RegistryValueSafe `
+            $simaticLogonPath $simaticLogonName
+          $simaticLogonExpected = Get-Param `
+            "simatic_logon_auto_logoff_expected_value" 0
+          Add-BooleanCheck "VMES0121" `
+            ([string]$simaticLogonActual -eq [string]$simaticLogonExpected) `
+            $simaticLogonActual $simaticLogonExpected `
+            "Direkt/Registry"
+        } else {
+          $simaticLogonPrograms = @(Find-Programs "(?i)SIMATIC Logon")
+          Add-NotTestable "VMES0121" `
+            (Programs-ToText $simaticLogonPrograms) `
+            "SIMATIC Logon: automatisches Abmelden deaktiviert" `
+            "Herstellerspezifische Konfiguration" `
+            "Die optionalen SIMATIC-Logon-Registryvariablen sind nicht gesetzt."
+        }
+
+        foreach ($entry in $catalog) {
+          $key = [string]$entry.key
+          if (-not $addedChecks.ContainsKey($key)) {
+            Add-NotTestable $key "" ([string]$entry.description) `
+              "Keine implementierte technische Pruefmethode" `
+              "Die ID ist im Katalog enthalten, besitzt aber noch keine spezifische Prueflogik."
+          }
+        }
+
+        $result = [ordered]@{
+          scan_timestamp = $null
+          target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+          ip = $targetIp
+          ansible_reachable = $true
+          computername = $env:COMPUTERNAME
+          station_type = [string]$env:VALIDATION_STATION_TYPE
+          masterlist_sheet = $masterSheet
+          masterlist_profile = $masterProfile
+          os_caption = [string]$os.Caption
+          os_version = [string]$os.Version
+          os_build = [string]$os.BuildNumber
+          domain = [string]$cs.Domain
+          part_of_domain = [bool]$cs.PartOfDomain
+          virtualization = $virtualizationText
+          checks = @($checks | Sort-Object masterlist_row)
+          check_count = @($checks).Count
+          error = $null
+        }
+
+        $json = $result | ConvertTo-Json -Depth 12 -Compress
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+        "VMES_RESULT_B64=" + [System.Convert]::ToBase64String($bytes)
+      args:
+        no_profile: true
+      environment:
+        VALIDATION_CATALOG_PATH: >-
+          {{ validation_remote_dir }}\validation_catalog.json
+        VALIDATION_PARAMETERS_PATH: >-
+          {{ validation_remote_dir }}\validation_parameters.json
+        VALIDATION_STATION_TYPE: "{{ validation_station_type }}"
+        VALIDATION_MASTERLIST_SHEET: "{{ validation_masterlist_sheet }}"
+        VALIDATION_MASTERLIST_PROFILE: "{{ validation_masterlist_profile }}"
+      register: vm_es_validation_raw
+      when:
+        - validation_nmap_reachable | default(false) | bool
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: Kodiertes VM-ES-Pruefergebnis aus PowerShell-Ausgabe extrahieren
+      ansible.builtin.set_fact:
+        vm_es_result_b64: >-
+          {{
+            (
+              vm_es_validation_raw.stdout
+              | default('')
+              | regex_findall('VMES_RESULT_B64=([A-Za-z0-9+/=]+)')
+              | first
+            )
+            | default('')
+          }}
+      when:
+        - vm_es_validation_raw is defined
+        - vm_es_validation_raw.stdout is defined
+
+    - name: VM-ES-Pruefergebnis als Host-Fact speichern
+      ansible.builtin.set_fact:
+        vm_es_validation_info: >-
+          {{ vm_es_result_b64 | b64decode | from_json }}
+      when:
+        - vm_es_result_b64 is defined
+        - vm_es_result_b64 | length > 0
+
+    - name: Diagnose ausgeben, wenn kein Pruefergebnis extrahiert werden konnte
+      ansible.builtin.debug:
+        msg:
+          - "IP: {{ inventory_hostname }}"
+          - "Nmap erreichbar: {{ validation_nmap_reachable | default(false) }}"
+          - "WinRM-Ping: {{ win_ping_result.ping | default('nicht erreichbar') if win_ping_result is defined else 'nicht ausgefuehrt' }}"
+          - "PowerShell RC: {{ vm_es_validation_raw.rc | default('nicht ausgefuehrt') if vm_es_validation_raw is defined else 'nicht ausgefuehrt' }}"
+          - "PowerShell stderr: {{ vm_es_validation_raw.stderr | default('') if vm_es_validation_raw is defined else '' }}"
+      when: vm_es_validation_info is not defined
+
+    - name: Temporaeres VM-ES-Pruefverzeichnis entfernen
+      ansible.windows.win_file:
+        path: "{{ validation_remote_dir }}"
+        state: absent
+      when:
+        - validation_nmap_reachable | default(false) | bool
+        - win_ping_result is defined
+        - win_ping_result.ping | default('') == 'pong'
+      failed_when: false
+      ignore_unreachable: true
+
+
+- name: "VM-ES-Pruefprotokolle auf dem Ansible-Controller erzeugen"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    station_type: "VM_ES"
+    station_group: "vm_es_validation_targets"
+    masterlist_sheet: "VM ES"
+    masterlist_profile: "{{ vm_es_masterlist_profile | default('ALL') }}"
+    report_prefix: "{{ vm_es_report_prefix | default('0010_vm_es_initial_installation') }}"
+    validation_catalog: >-
+      {{ hostvars['localhost'].vm_es_validation_catalog | default([]) }}
+    report_timestamp: >-
+      {{
+        hostvars['localhost'].report_timestamp
+        | default(lookup('pipe', 'date +%Y%m%d_%H%M%S'))
+      }}
+    report_timestamp_iso: >-
+      {{
+        hostvars['localhost'].report_timestamp_iso
+        | default(lookup('pipe', 'date -Iseconds'))
+      }}
+    report_json_path: >-
+      {{ result_dir }}/{{ report_prefix }}_{{ report_timestamp }}.json
+    report_csv_path: >-
+      {{ result_dir }}/{{ report_prefix }}_{{ report_timestamp }}.csv
+    report_latest_json_path: >-
+      {{ result_dir }}/{{ report_prefix }}_latest.json
+    report_latest_csv_path: >-
+      {{ result_dir }}/{{ report_prefix }}_latest.csv
+
+  tasks:
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: JSON-Protokoll mit allen VM-ES-Ansible-IDs erzeugen
+      ansible.builtin.copy:
+        dest: "{{ report_json_path }}"
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups[station_group] | default([]) %}
+          {% if hostvars[h].vm_es_validation_info is defined %}
+          {{
+            (
+              hostvars[h].vm_es_validation_info
+              | combine({
+                  'scan_timestamp': report_timestamp_iso,
+                  'discovery_group': hostvars[h].validation_discovery_group | default('vm_es'),
+                  'discovery_file': hostvars[h].validation_discovery_file | default(''),
+                  'discovery_generated_at': hostvars[h].validation_discovery_generated_at | default(''),
+                  'nmap_reachable': hostvars[h].validation_nmap_reachable | default(false) | bool,
+                  'nmap_winrm_port': hostvars[h].validation_nmap_winrm_port | default(''),
+                  'nmap_winrm_scheme': hostvars[h].validation_nmap_winrm_scheme | default(''),
+                  'nmap_open_ports': hostvars[h].validation_nmap_open_ports | default('')
+                })
+            ) | to_nice_json
+          }}
+          {% else %}
+          {
+            "scan_timestamp": {{ report_timestamp_iso | to_json }},
+            "target_timestamp": null,
+            "ip": {{ h | to_json }},
+            "discovery_group": {{ hostvars[h].validation_discovery_group | default('vm_es') | to_json }},
+            "discovery_file": {{ hostvars[h].validation_discovery_file | default('') | to_json }},
+            "discovery_generated_at": {{ hostvars[h].validation_discovery_generated_at | default('') | to_json }},
+            "nmap_reachable": {{ hostvars[h].validation_nmap_reachable | default(false) | bool | to_json }},
+            "nmap_winrm_port": {{ hostvars[h].validation_nmap_winrm_port | default('') | to_json }},
+            "nmap_winrm_scheme": {{ hostvars[h].validation_nmap_winrm_scheme | default('') | to_json }},
+            "nmap_open_ports": {{ hostvars[h].validation_nmap_open_ports | default('') | to_json }},
+            "ansible_reachable": false,
+            "computername": {{ hostvars[h].validation_discovery_computername | default('') | to_json }},
+            "station_type": {{ station_type | to_json }},
+            "masterlist_sheet": {{ masterlist_sheet | to_json }},
+            "masterlist_profile": {{ masterlist_profile | to_json }},
+            "os_caption": "",
+            "os_version": "",
+            "os_build": "",
+            "domain": "",
+            "part_of_domain": false,
+            "virtualization": "",
+            "checks": [
+            {% for c in validation_catalog %}
+              {
+                "masterlist_sheet": {{ masterlist_sheet | to_json }},
+                "masterlist_profile": {{ masterlist_profile | to_json }},
+                "masterlist_row": {{ c.row }},
+                "master_value": {{ ('ALL' if masterlist_profile == 'ALL' else c.master_values.get(masterlist_profile, '')) | to_json }},
+                "ansible_id": {{ c.ansible_id | to_json }},
+                "schritt": {{ c.title | to_json }},
+                "master_beschreibung": {{ c.description | to_json }},
+                "status": "Nicht_Pruefbar",
+                "istwert": "",
+                "sollwert": "Nmap erkennt einen offenen WinRM-Port und der Zielrechner ist per WinRM erreichbar",
+                "pruefmethode": "Nmap + WinRM",
+                "hinweis": {{
+                  (
+                    'Nmap hat keinen offenen WinRM-Port 5985/5986 erkannt.'
+                    if not (hostvars[h].validation_nmap_reachable | default(false) | bool)
+                    else 'Nmap hat einen WinRM-Port erkannt, aber WinRM war nicht erreichbar, der Zugriff wurde verweigert oder das PowerShell-Ergebnis konnte nicht ausgewertet werden.'
+                  ) | to_json
+                }}
+              }{% if not loop.last %},{% endif %}
+            {% endfor %}
+            ],
+            "check_count": {{ validation_catalog | length }},
+            "error": {{
+              (
+                'Nmap hat keinen offenen WinRM-Port 5985/5986 erkannt.'
+                if not (hostvars[h].validation_nmap_reachable | default(false) | bool)
+                else 'Nmap hat einen WinRM-Port erkannt, aber WinRM war nicht erreichbar, der Zugriff wurde verweigert oder das PowerShell-Ergebnis konnte nicht ausgewertet werden.'
+              ) | to_json
+            }}
+          }
+          {% endif %}
+          {% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+
+    - name: CSV-Protokoll zeilenweise nach VMES-Ansible-ID erzeugen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import json
+        from pathlib import Path
+
+        json_path = Path({{ report_json_path | to_json }})
+        csv_path = Path({{ report_csv_path | to_json }})
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        fieldnames = [
+            "Pruefzeit",
+            "Zielzeit",
+            "IP",
+            "Discovery_Gruppe",
+            "Discovery_Datei",
+            "Discovery_Zeit",
+            "Nmap_WinRM_erreichbar",
+            "Nmap_WinRM_Port",
+            "Nmap_WinRM_Schema",
+            "Nmap_offene_WinRM_Ports",
+            "Ansible_erreichbar",
+            "Computername",
+            "Stationstyp",
+            "Betriebssystem",
+            "OS_Version",
+            "OS_Build",
+            "Domaene",
+            "Domaenenmitglied",
+            "Virtualisierung",
+            "Masterliste_Blatt",
+            "Masterliste_Profil",
+            "Masterliste_Zeile",
+            "Masterwert",
+            "Ansible_ID",
+            "Schritt",
+            "Master_Beschreibung",
+            "Status",
+            "Istwert",
+            "Sollwert",
+            "Pruefmethode",
+            "Hinweis",
+        ]
+
+        rows = []
+        for host in data:
+            for check in host.get("checks") or []:
+                rows.append({
+                    "Pruefzeit": host.get("scan_timestamp", ""),
+                    "Zielzeit": host.get("target_timestamp", ""),
+                    "IP": host.get("ip", ""),
+                    "Discovery_Gruppe": host.get("discovery_group", ""),
+                    "Discovery_Datei": host.get("discovery_file", ""),
+                    "Discovery_Zeit": host.get("discovery_generated_at", ""),
+                    "Nmap_WinRM_erreichbar": host.get("nmap_reachable", False),
+                    "Nmap_WinRM_Port": host.get("nmap_winrm_port", ""),
+                    "Nmap_WinRM_Schema": host.get("nmap_winrm_scheme", ""),
+                    "Nmap_offene_WinRM_Ports": host.get("nmap_open_ports", ""),
+                    "Ansible_erreichbar": host.get("ansible_reachable", False),
+                    "Computername": host.get("computername", ""),
+                    "Stationstyp": host.get("station_type", ""),
+                    "Betriebssystem": host.get("os_caption", ""),
+                    "OS_Version": host.get("os_version", ""),
+                    "OS_Build": host.get("os_build", ""),
+                    "Domaene": host.get("domain", ""),
+                    "Domaenenmitglied": host.get("part_of_domain", False),
+                    "Virtualisierung": host.get("virtualization", ""),
+                    "Masterliste_Blatt": check.get(
+                        "masterlist_sheet", host.get("masterlist_sheet", "")
+                    ),
+                    "Masterliste_Profil": check.get(
+                        "masterlist_profile", host.get("masterlist_profile", "")
+                    ),
+                    "Masterliste_Zeile": check.get("masterlist_row", ""),
+                    "Masterwert": check.get("master_value", ""),
+                    "Ansible_ID": check.get("ansible_id", ""),
+                    "Schritt": check.get("schritt", ""),
+                    "Master_Beschreibung": check.get("master_beschreibung", ""),
+                    "Status": check.get("status", ""),
+                    "Istwert": check.get("istwert", ""),
+                    "Sollwert": check.get("sollwert", ""),
+                    "Pruefmethode": check.get("pruefmethode", ""),
+                    "Hinweis": check.get("hinweis", ""),
+                })
+
+        def row_number(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        rows.sort(key=lambda row: (str(row["IP"]), row_number(row["Masterliste_Zeile"])))
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=fieldnames,
+                delimiter=";",
+                quoting=csv.QUOTE_MINIMAL,
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        summary = {}
+        for row in rows:
+            status = row.get("Status", "")
+            summary[status] = summary.get(status, 0) + 1
+
+        print(json.dumps({
+            "csv": str(csv_path),
+            "rows": len(rows),
+            "hosts": len(data),
+            "status": summary,
+        }, ensure_ascii=False))
+        PY
+      args:
+        executable: /bin/bash
+      register: csv_result
+      changed_when: false
+
+    - name: Aktuelle JSON-Datei als latest bereitstellen
+      ansible.builtin.copy:
+        src: "{{ report_json_path }}"
+        dest: "{{ report_latest_json_path }}"
+        remote_src: true
+        mode: "0644"
+
+    - name: Aktuelle CSV-Datei als latest bereitstellen
+      ansible.builtin.copy:
+        src: "{{ report_csv_path }}"
+        dest: "{{ report_latest_csv_path }}"
+        remote_src: true
+        mode: "0644"
+
+    - name: VM-ES-Report-Pfade und Statusuebersicht anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Discovery-Gruppe: groups.vm_es"
+          - "Masterlistenblatt: {{ masterlist_sheet }}"
+          - "Masterlistenprofil: {{ masterlist_profile }}"
+          - "Anzahl Ansible-IDs je VM: {{ validation_catalog | length }}"
+          - "JSON: {{ report_json_path }}"
+          - "CSV:  {{ report_csv_path }}"
+          - "Latest JSON: {{ report_latest_json_path }}"
+          - "Latest CSV:  {{ report_latest_csv_path }}"
+          - "Zusammenfassung: {{ csv_result.stdout }}"
