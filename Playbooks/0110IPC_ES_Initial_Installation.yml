@@ -28,107 +28,100 @@
           Benoetigt werden mindestens target_network, nmap_binary, win_user,
           win_password, winrm_transport, result_dir und pcs7_setup_log_path.
 
-    - name: Explizit angegebene Zielhosts normalisieren
-      ansible.builtin.set_fact:
-        validation_explicit_hosts: >-
-          {{
-            (
-              validation_target_hosts.split(',')
-              if (
-                validation_target_hosts is defined
-                and validation_target_hosts is string
-              )
-              else validation_target_hosts
-              if validation_target_hosts is defined
-              else [validation_target_host]
-              if (
-                validation_target_host is defined
-                and (validation_target_host | string | trim | length) > 0
-              )
-              else []
-            )
-            | map('string')
-            | map('trim')
-            | reject('equalto', '')
-            | unique
-            | list
-          }}
-
-    - name: Zielnetz mit Nmap nach erreichbaren WinRM-Systemen durchsuchen
-      ansible.builtin.command:
-        argv:
-          - "{{ nmap_binary }}"
-          - "-n"
-          - "-Pn"
-          - "-p"
-          - "{{ winrm_port | default(5985) | string }}"
-          - "--open"
-          - "-oG"
-          - "-"
-          - "{{ target_network }}"
-      register: validation_nmap_scan
+    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
+      ansible.builtin.command: "{{ nmap_binary }} --version"
+      register: validation_nmap_check
       changed_when: false
-      when: validation_explicit_hosts | length == 0
+      failed_when: false
 
-    - name: Zielhosts aus expliziter Liste oder Nmap-Ergebnis bestimmen
+    - name: Abbrechen, wenn nmap fehlt
+      ansible.builtin.fail:
+        msg: >-
+          nmap ist auf dem Ansible-Controller nicht installiert.
+          Installation zum Beispiel mit: sudo apt install nmap
+      when: validation_nmap_check.rc != 0
+
+    - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        awk '
+          /Ports:/ {
+            host=$2
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
+
+            if (has_https) {
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
+            } else if (has_http) {
+              print host ";5985;http;5985"
+            }
+          }
+        '
+      args:
+        executable: /bin/bash
+      register: validation_scan_result
+      changed_when: false
+
+    - name: Gefundene IP-Adressen und WinRM-Infos speichern
       ansible.builtin.set_fact:
-        validation_target_hosts_resolved: >-
+        validation_discovered_winrm_hosts: >-
           {{
-            (
-              validation_explicit_hosts
-              if (validation_explicit_hosts | length > 0)
-              else (
-                validation_nmap_scan.stdout
-                | default('')
-                | regex_findall('(?m)^Host:\\s+([^\\s]+)')
-              )
-            )
-            | map('string')
-            | map('trim')
-            | reject('equalto', '')
+            validation_scan_result.stdout_lines
+            | default([])
+            | unique
+            | list
+          }}
+        validation_discovered_ips: >-
+          {{
+            validation_scan_result.stdout_lines
+            | default([])
+            | map('regex_replace', ';.*$', '')
             | unique
             | list
           }}
 
-    - name: Sicherstellen, dass mindestens ein Zielhost gefunden wurde
-      ansible.builtin.assert:
-        that:
-          - validation_target_hosts_resolved | length > 0
-        fail_msg: >-
-          Es wurde kein IPC-ES-Zielhost gefunden.
+    - name: Gefundene WinRM-Teilnehmer anzeigen
+      ansible.builtin.debug:
+        var: validation_discovered_winrm_hosts
 
-          Es kann entweder validation_target_hosts als Liste,
-          validation_target_host als einzelner Host oder ein erreichbares
-          System mit offenem WinRM-Port im target_network angegeben werden.
+    - name: Gefundene IP-Adressen anzeigen
+      ansible.builtin.debug:
+        var: validation_discovered_ips
 
-          Zielnetz: {{ target_network }}
-          WinRM-Port: {{ winrm_port | default(5985) }}
+    - name: Hinweis ausgeben, wenn keine WinRM-Teilnehmer gefunden wurden
+      ansible.builtin.debug:
+        msg: >-
+          Es wurden keine Hosts mit offenem WinRM-Port 5985 oder 5986
+          im Zielnetz {{ target_network }} gefunden.
+          Der Report enthaelt dann keine Zielsysteme.
+          Pruefe target_network, Firewall und WinRM.
+      when: validation_discovered_winrm_hosts | length == 0
 
-    - name: Zielhosts temporaer in das Inventory aufnehmen
+    - name: Gefundene Hosts temporaer in das Inventory aufnehmen
       ansible.builtin.add_host:
-        name: "{{ item }}"
-        groups:
-          - ipc_es_validation_targets
-        ansible_host: "{{ item }}"
+        name: "{{ item.split(';')[0] }}"
+        groups: ipc_es_validation_targets
+        ansible_host: "{{ item.split(';')[0] }}"
         ansible_connection: winrm
         ansible_user: "{{ win_user }}"
         ansible_password: "{{ win_password }}"
-        ansible_port: "{{ winrm_port | default(5985) }}"
+        ansible_port: "{{ item.split(';')[1] | int }}"
+        ansible_winrm_scheme: "{{ item.split(';')[2] }}"
         ansible_winrm_transport: "{{ winrm_transport }}"
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_operation_timeout_sec: 60
         ansible_winrm_read_timeout_sec: 90
-      loop: "{{ validation_target_hosts_resolved }}"
+        discovered_winrm_open_ports: "{{ item.split(';')[3] }}"
+      loop: "{{ validation_discovered_winrm_hosts }}"
       loop_control:
-        label: "{{ item }}"
+        label: "{{ item.split(';')[0] }}"
       no_log: true
 
-    - name: Dynamische Zielgruppe anzeigen
+    - name: Dynamische IPC-ES-Zielgruppe anzeigen
       ansible.builtin.debug:
-        msg:
-          gruppe: "ipc_es_validation_targets"
-          anzahl: "{{ groups['ipc_es_validation_targets'] | default([]) | length }}"
-          hosts: "{{ groups['ipc_es_validation_targets'] | default([]) }}"
+        msg: "{{ groups['ipc_es_validation_targets'] | default([]) }}"
 
 - name: "0110 IPC ES Validation auf Windows-Zielsystem"
   hosts: ipc_es_validation_targets
@@ -178,7 +171,7 @@
         validation_domain_info: {}
         validation_ou_info: {}
         validation_firewall_profiles: []
-        validation_winrm_ok: false
+       
 
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
@@ -186,23 +179,6 @@
       changed_when: false
       ignore_errors: true
       ignore_unreachable: true
-
-    - name: WinRM-Ergebnis normalisieren
-      ansible.builtin.set_fact:
-        validation_winrm_ok: >-
-          {{
-            (validation_win_ping.ping | default('')) == 'pong'
-            and not (
-              validation_win_ping.unreachable
-              | default(false)
-              | bool
-            )
-            and not (
-              validation_win_ping.failed
-              | default(false)
-              | bool
-            )
-          }}
 
     - name: WinRM-Fehler als Ergebnis festhalten
       ansible.builtin.set_fact:
@@ -232,7 +208,7 @@
               }
             ]
           }}
-      when: not (validation_winrm_ok | bool)
+      when: validation_win_ping.ping | default('') != 'pong'
 
     - block:
         - name: Computername lesen
@@ -840,7 +816,7 @@
               } ] }}"
           when: expected_computer_ou_regex | default('') | length > 0
 
-      when: validation_winrm_ok | bool
+      when: validation_win_ping.ping | default('') == 'pong'
 
 - name: "0110 IPC ES Validation Report"
   hosts: localhost
