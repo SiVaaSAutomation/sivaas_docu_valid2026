@@ -120,18 +120,18 @@
 
     - name: Betriebssystem, Siemens-Produkte und relevante Dienste auslesen
       ansible.windows.win_shell: |
-        $ErrorActionPreference = "SilentlyContinue"
-        $ProgressPreference = "SilentlyContinue"
+        $ErrorActionPreference = 'SilentlyContinue'
+        $ProgressPreference = 'SilentlyContinue'
 
         $cs = Get-CimInstance Win32_ComputerSystem
         $os = Get-CimInstance Win32_OperatingSystem
 
         $registryRoots = @(
-          "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-          "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+          'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
         )
 
-        $roleProductPattern = "(?i)(Siemens|SIMATIC|PCS\s*7|PCS7|WinCC|STEP\s*7|SIMATIC\s+Manager|Engineering\s+System|OS\s*Server|OS\s*Client|CFC|SFC|SQL\s+Server)"
+        $roleProductPattern = '(?i)(Siemens|SIMATIC|PCS\s*7|PCS7|WinCC|STEP\s*7|SIMATIC\s+Manager|Engineering\s+System|OS\s*Server|OS\s*Client|CFC|SFC|SQL\s+Server)'
         $products = @()
         foreach ($root in $registryRoots) {
           $products += @(Get-ItemProperty $root -ErrorAction SilentlyContinue |
