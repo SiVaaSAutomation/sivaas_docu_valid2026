@@ -1,0 +1,873 @@
+---
+# Erkennt alle per WinRM erreichbaren virtuellen Windows-Teilnehmer im Zielnetz,
+# liest technische Rollenmerkmale aus und ordnet sie den Gruppen
+#   vm_es, vm_os_server oder vm_os_client
+
+
+# Die dynamischen Ansible-Gruppen gelten nur innerhalb dieses Laufs. Fuer die
+# nachfolgenden Semaphore-Templates wird deshalb dauerhaft geschrieben:
+#   {{ result_dir }}/vm_discovery_groups_latest.json
+#
+# Vorgesehene Zuordnung der Folge-Playbooks:
+#   vm_es        -> 0010
+#   vm_os_server -> 0020
+#   vm_os_client -> 0030
+#
+# Erforderliche Semaphore-Variablen:
+#   target_network, nmap_binary, win_user, win_password,
+#   winrm_transport, result_dir
+- name: VM-Teilnehmer mit nmap erkennen und temporaer aufnehmen
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    discovery_group: "vm_discovery_candidates"
+
+  tasks:
+    - name: Zeitstempel fuer Discovery setzen
+      ansible.builtin.set_fact:
+        discovery_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        discovery_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+    - name: Benoetigte Semaphore-Variablen pruefen
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - nmap_binary is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - nmap_binary | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Erforderlich sind target_network, nmap_binary, win_user,
+          win_password, winrm_transport und result_dir.
+
+    - name: nmap auf dem Ansible-Controller pruefen
+      ansible.builtin.command: "{{ nmap_binary }} --version"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap nicht ausfuehrbar ist
+      ansible.builtin.fail:
+        msg: "nmap ist unter {{ nmap_binary }} nicht ausfuehrbar."
+      when: nmap_check.rc != 0
+
+    - name: Zielnetz nach offenen WinRM-Ports scannen
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        awk '
+          /Ports:/ {
+            host=$2
+            has_http = ($0 ~ /5985\/open\/tcp/)
+            has_https = ($0 ~ /5986\/open\/tcp/)
+
+            if (has_https) {
+              ports = has_http ? "5985,5986" : "5986"
+              print host ";5986;https;" ports
+            } else if (has_http) {
+              print host ";5985;http;5985"
+            }
+          }
+        '
+      args:
+        executable: /bin/bash
+      register: discovery_scan
+      changed_when: false
+
+    - name: Gefundene WinRM-Teilnehmer speichern
+      ansible.builtin.set_fact:
+        discovered_winrm_hosts: >-
+          {{ discovery_scan.stdout_lines | default([]) | unique | list }}
+
+    - name: Discovery-Ergebnis anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Zielnetz: {{ target_network }}"
+          - "Gefundene WinRM-Teilnehmer: {{ discovered_winrm_hosts | length }}"
+          - >-
+            Teilnehmer: {{ discovered_winrm_hosts
+              | map('regex_replace', ';.*$', '') | list }}
+
+    - name: Gefundene Windows-Teilnehmer temporaer aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ item.split(';')[0] }}"
+        groups: "{{ discovery_group }}"
+        ansible_host: "{{ item.split(';')[0] }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ item.split(';')[1] | int }}"
+        ansible_winrm_scheme: "{{ item.split(';')[2] }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: >-
+          {{ winrm_operation_timeout_sec | default(60) }}
+        ansible_winrm_read_timeout_sec: >-
+          {{ winrm_read_timeout_sec | default(180) }}
+        discovery_open_ports: "{{ item.split(';')[3] }}"
+      loop: "{{ discovered_winrm_hosts }}"
+      no_log: true
+
+
+- name: Rollenmerkmale der gefundenen virtuellen Maschinen auslesen
+  hosts: vm_discovery_candidates
+  gather_facts: false
+  ignore_unreachable: true
+
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: discovery_ping
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: VM-, Betriebssystem- und PCS-7-Merkmale auslesen
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+        $ProgressPreference = 'SilentlyContinue'
+
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+        $bios = Get-CimInstance Win32_BIOS
+
+        $registryRoots = @(
+          'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        )
+
+        $roleProductPattern = '(?i)(Siemens|SIMATIC|PCS\s*7|PCS7|WinCC|STEP\s*7|SIMATIC\s+Manager|Engineering\s+System|OS\s*Server|OS\s*Client|CFC|SFC|SQL\s+Server)'
+        $products = @()
+        foreach ($root in $registryRoots) {
+          $products += @(Get-ItemProperty $root -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.DisplayName -and ([string]$_.DisplayName -match $roleProductPattern)
+            } |
+            ForEach-Object {
+              [ordered]@{
+                name = [string]$_.DisplayName
+                version = [string]$_.DisplayVersion
+                publisher = [string]$_.Publisher
+              }
+            })
+        }
+        $products = @($products | Sort-Object name, version -Unique)
+
+        $servicePattern = '(?i)(Siemens|SIMATIC|WinCC|S7|PCS7|SQL|CFC|SFC)'
+        $services = @(Get-CimInstance Win32_Service |
+          Where-Object {
+            ([string]$_.Name -match $servicePattern) -or
+            ([string]$_.DisplayName -match $servicePattern)
+          } |
+          ForEach-Object {
+            [ordered]@{
+              name = [string]$_.Name
+              display_name = [string]$_.DisplayName
+              state = [string]$_.State
+              start_mode = [string]$_.StartMode
+            }
+          } |
+          Sort-Object name -Unique)
+
+        $virtualizationText = @(
+          [string]$cs.Manufacturer,
+          [string]$cs.Model,
+          [string]$bios.Manufacturer,
+          [string]$bios.SMBIOSBIOSVersion,
+          [string]$bios.SerialNumber
+        ) -join ' | '
+
+        $virtualizationPattern = [string]$env:ANSIBLE_VM_PATTERN
+        $isVirtualMachine = $false
+        if ($virtualizationPattern) {
+          $isVirtualMachine = $virtualizationText -match $virtualizationPattern
+        }
+
+        $platform = ''
+        switch -Regex ($virtualizationText) {
+          '(?i)VMware'                    { $platform = 'VMware'; break }
+          '(?i)VirtualBox|Oracle VM'      { $platform = 'VirtualBox'; break }
+          '(?i)Microsoft.*Virtual Machine|Hyper-V' { $platform = 'Hyper-V'; break }
+          '(?i)KVM|QEMU|Red Hat'          { $platform = 'KVM/QEMU'; break }
+          '(?i)Nutanix|AHV'               { $platform = 'Nutanix AHV'; break }
+          '(?i)Xen|HVM domU'              { $platform = 'Xen'; break }
+          '(?i)Amazon EC2'                { $platform = 'Amazon EC2'; break }
+          '(?i)Google Compute Engine'     { $platform = 'Google Compute Engine'; break }
+          '(?i)OpenStack'                 { $platform = 'OpenStack'; break }
+          '(?i)Parallels'                 { $platform = 'Parallels'; break }
+        }
+
+        $result = [ordered]@{
+          ip = [string]$env:ANSIBLE_DISCOVERY_IP
+          winrm_reachable = $true
+          computername = [string]$env:COMPUTERNAME
+          domain = [string]$cs.Domain
+          part_of_domain = [bool]$cs.PartOfDomain
+          manufacturer = [string]$cs.Manufacturer
+          model = [string]$cs.Model
+          bios_manufacturer = [string]$bios.Manufacturer
+          bios_version = [string]$bios.SMBIOSBIOSVersion
+          serial_number = [string]$bios.SerialNumber
+          is_virtual_machine = [bool]$isVirtualMachine
+          virtualization_platform = [string]$platform
+          virtualization_evidence = [string]$virtualizationText
+          os_caption = [string]$os.Caption
+          os_version = [string]$os.Version
+          os_build_number = [string]$os.BuildNumber
+          os_product_type = [int]$os.ProductType
+          installed_products = @($products)
+          relevant_services = @($services)
+          error = $null
+        }
+
+        $result | ConvertTo-Json -Depth 8 -Compress
+      args:
+        no_profile: true
+      environment:
+        ANSIBLE_DISCOVERY_IP: "{{ ansible_host | default(inventory_hostname) }}"
+        ANSIBLE_VM_PATTERN: >-
+          {{ vm_virtualization_regex
+             | default('(?i)(VMware|Virtual Machine|VirtualBox|Oracle VM|KVM|QEMU|Xen|HVM domU|Nutanix|AHV|Parallels|OpenStack|Amazon EC2|Google Compute Engine)') }}
+      register: discovery_raw
+      when:
+        - discovery_ping is defined
+        - not (discovery_ping.unreachable | default(false) | bool)
+        - not (discovery_ping.failed | default(false) | bool)
+        - discovery_ping.ping | default('') == 'pong'
+      changed_when: false
+      failed_when: false
+
+    - name: Ausgelesene VM-Rollenmerkmale als Host-Fact speichern
+      ansible.builtin.set_fact:
+        vm_discovery_info: "{{ discovery_raw.stdout | trim | from_json }}"
+      when:
+        - discovery_raw is defined
+        - discovery_raw.stdout is defined
+        - discovery_raw.stdout | trim | length > 0
+
+    - name: Nicht erreichbaren Teilnehmer als unklassifiziert vormerken
+      ansible.builtin.set_fact:
+        vm_discovery_info:
+          ip: "{{ ansible_host | default(inventory_hostname) }}"
+          winrm_reachable: false
+          computername: ""
+          domain: ""
+          part_of_domain: false
+          manufacturer: ""
+          model: ""
+          bios_manufacturer: ""
+          bios_version: ""
+          serial_number: ""
+          is_virtual_machine: false
+          virtualization_platform: ""
+          virtualization_evidence: ""
+          os_caption: ""
+          os_version: ""
+          os_build_number: ""
+          os_product_type: 0
+          installed_products: []
+          relevant_services: []
+          error: "WinRM nicht erreichbar oder Zugriff verweigert"
+      when: vm_discovery_info is not defined
+
+
+- name: VM-Rollen klassifizieren und dauerhaft protokollieren
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    discovery_group: "vm_discovery_candidates"
+    discovery_latest_file: >-
+      {{ vm_discovery_file
+         | default(result_dir ~ '/vm_discovery_groups_latest.json') }}
+    discovery_latest_inventory_file: >-
+      {{ vm_discovery_inventory_file
+         | default(result_dir ~ '/vm_discovery_inventory_latest.yml') }}
+
+    # Standard-Namensmuster. Sie koennen in Semaphore an die projektspezifischen
+    # VM-Namen angepasst werden.
+    es_name_regex: >-
+      {{ vm_es_name_regex
+         | default('(?i)^(VM[-_]?ES|ES[0-9]|ES[-_]|ENG|.*ENGINEER)') }}
+    os_server_name_regex: >-
+      {{ vm_os_server_name_regex
+         | default('(?i)^(VM[-_]?OSS|OSS|OS[-_]?S|.*OSSERVER|.*OS[-_]?SERVER)') }}
+    os_client_name_regex: >-
+      {{ vm_os_client_name_regex
+         | default('(?i)^(VM[-_]?OSC|OSC|OS[-_]?C|.*OSCLIENT|.*OS[-_]?CLIENT)') }}
+
+    es_product_regex: >-
+      {{ vm_es_product_regex
+         | default('(?i)(PCS\s*7.*Engineering|Engineering\s+System|STEP\s*7|SIMATIC\s+Manager|(^|[^A-Z])CFC([^A-Z]|$)|(^|[^A-Z])SFC([^A-Z]|$))') }}
+    os_server_product_regex: >-
+      {{ vm_os_server_product_regex
+         | default('(?i)(PCS\s*7.*OS\s*Server|WinCC.*Server|OS\s*Server)') }}
+    os_client_product_regex: >-
+      {{ vm_os_client_product_regex
+         | default('(?i)(PCS\s*7.*OS\s*Client|WinCC.*Client|OS\s*Client)') }}
+
+    es_service_regex: >-
+      {{ vm_es_service_regex
+         | default('(?i)(STEP|S7|CFC|SFC|Engineering)') }}
+    os_server_service_regex: >-
+      {{ vm_os_server_service_regex
+         | default('(?i)(CCEServer|CCArchive|WinCC.*Server|OS.*Server)') }}
+    os_client_service_regex: >-
+      {{ vm_os_client_service_regex
+         | default('(?i)(CCClient|WinCC.*Client|OS.*Client)') }}
+
+    classification_min_score: "{{ vm_classification_min_score | default(5) }}"
+    classification_min_margin: "{{ vm_classification_min_margin | default(2) }}"
+    role_overrides: "{{ vm_role_overrides | default({}) }}"
+
+  tasks:
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Rohdaten der VM-Discovery als JSON erzeugen
+      ansible.builtin.copy:
+        dest: >-
+          {{ result_dir }}/vm_discovery_raw_{{ hostvars['localhost'].discovery_timestamp }}.json
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups[discovery_group] | default([]) %}
+          {{
+            (hostvars[h].vm_discovery_info | default({
+              'ip': hostvars[h].ansible_host | default(h),
+              'winrm_reachable': false,
+              'computername': '',
+              'is_virtual_machine': false,
+              'installed_products': [],
+              'relevant_services': [],
+              'error': 'Keine Discovery-Daten vorhanden'
+            }))
+            | combine({
+              'winrm_port': hostvars[h].ansible_port | default(5985),
+              'winrm_scheme': hostvars[h].ansible_winrm_scheme | default('http'),
+              'winrm_open_ports': hostvars[h].discovery_open_ports | default('')
+            })
+            | to_nice_json
+          }}{% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+
+    - name: VMs klassifizieren sowie Latest-Datei, CSV und Inventory schreiben
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import json
+        import re
+        from pathlib import Path
+
+        result_dir = Path({{ result_dir | to_json }})
+        timestamp = {{ hostvars['localhost'].discovery_timestamp | to_json }}
+        timestamp_iso = {{ hostvars['localhost'].discovery_timestamp_iso | to_json }}
+        target_network = {{ target_network | to_json }}
+
+        raw_path = result_dir / f"vm_discovery_raw_{timestamp}.json"
+        detailed_path = result_dir / f"vm_discovery_classification_{timestamp}.json"
+        csv_path = result_dir / f"vm_discovery_classification_{timestamp}.csv"
+        latest_path = Path({{ discovery_latest_file | to_json }})
+        inventory_path = Path({{ discovery_latest_inventory_file | to_json }})
+
+        patterns = {
+            "es_name": re.compile({{ es_name_regex | to_json }}),
+            "os_server_name": re.compile({{ os_server_name_regex | to_json }}),
+            "os_client_name": re.compile({{ os_client_name_regex | to_json }}),
+            "es_product": re.compile({{ es_product_regex | to_json }}),
+            "os_server_product": re.compile({{ os_server_product_regex | to_json }}),
+            "os_client_product": re.compile({{ os_client_product_regex | to_json }}),
+            "es_service": re.compile({{ es_service_regex | to_json }}),
+            "os_server_service": re.compile({{ os_server_service_regex | to_json }}),
+            "os_client_service": re.compile({{ os_client_service_regex | to_json }}),
+        }
+        min_score = int({{ classification_min_score | int }})
+        min_margin = int({{ classification_min_margin | int }})
+        overrides = {{ role_overrides | to_json }}
+
+        canonical_override = {
+            "ES": "VM_ES",
+            "VM_ES": "VM_ES",
+            "ENGINEERING": "VM_ES",
+            "OS": "VM_OS_Server",
+            "OSS": "VM_OS_Server",
+            "OS_SERVER": "VM_OS_Server",
+            "VM_OS_SERVER": "VM_OS_Server",
+            "CLIENT": "VM_OS_Client",
+            "OSC": "VM_OS_Client",
+            "OS_CLIENT": "VM_OS_Client",
+            "VM_OS_CLIENT": "VM_OS_Client",
+            "IGNORE": "Ignore",
+            "NON_VM": "Non_VM",
+            "UNCLASSIFIED": "Unclassified",
+        }
+
+        playbook_by_role = {
+            "VM_ES": "0010",
+            "VM_OS_Server": "0020",
+            "VM_OS_Client": "0030",
+        }
+
+        def text_products(host):
+            values = []
+            for item in host.get("installed_products") or []:
+                if isinstance(item, dict):
+                    values.append(" ".join(
+                        str(item.get(k, ""))
+                        for k in ("name", "version", "publisher")
+                    ))
+                else:
+                    values.append(str(item))
+            return " | ".join(values)
+
+        def text_services(host):
+            values = []
+            for item in host.get("relevant_services") or []:
+                if isinstance(item, dict):
+                    values.append(" ".join(
+                        str(item.get(k, ""))
+                        for k in ("name", "display_name")
+                    ))
+                else:
+                    values.append(str(item))
+            return " | ".join(values)
+
+        def add(scores, reasons, role, points, reason):
+            scores[role] += points
+            reasons[role].append(f"+{points} {reason}")
+
+        raw_hosts = json.loads(raw_path.read_text(encoding="utf-8"))
+        classified = []
+
+        for host in raw_hosts:
+            ip = str(host.get("ip") or "")
+            name = str(host.get("computername") or "")
+            product_type = int(host.get("os_product_type") or 0)
+            os_caption = str(host.get("os_caption") or "")
+            products = text_products(host)
+            services = text_services(host)
+
+            scores = {
+                "VM_ES": 0,
+                "VM_OS_Server": 0,
+                "VM_OS_Client": 0,
+            }
+            reasons = {
+                "VM_ES": [],
+                "VM_OS_Server": [],
+                "VM_OS_Client": [],
+            }
+
+            override_raw = overrides.get(ip)
+            if override_raw is None and name:
+                override_raw = overrides.get(name) or overrides.get(name.upper())
+
+            override = None
+            if override_raw is not None:
+                override = canonical_override.get(
+                    str(override_raw).strip().upper()
+                )
+
+            if patterns["es_name"].search(name):
+                add(
+                    scores, reasons, "VM_ES", 6,
+                    f"Rechnername {name!r} passt zum VM-ES-Muster"
+                )
+            if patterns["os_server_name"].search(name):
+                add(
+                    scores, reasons, "VM_OS_Server", 6,
+                    f"Rechnername {name!r} passt zum VM-OS-Server-Muster"
+                )
+            if patterns["os_client_name"].search(name):
+                add(
+                    scores, reasons, "VM_OS_Client", 6,
+                    f"Rechnername {name!r} passt zum VM-OS-Client-Muster"
+                )
+
+            if patterns["es_product"].search(products):
+                add(
+                    scores, reasons, "VM_ES", 8,
+                    "installierte Engineering-Komponente erkannt"
+                )
+            if patterns["os_server_product"].search(products):
+                add(
+                    scores, reasons, "VM_OS_Server", 8,
+                    "installierte OS-Server-Komponente erkannt"
+                )
+            if patterns["os_client_product"].search(products):
+                add(
+                    scores, reasons, "VM_OS_Client", 8,
+                    "installierte OS-Client-Komponente erkannt"
+                )
+
+            if patterns["es_service"].search(services):
+                add(
+                    scores, reasons, "VM_ES", 2,
+                    "Engineering-/S7-Dienst erkannt"
+                )
+            if patterns["os_server_service"].search(services):
+                add(
+                    scores, reasons, "VM_OS_Server", 2,
+                    "WinCC-/OS-Server-Dienst erkannt"
+                )
+            if patterns["os_client_service"].search(services):
+                add(
+                    scores, reasons, "VM_OS_Client", 2,
+                    "WinCC-/OS-Client-Dienst erkannt"
+                )
+
+            # Win32_OperatingSystem.ProductType:
+            # 1 = Workstation, 2 = Domain Controller, 3 = Server.
+            if product_type == 1:
+                add(
+                    scores, reasons, "VM_OS_Client", 4,
+                    f"Windows-Workstation erkannt ({os_caption})"
+                )
+                scores["VM_ES"] -= 1
+                scores["VM_OS_Server"] -= 2
+            elif product_type in (2, 3):
+                add(
+                    scores, reasons, "VM_ES", 1,
+                    f"Windows-Server erkannt ({os_caption})"
+                )
+                add(
+                    scores, reasons, "VM_OS_Server", 1,
+                    f"Windows-Server erkannt ({os_caption})"
+                )
+                scores["VM_OS_Client"] -= 2
+
+            ordered = sorted(
+                scores.items(),
+                key=lambda item: (-item[1], item[0])
+            )
+            best_role, best_score = ordered[0]
+            second_score = ordered[1][1]
+            margin = best_score - second_score
+
+            if not host.get("winrm_reachable", False):
+                classification = "Unclassified"
+                confidence = "none"
+                classification_reason = (
+                    host.get("error") or "WinRM nicht erreichbar"
+                )
+            elif override == "Ignore":
+                classification = "Ignore"
+                confidence = "override"
+                classification_reason = (
+                    "Manueller Ausschluss ueber vm_role_overrides"
+                )
+            elif override in (
+                "VM_ES", "VM_OS_Server", "VM_OS_Client",
+                "Non_VM", "Unclassified"
+            ):
+                classification = override
+                confidence = "override"
+                classification_reason = (
+                    "Manuelle Zuordnung ueber vm_role_overrides: "
+                    f"{override_raw}"
+                )
+            elif not host.get("is_virtual_machine", False):
+                classification = "Non_VM"
+                confidence = "high"
+                classification_reason = (
+                    "Kein Merkmal einer virtuellen Maschine erkannt: "
+                    f"{host.get('virtualization_evidence', '')}"
+                )
+            elif best_score >= min_score and margin >= min_margin:
+                classification = best_role
+                confidence = (
+                    "high"
+                    if best_score >= 10 and margin >= 4
+                    else "medium"
+                )
+                classification_reason = (
+                    "; ".join(reasons[best_role])
+                    or "hoechster Klassifizierungswert"
+                )
+            else:
+                classification = "Unclassified"
+                confidence = "low"
+                classification_reason = (
+                    "VM erkannt, aber keine eindeutige Rollenzuordnung: "
+                    f"bester Wert {best_role}={best_score}, "
+                    f"Abstand={margin}, Mindestwert={min_score}, "
+                    f"Mindestabstand={min_margin}"
+                )
+
+            host["classification"] = classification
+            host["classification_confidence"] = confidence
+            host["classification_reason"] = classification_reason
+            host["classification_scores"] = scores
+            host["classification_evidence"] = reasons
+            host["selected_playbook"] = playbook_by_role.get(
+                classification, ""
+            )
+            classified.append(host)
+
+        groups = {
+            "vm_es": [
+                h for h in classified
+                if h.get("classification") == "VM_ES"
+            ],
+            "vm_os_server": [
+                h for h in classified
+                if h.get("classification") == "VM_OS_Server"
+            ],
+            "vm_os_client": [
+                h for h in classified
+                if h.get("classification") == "VM_OS_Client"
+            ],
+            "unclassified": [
+                h for h in classified
+                if h.get("classification") == "Unclassified"
+            ],
+            "non_vm": [
+                h for h in classified
+                if h.get("classification") == "Non_VM"
+            ],
+            "ignored": [
+                h for h in classified
+                if h.get("classification") == "Ignore"
+            ],
+        }
+
+        output = {
+            "generated_at": timestamp_iso,
+            "target_network": target_network,
+            "classification_version": 1,
+            "groups": groups,
+            "hosts": classified,
+            "summary": {
+                key: len(value) for key, value in groups.items()
+            },
+            "playbook_selection": {
+                "0010": {
+                    "role": "VM_ES",
+                    "group": "vm_es",
+                    "hosts": [h.get("ip", "") for h in groups["vm_es"]],
+                },
+                "0020": {
+                    "role": "VM_OS_Server",
+                    "group": "vm_os_server",
+                    "hosts": [
+                        h.get("ip", "") for h in groups["vm_os_server"]
+                    ],
+                },
+                "0030": {
+                    "role": "VM_OS_Client",
+                    "group": "vm_os_client",
+                    "hosts": [
+                        h.get("ip", "") for h in groups["vm_os_client"]
+                    ],
+                },
+            },
+        }
+
+        text = json.dumps(output, ensure_ascii=False, indent=2)
+        detailed_path.write_text(text, encoding="utf-8")
+        latest_path.parent.mkdir(parents=True, exist_ok=True)
+        latest_path.write_text(text, encoding="utf-8")
+
+        fieldnames = [
+            "Pruefzeit",
+            "IP",
+            "WinRM_Port",
+            "WinRM_Schema",
+            "WinRM_erreichbar",
+            "Computername",
+            "Domaene",
+            "Hersteller",
+            "Modell",
+            "Ist_VM",
+            "Virtualisierungsplattform",
+            "Betriebssystem",
+            "OS_ProductType",
+            "Klassifizierung",
+            "Ausgewaehltes_Playbook",
+            "Vertrauen",
+            "Score_VM_ES",
+            "Score_VM_OS_Server",
+            "Score_VM_OS_Client",
+            "Klassifizierungsgrund",
+            "Fehler",
+        ]
+        with csv_path.open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as csv_file:
+            writer = csv.DictWriter(
+                csv_file, fieldnames=fieldnames, delimiter=";"
+            )
+            writer.writeheader()
+            for host in sorted(
+                classified,
+                key=lambda item: str(item.get("ip", ""))
+            ):
+                scores = host.get("classification_scores") or {}
+                writer.writerow({
+                    "Pruefzeit": timestamp_iso,
+                    "IP": host.get("ip", ""),
+                    "WinRM_Port": host.get("winrm_port", ""),
+                    "WinRM_Schema": host.get("winrm_scheme", ""),
+                    "WinRM_erreichbar": host.get(
+                        "winrm_reachable", False
+                    ),
+                    "Computername": host.get("computername", ""),
+                    "Domaene": host.get("domain", ""),
+                    "Hersteller": host.get("manufacturer", ""),
+                    "Modell": host.get("model", ""),
+                    "Ist_VM": host.get("is_virtual_machine", False),
+                    "Virtualisierungsplattform": host.get(
+                        "virtualization_platform", ""
+                    ),
+                    "Betriebssystem": host.get("os_caption", ""),
+                    "OS_ProductType": host.get("os_product_type", ""),
+                    "Klassifizierung": host.get("classification", ""),
+                    "Ausgewaehltes_Playbook": host.get(
+                        "selected_playbook", ""
+                    ),
+                    "Vertrauen": host.get(
+                        "classification_confidence", ""
+                    ),
+                    "Score_VM_ES": scores.get("VM_ES", 0),
+                    "Score_VM_OS_Server": scores.get(
+                        "VM_OS_Server", 0
+                    ),
+                    "Score_VM_OS_Client": scores.get(
+                        "VM_OS_Client", 0
+                    ),
+                    "Klassifizierungsgrund": host.get(
+                        "classification_reason", ""
+                    ),
+                    "Fehler": host.get("error", ""),
+                })
+
+        # Lesbares Diagnose-Inventory ohne Zugangsdaten. Die spaeteren
+        # Playbooks sollen aus Sicherheitsgruenden die JSON-Datei verwenden.
+        lines = ["all:", "  children:"]
+        for group_name in (
+            "vm_es", "vm_os_server", "vm_os_client"
+        ):
+            lines.append(f"    {group_name}:")
+            members = groups[group_name]
+            if not members:
+                lines.append("      hosts: {}")
+            else:
+                lines.append("      hosts:")
+                for host in members:
+                    ip = str(host.get("ip", ""))
+                    computername = json.dumps(
+                        host.get("computername", ""),
+                        ensure_ascii=False
+                    )
+                    platform = json.dumps(
+                        host.get("virtualization_platform", ""),
+                        ensure_ascii=False
+                    )
+                    selected_playbook = json.dumps(
+                        host.get("selected_playbook", ""),
+                        ensure_ascii=False
+                    )
+                    lines.append(f"        {ip}:")
+                    lines.append(f"          ansible_host: {ip}")
+                    lines.append(
+                        "          discovery_computername: "
+                        f"{computername}"
+                    )
+                    lines.append(
+                        "          virtualization_platform: "
+                        f"{platform}"
+                    )
+                    lines.append(
+                        "          selected_playbook: "
+                        f"{selected_playbook}"
+                    )
+        inventory_path.parent.mkdir(parents=True, exist_ok=True)
+        inventory_path.write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+        print(json.dumps({
+            "latest_json": str(latest_path),
+            "classification_json": str(detailed_path),
+            "csv": str(csv_path),
+            "inventory": str(inventory_path),
+            "summary": output["summary"],
+            "playbook_selection": output["playbook_selection"],
+        }, ensure_ascii=False))
+        PY
+      args:
+        executable: /bin/bash
+      register: classification_result
+      changed_when: false
+
+    - name: Klassifizierungsdatei erneut einlesen
+      ansible.builtin.slurp:
+        src: "{{ discovery_latest_file }}"
+      register: classification_latest_raw
+
+    - name: Klassifizierungsdaten speichern
+      ansible.builtin.set_fact:
+        classification_latest: >-
+          {{ classification_latest_raw.content | b64decode | from_json }}
+
+    - name: VM-ES-Systeme auch im aktuellen Lauf gruppieren
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: "vm_es"
+      loop: "{{ classification_latest.groups.vm_es | default([]) }}"
+      loop_control:
+        label: "{{ item.ip }} -> vm_es -> 0010"
+
+    - name: VM-OS-Server auch im aktuellen Lauf gruppieren
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: "vm_os_server"
+      loop: >-
+        {{ classification_latest.groups.vm_os_server | default([]) }}
+      loop_control:
+        label: "{{ item.ip }} -> vm_os_server -> 0020"
+
+    - name: VM-OS-Clients auch im aktuellen Lauf gruppieren
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: "vm_os_client"
+      loop: >-
+        {{ classification_latest.groups.vm_os_client | default([]) }}
+      loop_control:
+        label: "{{ item.ip }} -> vm_os_client -> 0030"
+
+    - name: Ergebnis und Gruppengroessen anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "{{ classification_result.stdout }}"
+          - >-
+            VM ES / Playbook 0010:
+            {{ classification_latest.summary.vm_es | default(0) }}
+          - >-
+            VM OS Server / Playbook 0020:
+            {{ classification_latest.summary.vm_os_server | default(0) }}
+          - >-
+            VM OS Client / Playbook 0030:
+            {{ classification_latest.summary.vm_os_client | default(0) }}
+          - >-
+            Nicht eindeutig:
+            {{ classification_latest.summary.unclassified | default(0) }}
+          - >-
+            Erreichbar, aber keine VM:
+            {{ classification_latest.summary.non_vm | default(0) }}
+          - "Folge-Playbooks laden: {{ discovery_latest_file }}"
