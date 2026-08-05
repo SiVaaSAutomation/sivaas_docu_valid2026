@@ -1,0 +1,1228 @@
+---
+# Statuswerte: OK, NOK, Indirekt, Nicht_Pruefbar.
+
+- name: "OS_Server-Zielrechner bestimmen und dynamisch in das Inventory aufnehmen"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    station_type: "OS_Server"
+    station_group: "ipc_os_server_validation_targets"
+    masterlist_column: "O"
+    report_prefix: "ipc_os_server_installation_z73"
+
+    role_target_ip: "{{ ipc_os_server_target_ip | default('') }}"
+    target_ip_octet: "{{ ipc_os_server_ip_octet | default('61') }}"
+    expected_computername: "{{ ipc_os_server_computername | default('OSS01APERI') }}"
+    expected_os_pattern: "Windows Server 2022"
+
+    expected_terminalbus_prefix: "{{ ipc_terminalbus_prefix | default('192.168.210') }}"
+    expected_prefix_length: "{{ ipc_terminalbus_prefix_length | default(24) }}"
+    expected_gateway: "{{ ipc_terminalbus_gateway | default('192.168.210.251') }}"
+    expected_adapter_pattern: "{{ ipc_terminalbus_adapter_pattern | default('(?i)(Terminalbus|TerminalBus-IF1-X01|LAN Adapter #01)') }}"
+    expected_bios_pattern: "{{ ipc_expected_bios_pattern | default('SW480_480M22') }}"
+    expected_bios_release_date: "{{ ipc_expected_bios_release_date | default('2022-10-12') }}"
+    expected_ultravnc_version: "{{ ipc_expected_ultravnc_version | default('1.4.3.6') }}"
+    expected_admin_name: "{{ ipc_expected_admin_name | default('Admin_L') }}"
+    expected_locale: "{{ ipc_expected_locale | default('de-DE') }}"
+    expected_geo_id: "{{ ipc_expected_geo_id | default(94) }}"
+    expected_time_zone: "{{ ipc_expected_time_zone | default('W. Europe Standard Time') }}"
+
+    # Optional für die direkte Prüfung von IPC0042.
+    # Ohne diese Variablen wird der Terminalbusadapter geprüft und IPC0042 als Indirekt protokolliert.
+    comm_registry_path: "{{ ipc_comm_registry_path | default('') }}"
+    comm_remote_value_name: "{{ ipc_comm_remote_value_name | default('') }}"
+    comm_psk_value_name: "{{ ipc_comm_psk_value_name | default('') }}"
+    comm_adapter_value_name: "{{ ipc_comm_adapter_value_name | default('') }}"
+
+    validation_catalog:
+    - key: "IPC0001"
+      row: 18
+      ansible_id: "IPC0001"
+      title: "Hochfahren des Rechners"
+      master_value: "x"
+    - key: "IPC0002"
+      row: 19
+      ansible_id: "IPC0002"
+      title: "IPC Restore bestätigen"
+      master_value: "x"
+    - key: "IPC0003"
+      row: 20
+      ansible_id: "IPC0003"
+      title: "Ersteinrichtung (Deutsch)"
+      master_value: "x"
+    - key: "IPC0006"
+      row: 23
+      ansible_id: "IPC0006"
+      title: "PC7 7 OS-Server wiederherstellen auswählen"
+      master_value: "x"
+    - key: "IPC0007"
+      row: 24
+      ansible_id: "IPC0007"
+      title: "Sprache auswählen (Deutsch)"
+      master_value: "x"
+    - key: "IPC0008"
+      row: 25
+      ansible_id: "IPC0008"
+      title: "Region auswählen (Deutschland)"
+      master_value: "x"
+    - key: "IPC0010"
+      row: 27
+      ansible_id: "IPC0010"
+      title: "Lizenzbedingungen akzeptieren"
+      master_value: "x"
+    - key: "IPC0012"
+      row: 29
+      ansible_id: "IPC0012"
+      title: "Einstellungen anpassen"
+      master_value: "x"
+    - key: "IPC0014"
+      row: 31
+      ansible_id: "IPC0014"
+      title: "Lizenzbedingungen akzeptieren"
+      master_value: "x"
+    - key: "IPC0015"
+      row: 32
+      ansible_id: "IPC0015"
+      title: "Rechnernamen anpassen"
+      master_value: "x"
+    - key: "IPC0016"
+      row: 33
+      ansible_id: "IPC0016"
+      title: "Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0018"
+      row: 35
+      ansible_id: "IPC0018"
+      title: "Erneute Anmeldung als Administrator und Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0019"
+      row: 36
+      ansible_id: "IPC0019"
+      title: "SIMATIC Management Agent"
+      master_value: "x"
+    - key: "IPC0020"
+      row: 37
+      ansible_id: "IPC0020"
+      title: "Meldung dass Systeminitialisierung erfolgt ist"
+      master_value: "x"
+    - key: "IPC0021"
+      row: 38
+      ansible_id: "IPC0021"
+      title: "Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0023"
+      row: 40
+      ansible_id: "IPC0023"
+      title: "Kommunikationseinstellungen"
+      master_value: "x"
+    - key: "IPC0024"
+      row: 41
+      ansible_id: "IPC0024"
+      title: "IP-Adresseinstellungen"
+      master_value: "61"
+    - key: "IPC0025"
+      row: 42
+      ansible_id: "IPC0025"
+      title: "Bios Versionsprüfung"
+      master_value: "x"
+    - key: "IPC0026"
+      row: 43
+      ansible_id: "IPC0026"
+      title: "UltraVNC 1.4.3.6 installieren"
+      master_value: "x"
+    - key: "IPC0027"
+      row: 44
+      ansible_id: "IPC0027"
+      title: "Windows Firewall Regeln für VNC anpassen"
+      master_value: "x"
+    - key: "IPC0028"
+      row: 45
+      ansible_id: "IPC0028"
+      title: "Registry Eintrag für VEEAM setzen"
+      master_value: "x"
+    - key: "IPC0029"
+      row: 46
+      ansible_id: "IPC0029"
+      title: "Überprüfung Funktion UltraVNC"
+      master_value: "x"
+    - key: "IPC0031"
+      row: 48
+      ansible_id: "IPC0031"
+      title: "VEEAM Credentials anpassen"
+      master_value: "x"
+    - key: "IPC0033"
+      row: 50
+      ansible_id: "IPC0033"
+      title: "Rescan des Endpunkts durchführen"
+      master_value: "x"
+    - key: "ROW0052"
+      row: 52
+      ansible_id: ""
+      title: "Veeam Backup erstellen"
+      master_value: "x"
+    - key: "IPC0036"
+      row: 56
+      ansible_id: "IPC0036"
+      title: "Bestehendes Administrator-Konto umkonfigurieren"
+      master_value: "x"
+    - key: "IPC0038"
+      row: 58
+      ansible_id: "IPC0038"
+      title: "lokalen Benutzer Administrator umbenennen"
+      master_value: "x"
+    - key: "IPC0040"
+      row: 60
+      ansible_id: "IPC0040"
+      title: "Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0042"
+      row: 62
+      ansible_id: "IPC0042"
+      title: "Kommunikationseinstellungen"
+      master_value: "x"
+    - key: "IPC0043"
+      row: 66
+      ansible_id: "IPC0043"
+      title: "Date and Time"
+      master_value: "x"
+    - key: "IPC0044"
+      row: 67
+      ansible_id: "IPC0044"
+      title: "Language"
+      master_value: "x"
+    - key: "IPC0047"
+      row: 70
+      ansible_id: "IPC0047"
+      title: "Tastenkombination für Eingabesprachen deaktivieren"
+      master_value: "x"
+    - key: "IPC0048"
+      row: 71
+      ansible_id: "IPC0048"
+      title: "Region"
+      master_value: "x"
+
+  tasks:
+    - name: Zeitstempel für Report setzen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+    - name: Benötigte Semaphore-Variablen prüfen
+      ansible.builtin.assert:
+        that:
+          - target_network is defined
+          - win_user is defined
+          - win_password is defined
+          - winrm_transport is defined
+          - nmap_binary is defined
+          - result_dir is defined
+          - target_network | string | length > 0
+          - win_user | string | length > 0
+          - win_password | string | length > 0
+          - winrm_transport | string | length > 0
+          - nmap_binary | string | length > 0
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Erforderlich sind target_network, win_user, win_password,
+          winrm_transport, nmap_binary und result_dir.
+
+    - name: nmap auf dem Ansible-Controller prüfen
+      ansible.builtin.command: "{{ nmap_binary }} --version"
+      register: nmap_check
+      changed_when: false
+      failed_when: false
+
+    - name: Abbrechen, wenn nmap nicht ausführbar ist
+      ansible.builtin.fail:
+        msg: "nmap ist unter {{ nmap_binary }} nicht ausführbar."
+      when: nmap_check.rc != 0
+
+    - name: Ziel-IP aus Rollenvariable oder /24-Zielnetz bilden
+      ansible.builtin.set_fact:
+        resolved_target_ip: >-
+          {{
+            role_target_ip
+            if role_target_ip | string | length > 0
+            else (
+              (target_network | regex_replace('/.*$', ''))
+              | regex_replace('\\.[0-9]+$', '.' ~ (target_ip_octet | string))
+            )
+          }}
+
+    - name: Ziel-IP anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Stationstyp: {{ station_type }}"
+          - "Masterlisten-Spalte: {{ masterlist_column }}"
+          - "Ziel-IP: {{ resolved_target_ip }}"
+          - "Erwarteter Rechnername: {{ expected_computername }}"
+
+    - name: WinRM-Port des Zielrechners ermitteln
+      ansible.builtin.shell: |
+        set -o pipefail
+        scan="$({{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ resolved_target_ip }} -oG - 2>/dev/null || true)"
+        if grep -q '5986/open/tcp' <<<"$scan"; then
+          printf '%s;5986;https' '{{ resolved_target_ip }}'
+        elif grep -q '5985/open/tcp' <<<"$scan"; then
+          printf '%s;5985;http' '{{ resolved_target_ip }}'
+        else
+          # Host trotzdem aufnehmen, damit alle Masterlistenzeilen als Nicht_Pruefbar protokolliert werden.
+          printf '%s;5985;http' '{{ resolved_target_ip }}'
+        fi
+      args:
+        executable: /bin/bash
+      register: winrm_scan
+      changed_when: false
+
+    - name: WinRM-Verbindungsparameter zerlegen
+      ansible.builtin.set_fact:
+        winrm_connection_parts: "{{ (winrm_scan.stdout | trim).split(';') }}"
+
+    - name: Zielrechner dynamisch aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ resolved_target_ip }}"
+        groups: "{{ station_group }}"
+        ansible_host: "{{ resolved_target_ip }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ winrm_connection_parts[1] | int }}"
+        ansible_winrm_scheme: "{{ winrm_connection_parts[2] }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: 90
+        ansible_winrm_read_timeout_sec: 120
+
+        validation_station_type: "{{ station_type }}"
+        validation_master_column: "{{ masterlist_column }}"
+        validation_report_prefix: "{{ report_prefix }}"
+        validation_check_catalog: "{{ validation_catalog }}"
+        validation_expected_computername: "{{ expected_computername }}"
+        validation_expected_os_pattern: "{{ expected_os_pattern }}"
+        validation_expected_ip: "{{ resolved_target_ip }}"
+        validation_expected_prefix_length: "{{ expected_prefix_length }}"
+        validation_expected_gateway: "{{ expected_gateway }}"
+        validation_expected_adapter_pattern: "{{ expected_adapter_pattern }}"
+        validation_expected_bios_pattern: "{{ expected_bios_pattern }}"
+        validation_expected_bios_release_date: "{{ expected_bios_release_date }}"
+        validation_expected_ultravnc_version: "{{ expected_ultravnc_version }}"
+        validation_expected_admin_name: "{{ expected_admin_name }}"
+        validation_expected_locale: "{{ expected_locale }}"
+        validation_expected_geo_id: "{{ expected_geo_id }}"
+        validation_expected_time_zone: "{{ expected_time_zone }}"
+        validation_comm_registry_path: "{{ comm_registry_path }}"
+        validation_comm_remote_value_name: "{{ comm_remote_value_name }}"
+        validation_comm_psk_value_name: "{{ comm_psk_value_name }}"
+        validation_comm_adapter_value_name: "{{ comm_adapter_value_name }}"
+      no_log: true
+
+
+- name: "OS_Server-Einstellungen bis Masterlisten-Zeile 73 prüfen"
+  hosts: "ipc_os_server_validation_targets"
+  gather_facts: false
+  ignore_unreachable: true
+
+  tasks:
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: win_ping_result
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: Masterlisten-Einstellungen prüfen und als JSON ausgeben
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "SilentlyContinue"
+        $ProgressPreference = "SilentlyContinue"
+
+        $catalogJson = @'
+        {{ validation_check_catalog | to_json }}
+        '@
+        $catalog = @($catalogJson | ConvertFrom-Json)
+        $catalogByKey = @{}
+        foreach ($entry in $catalog) {
+          $catalogByKey[[string]$entry.key] = $entry
+        }
+        $checks = @()
+
+        $stationType = '{{ validation_station_type | replace("'", "''") }}'
+        $masterColumn = '{{ validation_master_column | replace("'", "''") }}'
+        $expectedComputerName = '{{ validation_expected_computername | replace("'", "''") }}'
+        $expectedOsPattern = '{{ validation_expected_os_pattern | replace("'", "''") }}'
+        $expectedIp = '{{ validation_expected_ip | replace("'", "''") }}'
+        $expectedPrefixLength = [int]'{{ validation_expected_prefix_length }}'
+        $expectedGateway = '{{ validation_expected_gateway | replace("'", "''") }}'
+        $expectedAdapterPattern = '{{ validation_expected_adapter_pattern | replace("'", "''") }}'
+        $expectedBiosPattern = '{{ validation_expected_bios_pattern | replace("'", "''") }}'
+        $expectedBiosReleaseDate = '{{ validation_expected_bios_release_date | replace("'", "''") }}'
+        $expectedUltraVncVersion = '{{ validation_expected_ultravnc_version | replace("'", "''") }}'
+        $expectedAdminName = '{{ validation_expected_admin_name | replace("'", "''") }}'
+        $expectedLocale = '{{ validation_expected_locale | replace("'", "''") }}'
+        $expectedGeoId = [int]'{{ validation_expected_geo_id }}'
+        $expectedTimeZone = '{{ validation_expected_time_zone | replace("'", "''") }}'
+        $commRegistryPath = '{{ validation_comm_registry_path | replace("'", "''") }}'
+        $commRemoteValueName = '{{ validation_comm_remote_value_name | replace("'", "''") }}'
+        $commPskValueName = '{{ validation_comm_psk_value_name | replace("'", "''") }}'
+        $commAdapterValueName = '{{ validation_comm_adapter_value_name | replace("'", "''") }}'
+
+        function Convert-ToText {
+          param([object]$Value)
+          if ($null -eq $Value) { return "" }
+          if ($Value -is [System.Array]) {
+            return (($Value | ForEach-Object { if ($null -eq $_) { "" } else { [string]$_ } }) -join " | ")
+          }
+          return [string]$Value
+        }
+
+        function Add-Check {
+          param(
+            [string]$Key,
+            [string]$Status,
+            [object]$Actual,
+            [object]$Expected,
+            [string]$Method,
+            [string]$Note = ""
+          )
+          if (-not $catalogByKey.ContainsKey($Key)) { return }
+          $meta = $catalogByKey[$Key]
+          $script:checks += [ordered]@{
+            masterlist_row = [int]$meta.row
+            masterlist_column = $masterColumn
+            ansible_id = [string]$meta.ansible_id
+            schritt = [string]$meta.title
+            status = $Status
+            istwert = Convert-ToText $Actual
+            sollwert = Convert-ToText $Expected
+            pruefmethode = $Method
+            hinweis = $Note
+          }
+        }
+
+        function Add-BooleanCheck {
+          param(
+            [string]$Key,
+            [bool]$Condition,
+            [object]$Actual,
+            [object]$Expected,
+            [string]$Method,
+            [string]$Note = ""
+          )
+          $status = "NOK"
+          if ($Condition) { $status = "OK" }
+          Add-Check -Key $Key -Status $status -Actual $Actual -Expected $Expected -Method $Method -Note $Note
+        }
+
+        function Has-Key {
+          param([string]$Key)
+          return $catalogByKey.ContainsKey($Key)
+        }
+
+        function Get-UninstallPrograms {
+          $items = @()
+          $roots = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+          )
+          foreach ($root in $roots) {
+            if (Test-Path $root) {
+              $items += @(Get-ChildItem -Path $root | ForEach-Object {
+                $p = Get-ItemProperty -Path $_.PSPath
+                if ($p.DisplayName) {
+                  [pscustomobject]@{
+                    Name = [string]$p.DisplayName
+                    Version = [string]$p.DisplayVersion
+                    Publisher = [string]$p.Publisher
+                  }
+                }
+              })
+            }
+          }
+          return @($items | Sort-Object Name,Version -Unique)
+        }
+
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+        $bios = Get-CimInstance Win32_BIOS
+        $programs = @(Get-UninstallPrograms)
+        $services = @(Get-Service)
+
+        $systemLocale = $null
+        $currentCulture = $null
+        $uiCulture = $null
+        $userLanguages = @()
+        $homeLocation = $null
+        $timeZone = $null
+        try { $systemLocale = Get-WinSystemLocale } catch {}
+        try { $currentCulture = Get-Culture } catch {}
+        try { $uiCulture = Get-UICulture } catch {}
+        try { $userLanguages = @(Get-WinUserLanguageList) } catch {}
+        try { $homeLocation = Get-WinHomeLocation } catch {}
+        try { $timeZone = Get-TimeZone } catch {}
+
+        $localUsers = @()
+        try {
+          $cimUsers = @(Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True")
+          foreach ($u in $cimUsers) {
+            $flags = $null
+            try {
+              $adsiUser = [ADSI]("WinNT://" + $env:COMPUTERNAME + "/" + $u.Name + ",user")
+              $flags = [int]$adsiUser.UserFlags.Value
+            } catch {}
+            $neverExpires = $null
+            if ($null -ne $flags) {
+              $neverExpires = (($flags -band 0x10000) -ne 0)
+            }
+            $localUsers += [pscustomobject]@{
+              Name = [string]$u.Name
+              SID = [string]$u.SID
+              Enabled = (-not [bool]$u.Disabled)
+              PasswordNeverExpires = $neverExpires
+            }
+          }
+        } catch {}
+
+        $builtInAdmin = $localUsers | Where-Object { $_.SID -match "-500$" } | Select-Object -First 1
+        $namedUser = $localUsers | Where-Object { $_.Name -eq "User" } | Select-Object -First 1
+        $adminL = $localUsers | Where-Object { $_.Name -eq $expectedAdminName } | Select-Object -First 1
+
+        $licenseRows = @()
+        try {
+          $licenseRows = @(Get-CimInstance SoftwareLicensingProduct |
+            Where-Object { $_.PartialProductKey -and $_.Name -match "Windows" } |
+            Select-Object Name,LicenseStatus,PartialProductKey)
+        } catch {}
+        $windowsActivated = (@($licenseRows | Where-Object { $_.LicenseStatus -eq 1 }).Count -gt 0)
+        $licenseActual = "Windows aktiviert=" + $windowsActivated
+
+        $pcs7Programs = @($programs | Where-Object {
+          $_.Name -match "(?i)(PCS\s*7|PCS7|WinCC|STEP\s*7|SIMATIC|Process Historian|Information Server)"
+        })
+        $osActual = [string]$os.Caption
+        $osMatches = ($osActual -match [regex]::Escape($expectedOsPattern))
+
+        $networkConfigs = @()
+        try { $networkConfigs = @(Get-NetIPConfiguration) } catch {}
+        $expectedIpConfig = $networkConfigs | Where-Object {
+          @($_.IPv4Address | ForEach-Object { $_.IPAddress }) -contains $expectedIp
+        } | Select-Object -First 1
+        $actualIpText = ""
+        $ipMatches = $false
+        if ($expectedIpConfig) {
+          $ipv4 = @($expectedIpConfig.IPv4Address | Select-Object -First 1)
+          $gateway = @($expectedIpConfig.IPv4DefaultGateway | ForEach-Object { $_.NextHop })
+          $actualPrefix = $null
+          if ($ipv4.Count -gt 0) { $actualPrefix = [int]$ipv4[0].PrefixLength }
+          $adapterNameOk = (
+            ([string]$expectedIpConfig.InterfaceAlias -match $expectedAdapterPattern) -or
+            ([string]$expectedIpConfig.InterfaceDescription -match $expectedAdapterPattern)
+          )
+          $gatewayOk = ($gateway -contains $expectedGateway)
+          $prefixOk = ($actualPrefix -eq $expectedPrefixLength)
+          $ipMatches = ($adapterNameOk -and $gatewayOk -and $prefixOk)
+          $actualIpText = "Adapter=" + [string]$expectedIpConfig.InterfaceAlias +
+            "; IP=" + $expectedIp +
+            "; Prefix=" + [string]$actualPrefix +
+            "; Gateway=" + ($gateway -join ",") +
+            "; Adaptername_OK=" + [string]$adapterNameOk
+        } else {
+          $allIpv4 = @($networkConfigs | ForEach-Object {
+            $alias = [string]$_.InterfaceAlias
+            $_.IPv4Address | ForEach-Object { $alias + "=" + $_.IPAddress + "/" + $_.PrefixLength }
+          })
+          $actualIpText = $allIpv4 -join " | "
+        }
+
+        $biosRelease = ""
+        try {
+          if ($bios.ReleaseDate) { $biosRelease = ([datetime]$bios.ReleaseDate).ToString("yyyy-MM-dd") }
+        } catch {}
+        $biosText = @($bios.Manufacturer,$bios.Name,$bios.Version,$bios.SMBIOSBIOSVersion,$biosRelease) -join " | "
+        $biosMatches = $false
+        if ($expectedBiosPattern) {
+          $biosMatches = ($biosText -match [regex]::Escape($expectedBiosPattern))
+        }
+        if ((-not $biosMatches) -and $expectedBiosReleaseDate) {
+          $biosMatches = ($biosRelease -eq $expectedBiosReleaseDate)
+        }
+
+        $ultraVncPrograms = @($programs | Where-Object { $_.Name -match "(?i)(UltraVNC|uvnc)" })
+        $ultraVncVersions = @($ultraVncPrograms | ForEach-Object { $_.Version } | Where-Object { $_ })
+        $ultraVncInstalled = ($ultraVncPrograms.Count -gt 0)
+        $ultraVncVersionOk = ($ultraVncVersions -contains $expectedUltraVncVersion)
+        $vncServices = @($services | Where-Object {
+          $_.Name -match "(?i)(uvnc|winvnc)" -or $_.DisplayName -match "(?i)(UltraVNC|VNC Server)"
+        })
+        $vncServiceRunning = (@($vncServices | Where-Object { $_.Status -eq "Running" }).Count -gt 0)
+        $vncListeningPorts = @()
+        try {
+          $vncListeningPorts = @(Get-NetTCPConnection -State Listen |
+            Where-Object { $_.LocalPort -in @(5800,5900) } |
+            Select-Object -ExpandProperty LocalPort -Unique)
+        } catch {}
+        $vncFunctionOk = ($vncServiceRunning -and ($vncListeningPorts -contains 5900))
+
+        $vncFirewallRows = @()
+        try {
+          $enabledInbound = @(Get-NetFirewallRule -Enabled True -Direction Inbound)
+          foreach ($rule in $enabledInbound) {
+            $ports = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule)
+            foreach ($pf in $ports) {
+              $portText = [string]$pf.LocalPort
+              if ($portText -match "(^|,|-)5800($|,|-)" -or $portText -match "(^|,|-)5900($|,|-)") {
+                $profileText = [string]$rule.Profile
+                $allProfiles = ($profileText -eq "Any") -or (
+                  $profileText -match "Domain" -and $profileText -match "Private" -and $profileText -match "Public"
+                )
+                $vncFirewallRows += [pscustomobject]@{
+                  Rule = [string]$rule.DisplayName
+                  Port = $portText
+                  Profile = $profileText
+                  AllProfiles = $allProfiles
+                }
+              }
+            }
+          }
+        } catch {}
+        $port5800Ok = (@($vncFirewallRows | Where-Object { $_.Port -match "5800" -and $_.AllProfiles }).Count -gt 0)
+        $port5900Ok = (@($vncFirewallRows | Where-Object { $_.Port -match "5900" -and $_.AllProfiles }).Count -gt 0)
+        $vncFirewallOk = ($port5800Ok -and $port5900Ok)
+        $vncFirewallActual = @($vncFirewallRows | ForEach-Object {
+          $_.Rule + ":" + $_.Port + ":Profile=" + $_.Profile
+        }) -join " | "
+
+        $tokenFilterValue = $null
+        try {
+          $tokenFilterValue = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name LocalAccountTokenFilterPolicy).LocalAccountTokenFilterPolicy
+        } catch {}
+
+        $publicFirewallEnabled = $null
+        try {
+          $publicFirewallEnabled = [bool](Get-NetFirewallProfile -Name Public).Enabled
+        } catch {}
+
+        $veeamPrograms = @($programs | Where-Object { $_.Name -match "(?i)Veeam" })
+        $veeamServices = @($services | Where-Object {
+          $_.Name -match "(?i)Veeam" -or $_.DisplayName -match "(?i)Veeam"
+        })
+        $veeamEvidence = @($veeamPrograms | ForEach-Object { $_.Name + " " + $_.Version }) -join " | "
+        if (-not $veeamEvidence) {
+          $veeamEvidence = @($veeamServices | ForEach-Object { $_.DisplayName + "=" + $_.Status }) -join " | "
+        }
+
+        $smaPrograms = @($programs | Where-Object { $_.Name -match "(?i)SIMATIC Management Agent" })
+        $smaServices = @($services | Where-Object {
+          $_.Name -match "(?i)(SMAgent|^SMA$)" -or $_.DisplayName -match "(?i)SIMATIC Management Agent"
+        })
+        $smaInstalled = (($smaPrograms.Count -gt 0) -or ($smaServices.Count -gt 0))
+        $smaRunning = (@($smaServices | Where-Object { $_.Status -eq "Running" }).Count -gt 0)
+        $smaActual = "Programme=" + (@($smaPrograms | ForEach-Object { $_.Name + " " + $_.Version }) -join ",") +
+          "; Dienste=" + (@($smaServices | ForEach-Object { $_.DisplayName + "=" + $_.Status }) -join ",")
+
+        $setupState = @{}
+        try {
+          $setupProps = Get-ItemProperty "HKLM:\SYSTEM\Setup"
+          $setupState["OOBEInProgress"] = [int]$setupProps.OOBEInProgress
+          $setupState["SystemSetupInProgress"] = [int]$setupProps.SystemSetupInProgress
+          $setupState["SetupType"] = [int]$setupProps.SetupType
+        } catch {}
+        $setupComplete = (
+          ($setupState.ContainsKey("OOBEInProgress") -and $setupState["OOBEInProgress"] -eq 0) -and
+          ($setupState.ContainsKey("SystemSetupInProgress") -and $setupState["SystemSetupInProgress"] -eq 0)
+        )
+        $setupActual = @($setupState.GetEnumerator() | ForEach-Object { $_.Key + "=" + $_.Value }) -join ";"
+
+        $lastBoot = ""
+        try { $lastBoot = ([datetime]$os.LastBootUpTime).ToString("yyyy-MM-dd HH:mm:ss") } catch {}
+
+        $terminalAdapters = @()
+        try {
+          $terminalAdapters = @(Get-NetAdapter | Where-Object {
+            $_.Name -match $expectedAdapterPattern -or $_.InterfaceDescription -match $expectedAdapterPattern
+          })
+        } catch {}
+        $terminalAdapterOk = (@($terminalAdapters | Where-Object { $_.Status -eq "Up" }).Count -gt 0)
+        $commActual = "Terminalbusadapter=" + (@($terminalAdapters | ForEach-Object {
+          $_.Name + "=" + $_.Status
+        }) -join ",")
+        $commDirectPossible = $false
+        $commRegistryOk = $false
+        if ($commRegistryPath -and (Test-Path $commRegistryPath)) {
+          $commDirectPossible = $true
+          $props = Get-ItemProperty $commRegistryPath
+          $remoteExists = $true
+          $pskExists = $true
+          $adapterSelected = $true
+          if ($commRemoteValueName) {
+            $remoteValue = $props.$commRemoteValueName
+            $remoteExists = ($null -ne $remoteValue -and [string]$remoteValue -notin @("","0","False"))
+            $commActual += "; RemoteKommunikation=" + [string]$remoteValue
+          }
+          if ($commPskValueName) {
+            $pskValue = $props.$commPskValueName
+            $pskExists = ($null -ne $pskValue -and [string]$pskValue -ne "")
+            $commActual += "; PSK_gesetzt=" + [string]$pskExists
+          }
+          if ($commAdapterValueName) {
+            $adapterValue = $props.$commAdapterValueName
+            $adapterSelected = ([string]$adapterValue -match $expectedAdapterPattern)
+            $commActual += "; Adapterauswahl=" + [string]$adapterValue
+          }
+          $commRegistryOk = ($remoteExists -and $pskExists -and $adapterSelected -and $terminalAdapterOk)
+        }
+
+        $hotkeyRows = @()
+        $hkuRoot = "Registry::HKEY_USERS"
+        try {
+          $hives = @(Get-ChildItem $hkuRoot | Where-Object {
+            $_.PSChildName -eq ".DEFAULT" -or $_.PSChildName -match "^S-1-5-21-"
+          })
+          foreach ($hive in $hives) {
+            $togglePath = $hive.PSPath + "\Keyboard Layout\Toggle"
+            if (Test-Path $togglePath) {
+              $p = Get-ItemProperty $togglePath
+              $hotkey = [string]$p.Hotkey
+              $languageHotkey = [string]$p."Language Hotkey"
+              $layoutHotkey = [string]$p."Layout Hotkey"
+              $disabled = ($hotkey -eq "3" -and $languageHotkey -eq "3" -and $layoutHotkey -eq "3")
+              $hotkeyRows += [pscustomobject]@{
+                Hive = $hive.PSChildName
+                Hotkey = $hotkey
+                LanguageHotkey = $languageHotkey
+                LayoutHotkey = $layoutHotkey
+                Disabled = $disabled
+              }
+            }
+          }
+        } catch {}
+        $hotkeysDisabled = ($hotkeyRows.Count -gt 0 -and @($hotkeyRows | Where-Object { -not $_.Disabled }).Count -eq 0)
+        $hotkeyActual = @($hotkeyRows | ForEach-Object {
+          $_.Hive + ":Hotkey=" + $_.Hotkey + ",Language=" + $_.LanguageHotkey + ",Layout=" + $_.LayoutHotkey
+        }) -join " | "
+
+        $defaultLocale = ""
+        try {
+          $defaultLocale = [string](Get-ItemProperty "Registry::HKEY_USERS\.DEFAULT\Control Panel\International" -Name LocaleName).LocaleName
+        } catch {}
+        $languageTags = @($userLanguages | ForEach-Object { $_.LanguageTag })
+        $inputTips = @($userLanguages | ForEach-Object { @($_.InputMethodTips) } | ForEach-Object { $_ })
+        $languageActual = "System=" + [string]$systemLocale.Name +
+          "; UI=" + [string]$uiCulture.Name +
+          "; Kultur=" + [string]$currentCulture.Name +
+          "; Benutzer=" + ($languageTags -join ",")
+        $germanLanguageOk = (
+          [string]$systemLocale.Name -eq $expectedLocale -and
+          [string]$uiCulture.Name -eq $expectedLocale -and
+          $languageTags.Count -gt 0 -and
+          $languageTags[0] -eq $expectedLocale
+        )
+        $keyboardOnlyGerman = (
+          $languageTags.Count -eq 1 -and
+          $languageTags[0] -eq $expectedLocale -and
+          @($inputTips | Where-Object { $_ -match "(?i)0407" }).Count -gt 0
+        )
+        $regionActual = "Kultur=" + [string]$currentCulture.Name +
+          "; GeoID=" + [string]$homeLocation.GeoId
+        $regionOk = ([string]$currentCulture.Name -eq $expectedLocale -and [int]$homeLocation.GeoId -eq $expectedGeoId)
+        $copiedRegionOk = (
+          [string]$systemLocale.Name -eq $expectedLocale -and
+          $defaultLocale -eq $expectedLocale
+        )
+        $timeActual = "Zeitzone=" + [string]$timeZone.Id + "; Aktuell=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $timeOk = ([string]$timeZone.Id -eq $expectedTimeZone)
+
+        # Masterlistenprüfungen in Zeilenreihenfolge
+        if (Has-Key "IPC0001") {
+          Add-BooleanCheck "IPC0001" $true "WinRM erreichbar; Rechner läuft" "Rechner hochgefahren und erreichbar" "Direkt/WinRM"
+        }
+        if (Has-Key "IPC0002") {
+          Add-Check "IPC0002" "Nicht_Pruefbar" "Der Bestätigungsdialog hinterlässt keinen eindeutigen Systemnachweis." "IPC-Restore-Dialog mit OK bestätigt" "Manueller Installationsschritt"
+        }
+        if (Has-Key "IPC0003") {
+          Add-BooleanCheck "IPC0003" $germanLanguageOk $languageActual $expectedLocale "Direkt/Windows-Ländereinstellungen" "Endzustand geprüft; die ursprüngliche OOBE-Auswahl ist nur indirekt ableitbar."
+        }
+        if (Has-Key "IPC0004") {
+          $status = "NOK"
+          if ($osMatches) { $status = "Indirekt" }
+          Add-Check "IPC0004" $status ("OS=" + $osActual) ("Systempartition wiederhergestellt; OS=" + $expectedOsPattern) "Indirekt/OS-Endzustand" "Die im Restore-Menü gewählte Option kann nachträglich nicht direkt ausgelesen werden."
+        }
+        if (Has-Key "IPC0005") {
+          $status = "NOK"
+          if ($osMatches) { $status = "Indirekt" }
+          Add-Check "IPC0005" $status ("OS=" + $osActual + "; PCS7-Komponenten=" + $pcs7Programs.Count) ("PCS 7 OS-Client-Image; OS=" + $expectedOsPattern) "Indirekt/OS und Softwarebestand" "Die Restore-Auswahl selbst ist nicht direkt beweisbar."
+        }
+        if (Has-Key "IPC0006") {
+          $status = "NOK"
+          if ($osMatches) { $status = "Indirekt" }
+          Add-Check "IPC0006" $status ("OS=" + $osActual + "; PCS7-Komponenten=" + $pcs7Programs.Count) ("PCS 7 OS-Server-Image; OS=" + $expectedOsPattern) "Indirekt/OS und Softwarebestand" "Die Restore-Auswahl selbst ist nicht direkt beweisbar."
+        }
+        if (Has-Key "IPC0007") {
+          Add-BooleanCheck "IPC0007" $germanLanguageOk $languageActual $expectedLocale "Direkt/Windows-Ländereinstellungen"
+        }
+        if (Has-Key "IPC0008") {
+          Add-BooleanCheck "IPC0008" $regionOk $regionActual ("Deutschland; " + $expectedLocale + "; GeoID=" + $expectedGeoId) "Direkt/Region"
+        }
+        if (Has-Key "IPC0009") {
+          Add-BooleanCheck "IPC0009" $keyboardOnlyGerman ("Sprachen=" + ($languageTags -join ",") + "; Eingabemethoden=" + ($inputTips -join ",")) "Nur Deutsch; deutsche Tastatur; keine zweite Sprache" "Direkt/Benutzersprachen"
+        }
+        if (Has-Key "IPC0010") {
+          Add-Check "IPC0010" "Nicht_Pruefbar" $licenseActual "Lizenzbedingungen akzeptiert" "Manueller Installationsschritt" "Die Windows-Aktivierung ist nicht gleichbedeutend mit dem Nachweis der Dialogbestätigung."
+        }
+        if (Has-Key "IPC0012") {
+          $adminSetupOk = ($null -ne $builtInAdmin -and [bool]$builtInAdmin.Enabled)
+          $status = "NOK"
+          if ($adminSetupOk) { $status = "Indirekt" }
+          $actual = "Integriertes Administratorkonto=" + [string]$builtInAdmin.Name + "; Aktiv=" + [string]$builtInAdmin.Enabled
+          Add-Check "IPC0012" $status $actual "Administratorkonto eingerichtet und aktiv; Passwort aus Sicherheitsgründen nicht geprüft" "Indirekt/Benutzerkonto"
+        }
+        if (Has-Key "IPC0013") {
+          $userSetupOk = ($null -ne $namedUser -and [bool]$namedUser.Enabled)
+          $status = "NOK"
+          if ($userSetupOk) { $status = "Indirekt" }
+          $actual = "Benutzer User vorhanden=" + [string]($null -ne $namedUser) + "; Aktiv=" + [string]$namedUser.Enabled
+          Add-Check "IPC0013" $status $actual "Lokaler Benutzer User eingerichtet und aktiv; Passwort/Passworthinweis nicht ausgelesen" "Indirekt/Benutzerkonto"
+        }
+        if (Has-Key "IPC0014") {
+          Add-Check "IPC0014" "Nicht_Pruefbar" $licenseActual "Lizenzbedingungen akzeptiert" "Manueller Installationsschritt" "Die Dialogbestätigung wird vom Betriebssystem nicht eindeutig protokolliert."
+        }
+        if (Has-Key "IPC0015") {
+          Add-BooleanCheck "IPC0015" ($env:COMPUTERNAME -ieq $expectedComputerName) $env:COMPUTERNAME $expectedComputerName "Direkt/Computername"
+        }
+        if (Has-Key "IPC0016") {
+          Add-Check "IPC0016" "Nicht_Pruefbar" ("Letzter Systemstart=" + $lastBoot) "Neustart nach Umbenennung durchgeführt" "Ereignis ohne eindeutigen Bezug" "Ohne bekannten Umbenennungszeitpunkt lässt sich der Neustart nicht eindeutig zuordnen."
+        }
+        if (Has-Key "IPC0017") {
+          Add-Check "IPC0017" "Nicht_Pruefbar" ("Letzter Systemstart=" + $lastBoot) "Anmeldung als User und anschließender Neustart" "Manueller Installationsschritt"
+        }
+        if (Has-Key "IPC0018") {
+          Add-Check "IPC0018" "Nicht_Pruefbar" ("Letzter Systemstart=" + $lastBoot) "Anmeldung als Administrator und anschließender Neustart" "Manueller Installationsschritt"
+        }
+        if (Has-Key "IPC0019") {
+          Add-BooleanCheck "IPC0019" $smaInstalled $smaActual "SIMATIC Management Agent installiert" "Direkt/Software und Dienst" ("Dienst läuft=" + $smaRunning)
+        }
+        if (Has-Key "IPC0020") {
+          $status = "NOK"
+          if ($setupComplete) { $status = "Indirekt" }
+          Add-Check "IPC0020" $status $setupActual "Systeminitialisierung abgeschlossen" "Indirekt/Windows-Setupstatus" "Die konkrete SIMATIC-Meldung wird nicht dauerhaft eindeutig gespeichert."
+        }
+        if (Has-Key "IPC0021") {
+          Add-Check "IPC0021" "Nicht_Pruefbar" ("Letzter Systemstart=" + $lastBoot) "Neustart nach Systeminitialisierung" "Ereignis ohne eindeutigen Bezug"
+        }
+        if (Has-Key "IPC0023") {
+          Add-Check "IPC0023" "Nicht_Pruefbar" "Der Dialogabbruch hinterlässt keinen eindeutigen technischen Nachweis." "Kommunikationseinstellungen mit Abbrechen beendet" "Manueller Installationsschritt"
+        }
+        if (Has-Key "IPC0024") {
+          Add-BooleanCheck "IPC0024" $ipMatches $actualIpText ("Adapter passend; IP=" + $expectedIp + "/" + $expectedPrefixLength + "; Gateway=" + $expectedGateway) "Direkt/Netzwerkkonfiguration"
+        }
+        if (Has-Key "IPC0025") {
+          Add-BooleanCheck "IPC0025" $biosMatches $biosText ("BIOS enthält " + $expectedBiosPattern + " oder ReleaseDate=" + $expectedBiosReleaseDate) "Direkt/CIM Win32_BIOS" "Je nach IPC-Firmware kann die Chipset-Bezeichnung in einem anderen Feld stehen."
+        }
+        if (Has-Key "IPC0026") {
+          Add-BooleanCheck "IPC0026" ($ultraVncInstalled -and $ultraVncVersionOk) ("Versionen=" + ($ultraVncVersions -join ",")) $expectedUltraVncVersion "Direkt/Uninstall-Registry"
+        }
+        if (Has-Key "IPC0027") {
+          Add-BooleanCheck "IPC0027" $vncFirewallOk $vncFirewallActual "Eingehende VNC-Regeln für TCP 5800 und 5900, aktiviert, alle Profile" "Direkt/Windows-Firewall"
+        }
+        if (Has-Key "IPC0028") {
+          Add-BooleanCheck "IPC0028" ([int]$tokenFilterValue -eq 1) ("LocalAccountTokenFilterPolicy=" + [string]$tokenFilterValue) "DWORD LocalAccountTokenFilterPolicy=1" "Direkt/Registry"
+        }
+        if (Has-Key "IPC0029") {
+          $status = "NOK"
+          if ($vncFunctionOk) { $status = "Indirekt" }
+          Add-Check "IPC0029" $status ("Dienst_läuft=" + $vncServiceRunning + "; ListeningPorts=" + ($vncListeningPorts -join ",")) "UltraVNC-Verbindung erfolgreich" "Indirekt/Dienst und Listener" "Passwortauthentifizierung und externer Bildaufbau werden nicht durchgeführt."
+        }
+        if (Has-Key "IPC0030") {
+          Add-BooleanCheck "IPC0030" ($publicFirewallEnabled -eq $false) ("Öffentliches Firewallprofil aktiviert=" + [string]$publicFirewallEnabled) "Öffentliches Windows-Defender-Firewallprofil deaktiviert" "Direkt/Firewallprofil" "Die Masterliste beschreibt die Einstellung unter Öffentliches Netzwerk; dies prüft nicht den Defender-Antivirenscanner."
+        }
+        if (Has-Key "IPC0031") {
+          Add-Check "IPC0031" "Nicht_Pruefbar" $veeamEvidence "Korrekte Veeam-Anmeldedaten für den Endpunkt hinterlegt" "Externes Veeam-System" "Credentials liegen auf dem Veeam-Server und sind lokal nicht sicher auslesbar."
+        }
+        if (Has-Key "IPC0033") {
+          Add-Check "IPC0033" "Nicht_Pruefbar" $veeamEvidence "Endpunkt in Veeam neu gescannt und Agent aktualisiert/installiert" "Externes Veeam-System" "Lokale Veeam-Komponenten sind nur ein Indiz, kein Nachweis des Rescans."
+        }
+        if (Has-Key "ROW0052") {
+          Add-Check "ROW0052" "Nicht_Pruefbar" $veeamEvidence "Veeam-Backup erstellt" "Externes Veeam-System" "In Spalte A fehlt für diese Masterlistenzeile eine Ansible-ID; die Protokollspalte bleibt deshalb leer."
+        }
+        if (Has-Key "IPC0035") {
+          $status = "NOK"
+          if ($null -ne $adminL) { $status = "Indirekt" }
+          Add-Check "IPC0035" $status ("Konto " + $expectedAdminName + " vorhanden=" + [string]($null -ne $adminL)) ("Passwort für " + $expectedAdminName + " gesetzt") "Indirekt/Benutzerkonto" "Passwörter werden weder ausgelesen noch durch Anmeldeversuche geprüft."
+        }
+        if (Has-Key "IPC0036") {
+          $neverExpiresOk = ($null -ne $builtInAdmin -and $builtInAdmin.PasswordNeverExpires -eq $true)
+          Add-BooleanCheck "IPC0036" $neverExpiresOk ("Konto=" + [string]$builtInAdmin.Name + "; Kennwort_läuft_nie_ab=" + [string]$builtInAdmin.PasswordNeverExpires) "Kennwort läuft nie ab" "Direkt/ADSI UserFlags"
+        }
+        if (Has-Key "IPC0037") {
+          $adminEnabledOk = ($null -ne $builtInAdmin -and [bool]$builtInAdmin.Enabled)
+          Add-BooleanCheck "IPC0037" $adminEnabledOk ("Konto=" + [string]$builtInAdmin.Name + "; Aktiv=" + [string]$builtInAdmin.Enabled) "Integriertes Administratorkonto aktiv" "Direkt/Win32_UserAccount"
+        }
+        if (Has-Key "IPC0038") {
+          $renamedOk = ($null -ne $builtInAdmin -and $builtInAdmin.Name -ieq $expectedAdminName)
+          Add-BooleanCheck "IPC0038" $renamedOk ("SID-500-Konto=" + [string]$builtInAdmin.Name) $expectedAdminName "Direkt/SID des integrierten Administrators"
+        }
+        if (Has-Key "IPC0040") {
+          Add-Check "IPC0040" "Nicht_Pruefbar" ("Letzter Systemstart=" + $lastBoot) "Rechnerneustart durchgeführt" "Ereignis ohne Sollzeitpunkt"
+        }
+        if (Has-Key "IPC0042") {
+          if ($commDirectPossible) {
+            Add-BooleanCheck "IPC0042" $commRegistryOk $commActual "Remote-Kommunikation aktiv; PSK gesetzt; Terminalbusadapter ausgewählt" "Direkt/Registry und Netzwerkadapter"
+          } else {
+            $status = "NOK"
+            if ($terminalAdapterOk) { $status = "Indirekt" }
+            Add-Check "IPC0042" $status $commActual "Remote-Kommunikation aktiv; PSK gesetzt; Terminalbusadapter ausgewählt" "Indirekt/Netzwerkadapter" "Für eine direkte Prüfung müssen Registry-Pfad und Wertnamen als Semaphore-Variablen gesetzt werden."
+          }
+        }
+        if (Has-Key "IPC0043") {
+          Add-BooleanCheck "IPC0043" $timeOk $timeActual $expectedTimeZone "Direkt/Zeitzone" "Die absolute Uhrzeit wird protokolliert, aber ohne definierte Referenzzeit nicht als Toleranzprüfung bewertet."
+        }
+        if (Has-Key "IPC0044") {
+          Add-BooleanCheck "IPC0044" $germanLanguageOk $languageActual ($expectedLocale + " an erster Stelle und als primäre Sprache") "Direkt/Windows-Ländereinstellungen"
+        }
+        if (Has-Key "IPC0047") {
+          Add-BooleanCheck "IPC0047" $hotkeysDisabled $hotkeyActual "Hotkey, Language Hotkey und Layout Hotkey jeweils 3 (nicht zugewiesen)" "Direkt/Registry der geladenen Benutzerprofile" "Nicht geladene Benutzerprofile können über WinRM nicht vollständig bewertet werden."
+        }
+        if (Has-Key "IPC0048") {
+          Add-BooleanCheck "IPC0048" $copiedRegionOk ("SystemLocale=" + [string]$systemLocale.Name + "; DefaultUserLocale=" + $defaultLocale) ($expectedLocale + " für Willkommensseite/System und neue Benutzer") "Direkt/SystemLocale und .DEFAULT-Profil"
+        }
+
+        $result = [ordered]@{
+          scan_timestamp = $null
+          target_timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+          ip = "{{ inventory_hostname }}"
+          ansible_reachable = $true
+          computername = $env:COMPUTERNAME
+          station_type = $stationType
+          masterlist_column = $masterColumn
+          os_caption = $os.Caption
+          os_version = $os.Version
+          checks = @($checks | Sort-Object masterlist_row)
+          error = $null
+        }
+        $result | ConvertTo-Json -Depth 9 -Compress
+      register: ipc_validation_raw
+      when:
+        - win_ping_result is defined
+        - not (win_ping_result.unreachable | default(false) | bool)
+        - not (win_ping_result.failed | default(false) | bool)
+        - win_ping_result.ping | default('') == 'pong'
+      changed_when: false
+      failed_when: false
+
+    - name: Prüfergebnis als Host-Fact speichern
+      ansible.builtin.set_fact:
+        ipc_validation_info: "{{ ipc_validation_raw.stdout | trim | from_json }}"
+      when:
+        - ipc_validation_raw is defined
+        - ipc_validation_raw.stdout is defined
+        - ipc_validation_raw.stdout | trim | length > 0
+
+
+- name: "OS_Server-Validierungsprotokoll auf dem Ansible-Controller erzeugen"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    station_type: "OS_Server"
+    station_group: "ipc_os_server_validation_targets"
+    masterlist_column: "O"
+    report_prefix: "ipc_os_server_installation_z73"
+    validation_catalog:
+    - key: "IPC0001"
+      row: 18
+      ansible_id: "IPC0001"
+      title: "Hochfahren des Rechners"
+      master_value: "x"
+    - key: "IPC0002"
+      row: 19
+      ansible_id: "IPC0002"
+      title: "IPC Restore bestätigen"
+      master_value: "x"
+    - key: "IPC0003"
+      row: 20
+      ansible_id: "IPC0003"
+      title: "Ersteinrichtung (Deutsch)"
+      master_value: "x"
+    - key: "IPC0006"
+      row: 23
+      ansible_id: "IPC0006"
+      title: "PC7 7 OS-Server wiederherstellen auswählen"
+      master_value: "x"
+    - key: "IPC0007"
+      row: 24
+      ansible_id: "IPC0007"
+      title: "Sprache auswählen (Deutsch)"
+      master_value: "x"
+    - key: "IPC0008"
+      row: 25
+      ansible_id: "IPC0008"
+      title: "Region auswählen (Deutschland)"
+      master_value: "x"
+    - key: "IPC0010"
+      row: 27
+      ansible_id: "IPC0010"
+      title: "Lizenzbedingungen akzeptieren"
+      master_value: "x"
+    - key: "IPC0012"
+      row: 29
+      ansible_id: "IPC0012"
+      title: "Einstellungen anpassen"
+      master_value: "x"
+    - key: "IPC0014"
+      row: 31
+      ansible_id: "IPC0014"
+      title: "Lizenzbedingungen akzeptieren"
+      master_value: "x"
+    - key: "IPC0015"
+      row: 32
+      ansible_id: "IPC0015"
+      title: "Rechnernamen anpassen"
+      master_value: "x"
+    - key: "IPC0016"
+      row: 33
+      ansible_id: "IPC0016"
+      title: "Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0018"
+      row: 35
+      ansible_id: "IPC0018"
+      title: "Erneute Anmeldung als Administrator und Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0019"
+      row: 36
+      ansible_id: "IPC0019"
+      title: "SIMATIC Management Agent"
+      master_value: "x"
+    - key: "IPC0020"
+      row: 37
+      ansible_id: "IPC0020"
+      title: "Meldung dass Systeminitialisierung erfolgt ist"
+      master_value: "x"
+    - key: "IPC0021"
+      row: 38
+      ansible_id: "IPC0021"
+      title: "Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0023"
+      row: 40
+      ansible_id: "IPC0023"
+      title: "Kommunikationseinstellungen"
+      master_value: "x"
+    - key: "IPC0024"
+      row: 41
+      ansible_id: "IPC0024"
+      title: "IP-Adresseinstellungen"
+      master_value: "61"
+    - key: "IPC0025"
+      row: 42
+      ansible_id: "IPC0025"
+      title: "Bios Versionsprüfung"
+      master_value: "x"
+    - key: "IPC0026"
+      row: 43
+      ansible_id: "IPC0026"
+      title: "UltraVNC 1.4.3.6 installieren"
+      master_value: "x"
+    - key: "IPC0027"
+      row: 44
+      ansible_id: "IPC0027"
+      title: "Windows Firewall Regeln für VNC anpassen"
+      master_value: "x"
+    - key: "IPC0028"
+      row: 45
+      ansible_id: "IPC0028"
+      title: "Registry Eintrag für VEEAM setzen"
+      master_value: "x"
+    - key: "IPC0029"
+      row: 46
+      ansible_id: "IPC0029"
+      title: "Überprüfung Funktion UltraVNC"
+      master_value: "x"
+    - key: "IPC0031"
+      row: 48
+      ansible_id: "IPC0031"
+      title: "VEEAM Credentials anpassen"
+      master_value: "x"
+    - key: "IPC0033"
+      row: 50
+      ansible_id: "IPC0033"
+      title: "Rescan des Endpunkts durchführen"
+      master_value: "x"
+    - key: "ROW0052"
+      row: 52
+      ansible_id: ""
+      title: "Veeam Backup erstellen"
+      master_value: "x"
+    - key: "IPC0036"
+      row: 56
+      ansible_id: "IPC0036"
+      title: "Bestehendes Administrator-Konto umkonfigurieren"
+      master_value: "x"
+    - key: "IPC0038"
+      row: 58
+      ansible_id: "IPC0038"
+      title: "lokalen Benutzer Administrator umbenennen"
+      master_value: "x"
+    - key: "IPC0040"
+      row: 60
+      ansible_id: "IPC0040"
+      title: "Rechner Neustart"
+      master_value: "x"
+    - key: "IPC0042"
+      row: 62
+      ansible_id: "IPC0042"
+      title: "Kommunikationseinstellungen"
+      master_value: "x"
+    - key: "IPC0043"
+      row: 66
+      ansible_id: "IPC0043"
+      title: "Date and Time"
+      master_value: "x"
+    - key: "IPC0044"
+      row: 67
+      ansible_id: "IPC0044"
+      title: "Language"
+      master_value: "x"
+    - key: "IPC0047"
+      row: 70
+      ansible_id: "IPC0047"
+      title: "Tastenkombination für Eingabesprachen deaktivieren"
+      master_value: "x"
+    - key: "IPC0048"
+      row: 71
+      ansible_id: "IPC0048"
+      title: "Region"
+      master_value: "x"
+
+  tasks:
+    - name: Report-Zeitstempel sicherstellen
+      ansible.builtin.set_fact:
+        report_timestamp: "{{ hostvars['localhost'].report_timestamp | default(lookup('pipe', 'date +%Y%m%d_%H%M%S')) }}"
+        report_timestamp_iso: "{{ hostvars['localhost'].report_timestamp_iso | default(lookup('pipe', 'date -Iseconds')) }}"
+
+    - name: Report-Verzeichnis erzeugen
+      ansible.builtin.file:
+        path: "{{ result_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: JSON-Protokoll mit allen Masterlistenzeilen erzeugen
+      ansible.builtin.copy:
+        dest: "{{ result_dir }}/{{ report_prefix }}_{{ report_timestamp }}.json"
+        mode: "0644"
+        content: |
+          [
+          {% for h in groups[station_group] | default([]) %}
+          {% if hostvars[h].ipc_validation_info is defined %}
+          {{ (hostvars[h].ipc_validation_info | combine({'scan_timestamp': report_timestamp_iso})) | to_nice_json }}
+          {% else %}
+          {
+            "scan_timestamp": {{ report_timestamp_iso | to_json }},
+            "target_timestamp": null,
+            "ip": {{ h | to_json }},
+            "ansible_reachable": false,
+            "computername": "",
+            "station_type": {{ station_type | to_json }},
+            "masterlist_column": {{ masterlist_column | to_json }},
+            "os_caption": "",
+            "os_version": "",
+            "checks": [
+            {% for c in validation_catalog %}
+              {
+                "masterlist_row": {{ c.row }},
+                "masterlist_column": {{ masterlist_column | to_json }},
+                "ansible_id": {{ c.ansible_id | to_json }},
+                "schritt": {{ c.title | to_json }},
+                "status": "Nicht_Pruefbar",
+                "istwert": "",
+                "sollwert": "Zielrechner per WinRM erreichbar",
+                "pruefmethode": "WinRM",
+                "hinweis": "WinRM nicht erreichbar oder Zugriff verweigert"
+              }{% if not loop.last %},{% endif %}
+            {% endfor %}
+            ],
+            "error": "WinRM nicht erreichbar oder Zugriff verweigert"
+          }
+          {% endif %}
+          {% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+
+    - name: CSV-Protokoll zeilenweise nach Ansible-ID erzeugen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import json
+        from pathlib import Path
+
+        json_path = Path("{{ result_dir }}/{{ report_prefix }}_{{ report_timestamp }}.json")
+        csv_path = Path("{{ result_dir }}/{{ report_prefix }}_{{ report_timestamp }}.csv")
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+
+        fieldnames = [
+            "Pruefzeit",
+            "IP",
+            "Ansible_erreichbar",
+            "Computername",
+            "Stationstyp",
+            "Masterliste_Spalte",
+            "Masterliste_Zeile",
+            "Ansible_ID",
+            "Schritt",
+            "Status",
+            "Istwert",
+            "Sollwert",
+            "Pruefmethode",
+            "Hinweis",
+        ]
+
+        rows = []
+        for host in data:
+            checks = host.get("checks") or []
+            for check in checks:
+                rows.append({
+                    "Pruefzeit": host.get("scan_timestamp", ""),
+                    "IP": host.get("ip", ""),
+                    "Ansible_erreichbar": host.get("ansible_reachable", False),
+                    "Computername": host.get("computername", ""),
+                    "Stationstyp": host.get("station_type", ""),
+                    "Masterliste_Spalte": check.get("masterlist_column", host.get("masterlist_column", "")),
+                    "Masterliste_Zeile": check.get("masterlist_row", ""),
+                    "Ansible_ID": check.get("ansible_id", ""),
+                    "Schritt": check.get("schritt", ""),
+                    "Status": check.get("status", ""),
+                    "Istwert": check.get("istwert", ""),
+                    "Sollwert": check.get("sollwert", ""),
+                    "Pruefmethode": check.get("pruefmethode", ""),
+                    "Hinweis": check.get("hinweis", ""),
+                })
+
+        rows.sort(key=lambda r: (str(r["IP"]), int(r["Masterliste_Zeile"] or 0)))
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=fieldnames,
+                delimiter=";",
+                quoting=csv.QUOTE_MINIMAL,
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        summary = {}
+        for row in rows:
+            summary[row["Status"]] = summary.get(row["Status"], 0) + 1
+        print(json.dumps({"csv": str(csv_path), "rows": len(rows), "status": summary}, ensure_ascii=False))
+        PY
+      args:
+        executable: /bin/bash
+      register: csv_result
+      changed_when: false
+
+    - name: Report-Pfade und Statusübersicht anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ result_dir }}/{{ report_prefix }}_{{ report_timestamp }}.json"
+          - "CSV:  {{ result_dir }}/{{ report_prefix }}_{{ report_timestamp }}.csv"
+          - "Zusammenfassung: {{ csv_result.stdout }}"
