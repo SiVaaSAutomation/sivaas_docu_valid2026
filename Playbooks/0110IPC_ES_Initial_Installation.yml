@@ -356,17 +356,17 @@
         $expectedPrefixLength = [int]$env:VALIDATION_EXPECTED_PREFIX_LENGTH
         $expectedGateway = [string]$env:VALIDATION_EXPECTED_GATEWAY
         $expectedAdapterPattern = [string]$env:VALIDATION_EXPECTED_ADAPTER_PATTERN
-        $expectedBiosPattern = '{{ validation_expected_bios_pattern | replace("'", "''") }}'
-        $expectedBiosReleaseDate = '{{ validation_expected_bios_release_date | replace("'", "''") }}'
-        $expectedUltraVncVersion = '{{ validation_expected_ultravnc_version | replace("'", "''") }}'
-        $expectedAdminName = '{{ validation_expected_admin_name | replace("'", "''") }}'
-        $expectedLocale = '{{ validation_expected_locale | replace("'", "''") }}'
-        $expectedGeoId = [int]'{{ validation_expected_geo_id }}'
-        $expectedTimeZone = '{{ validation_expected_time_zone | replace("'", "''") }}'
-        $commRegistryPath = '{{ validation_comm_registry_path | replace("'", "''") }}'
-        $commRemoteValueName = '{{ validation_comm_remote_value_name | replace("'", "''") }}'
-        $commPskValueName = '{{ validation_comm_psk_value_name | replace("'", "''") }}'
-        $commAdapterValueName = '{{ validation_comm_adapter_value_name | replace("'", "''") }}'
+        $expectedBiosPattern = [string]$env:VALIDATION_EXPECTED_BIOS_PATTERN
+        $expectedBiosReleaseDate = [string]$env:VALIDATION_EXPECTED_BIOS_RELEASE_DATE
+        $expectedUltraVncVersion = [string]$env:VALIDATION_EXPECTED_ULTRAVNC_VERSION
+        $expectedAdminName = [string]$env:VALIDATION_EXPECTED_ADMIN_NAME
+        $expectedLocale = [string]$env:VALIDATION_EXPECTED_LOCALE
+        $expectedGeoId = [int]$env:VALIDATION_EXPECTED_GEO_ID
+        $expectedTimeZone = [string]$env:VALIDATION_EXPECTED_TIME_ZONE
+        $commRegistryPath = [string]$env:VALIDATION_COMM_REGISTRY_PATH
+        $commRemoteValueName = [string]$env:VALIDATION_COMM_REMOTE_VALUE_NAME
+        $commPskValueName = [string]$env:VALIDATION_COMM_PSK_VALUE_NAME
+        $commAdapterValueName = [string]$env:VALIDATION_COMM_ADAPTER_VALUE_NAME
 
         function Convert-ToText {
           param([object]$Value)
@@ -910,7 +910,7 @@
         VALIDATION_EXPECTED_COMPUTERNAME: "{{ validation_expected_computername }}"
         VALIDATION_EXPECTED_OS_PATTERN: "{{ validation_expected_os_pattern }}"
         VALIDATION_EXPECTED_IP: "{{ validation_expected_ip }}"
-        VALIDATION_EXPECTED_PREFIX_LENGTH: "{{ validation_expected_prefix_length }}"
+        VALIDATION_EXPECTED_PREFIX_LENGTH: "{{ validation_expected_prefix_length | string }}"
         VALIDATION_EXPECTED_GATEWAY: "{{ validation_expected_gateway }}"
         VALIDATION_EXPECTED_ADAPTER_PATTERN: "{{ validation_expected_adapter_pattern }}"
         VALIDATION_EXPECTED_BIOS_PATTERN: "{{ validation_expected_bios_pattern }}"
@@ -918,7 +918,7 @@
         VALIDATION_EXPECTED_ULTRAVNC_VERSION: "{{ validation_expected_ultravnc_version }}"
         VALIDATION_EXPECTED_ADMIN_NAME: "{{ validation_expected_admin_name }}"
         VALIDATION_EXPECTED_LOCALE: "{{ validation_expected_locale }}"
-        VALIDATION_EXPECTED_GEO_ID: "{{ validation_expected_geo_id }}"
+        VALIDATION_EXPECTED_GEO_ID: "{{ validation_expected_geo_id | string }}"
         VALIDATION_EXPECTED_TIME_ZONE: "{{ validation_expected_time_zone }}"
         VALIDATION_COMM_REGISTRY_PATH: "{{ validation_comm_registry_path }}"
         VALIDATION_COMM_REMOTE_VALUE_NAME: "{{ validation_comm_remote_value_name }}"
