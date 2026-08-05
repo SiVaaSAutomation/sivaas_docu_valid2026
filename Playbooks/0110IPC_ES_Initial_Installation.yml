@@ -3,15 +3,8 @@
   hosts: localhost
   connection: local
   become: false
-  # become_method: runas
-  # become_user: Administrator
-  gather_facts: no
+  gather_facts: false
 
-  # vars:
-  #   target_network: "192.168.123.0/24"
-  #   winrm_port: 5985
-  #   winrm_transport: ntlm
-  #   result_dir: "./reports"
   tasks:
     - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
       ansible.builtin.assert:
@@ -35,11 +28,88 @@
           Benoetigt werden mindestens target_network, nmap_binary, win_user,
           win_password, winrm_transport, result_dir und pcs7_setup_log_path.
 
-    - name: Zielhost temporär in das Inventory aufnehmen
+    - name: Explizit angegebene Zielhosts normalisieren
+      ansible.builtin.set_fact:
+        validation_explicit_hosts: >-
+          {{
+            (
+              validation_target_hosts.split(',')
+              if (
+                validation_target_hosts is defined
+                and validation_target_hosts is string
+              )
+              else validation_target_hosts
+              if validation_target_hosts is defined
+              else [validation_target_host]
+              if (
+                validation_target_host is defined
+                and (validation_target_host | string | trim | length) > 0
+              )
+              else []
+            )
+            | map('string')
+            | map('trim')
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+
+    - name: Zielnetz mit Nmap nach erreichbaren WinRM-Systemen durchsuchen
+      ansible.builtin.command:
+        argv:
+          - "{{ nmap_binary }}"
+          - "-n"
+          - "-Pn"
+          - "-p"
+          - "{{ winrm_port | default(5985) | string }}"
+          - "--open"
+          - "-oG"
+          - "-"
+          - "{{ target_network }}"
+      register: validation_nmap_scan
+      changed_when: false
+      when: validation_explicit_hosts | length == 0
+
+    - name: Zielhosts aus expliziter Liste oder Nmap-Ergebnis bestimmen
+      ansible.builtin.set_fact:
+        validation_target_hosts_resolved: >-
+          {{
+            (
+              validation_explicit_hosts
+              if (validation_explicit_hosts | length > 0)
+              else (
+                validation_nmap_scan.stdout
+                | default('')
+                | regex_findall('(?m)^Host:\\s+([^\\s]+)')
+              )
+            )
+            | map('string')
+            | map('trim')
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+
+    - name: Sicherstellen, dass mindestens ein Zielhost gefunden wurde
+      ansible.builtin.assert:
+        that:
+          - validation_target_hosts_resolved | length > 0
+        fail_msg: >-
+          Es wurde kein IPC-ES-Zielhost gefunden.
+
+          Es kann entweder validation_target_hosts als Liste,
+          validation_target_host als einzelner Host oder ein erreichbares
+          System mit offenem WinRM-Port im target_network angegeben werden.
+
+          Zielnetz: {{ target_network }}
+          WinRM-Port: {{ winrm_port | default(5985) }}
+
+    - name: Zielhosts temporaer in das Inventory aufnehmen
       ansible.builtin.add_host:
-        name: "{{ validation_target_host }}"
-        groups: ipc_es_validation_targets
-        ansible_host: "{{ validation_target_host }}"
+        name: "{{ item }}"
+        groups:
+          - ipc_es_validation_targets
+        ansible_host: "{{ item }}"
         ansible_connection: winrm
         ansible_user: "{{ win_user }}"
         ansible_password: "{{ win_password }}"
@@ -48,11 +118,17 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_operation_timeout_sec: 60
         ansible_winrm_read_timeout_sec: 90
+      loop: "{{ validation_target_hosts_resolved }}"
+      loop_control:
+        label: "{{ item }}"
       no_log: true
 
     - name: Dynamische Zielgruppe anzeigen
       ansible.builtin.debug:
-        msg: "{{ groups['ipc_es_validation_targets'] | default([]) }}"
+        msg:
+          gruppe: "ipc_es_validation_targets"
+          anzahl: "{{ groups['ipc_es_validation_targets'] | default([]) | length }}"
+          hosts: "{{ groups['ipc_es_validation_targets'] | default([]) }}"
 
 - name: "0110 IPC ES Validation auf Windows-Zielsystem"
   hosts: ipc_es_validation_targets
@@ -75,12 +151,6 @@
     expected_terminalbus_wins_servers: "{{ expected_terminalbus_wins_servers | default([]) }}"
 
   tasks:
-    - name: WinRM-Verbindung testen
-      ansible.windows.win_ping:
-      register: validation_win_ping
-      changed_when: false
-      ignore_errors: true
-
     - name: Ergebnisliste initialisieren
       ansible.builtin.set_fact:
         validation_results: []
@@ -108,22 +178,61 @@
         validation_domain_info: {}
         validation_ou_info: {}
         validation_firewall_profiles: []
+        validation_winrm_ok: false
+
+    - name: WinRM-Verbindung testen
+      ansible.windows.win_ping:
+      register: validation_win_ping
+      changed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: WinRM-Ergebnis normalisieren
+      ansible.builtin.set_fact:
+        validation_winrm_ok: >-
+          {{
+            (validation_win_ping.ping | default('')) == 'pong'
+            and not (
+              validation_win_ping.unreachable
+              | default(false)
+              | bool
+            )
+            and not (
+              validation_win_ping.failed
+              | default(false)
+              | bool
+            )
+          }}
 
     - name: WinRM-Fehler als Ergebnis festhalten
       ansible.builtin.set_fact:
-        validation_results: "{{ validation_results + [ {
-          'ansible_id':'CONNECTIVITY',
-          'schritt':'WinRM-Verbindung',
-          'status': validation_status_nok,
-          'check_type':'connectivity',
-          'istwert':'win_ping fehlgeschlagen',
-          'sollwert':'win_ping erfolgreich',
-          'pruefmethode':'ansible.windows.win_ping',
-          'hinweis': (validation_win_ping.msg | default('Host nicht erreichbar oder Authentifizierung fehlgeschlagen')),
-          'evidence': (validation_win_ping | to_json),
-          'timestamp': validation_scan_timestamp
-          } ] }}"
-      when: validation_win_ping is failed
+        validation_results: >-
+          {{
+            validation_results
+            + [
+              {
+                'ansible_id': 'CONNECTIVITY',
+                'schritt': 'WinRM-Verbindung',
+                'status': validation_status_nok,
+                'check_type': 'connectivity',
+                'istwert': 'win_ping fehlgeschlagen',
+                'sollwert': 'win_ping erfolgreich',
+                'pruefmethode': 'ansible.windows.win_ping',
+                'hinweis': (
+                  validation_win_ping.msg
+                  | default(
+                      validation_win_ping.module_stderr
+                      | default(
+                          'Host nicht erreichbar oder Authentifizierung fehlgeschlagen'
+                        )
+                    )
+                ),
+                'evidence': validation_win_ping | to_json,
+                'timestamp': validation_scan_timestamp
+              }
+            ]
+          }}
+      when: not (validation_winrm_ok | bool)
 
     - block:
         - name: Computername lesen
@@ -731,7 +840,7 @@
               } ] }}"
           when: expected_computer_ou_regex | default('') | length > 0
 
-      when: validation_win_ping is succeeded
+      when: validation_winrm_ok | bool
 
 - name: "0110 IPC ES Validation Report"
   hosts: localhost
