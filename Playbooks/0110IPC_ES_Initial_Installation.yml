@@ -1,6 +1,6 @@
 ---
 - name: "0110 IPC ES Validation"
-  hosts: all
+  hosts: localhost
   gather_facts: false
   any_errors_fatal: false
   vars:
@@ -16,9 +16,7 @@
     expected_terminalbus_dns_servers: "{{ expected_terminalbus_dns_servers | default([]) }}"
     expected_terminalbus_wins_servers: "{{ expected_terminalbus_wins_servers | default([]) }}"
   tasks:
-    - name: Controller-Hosts aus Validierung ausschließen
-      meta: end_host
-      when: inventory_hostname in ['localhost', 'ansible_controller']
+    
     - name: Ergebnisliste initialisieren
       ansible.builtin.set_fact:
         validation_results: []
