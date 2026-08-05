@@ -12,9 +12,9 @@
     masterlist_column: "O"
     report_prefix: "ipc_os_server_installation_z73"
 
-    role_target_ip: "{{ ipc_os_server_target_ip | default('') }}"
-    target_ip_octet: "{{ ipc_os_server_ip_octet | default('61') }}"
+    discovery_latest_file: "{{ ipc_discovery_file | default(result_dir ~ '/ipc_discovery_groups_latest.json') }}"
     expected_computername: "{{ ipc_os_server_computername | default('OSS01APERI') }}"
+    expected_computername_by_ip: "{{ ipc_os_server_computername_by_ip | default({}) }}"
     expected_os_pattern: "Windows Server 2022"
 
     expected_terminalbus_prefix: "{{ ipc_terminalbus_prefix | default('192.168.210') }}"
@@ -212,21 +212,81 @@
     - name: Benötigte Semaphore-Variablen prüfen
       ansible.builtin.assert:
         that:
-          - target_network is defined
           - win_user is defined
           - win_password is defined
           - winrm_transport is defined
           - nmap_binary is defined
           - result_dir is defined
-          - target_network | string | length > 0
           - win_user | string | length > 0
           - win_password | string | length > 0
           - winrm_transport | string | length > 0
           - nmap_binary | string | length > 0
           - result_dir | string | length > 0
         fail_msg: >-
-          Erforderlich sind target_network, win_user, win_password,
-          winrm_transport, nmap_binary und result_dir.
+          Erforderlich sind win_user, win_password, winrm_transport,
+          nmap_binary und result_dir.
+
+    - name: Discovery-Gruppendatei prüfen
+      ansible.builtin.stat:
+        path: "{{ discovery_latest_file }}"
+      register: discovery_file_stat
+
+    - name: Abbrechen, wenn die Discovery-Gruppendatei fehlt
+      ansible.builtin.assert:
+        that:
+          - discovery_file_stat.stat.exists | default(false)
+          - discovery_file_stat.stat.isreg | default(false)
+        fail_msg: >-
+          Die Datei {{ discovery_latest_file }} wurde nicht gefunden.
+          Zuerst 0000IPC_Discovery_Classification.yml ausführen oder
+          ipc_discovery_file auf die richtige Datei setzen.
+
+    - name: Discovery-Gruppendatei einlesen
+      ansible.builtin.slurp:
+        src: "{{ discovery_latest_file }}"
+      register: discovery_file_raw
+
+    - name: Discovery-Daten aus JSON übernehmen
+      ansible.builtin.set_fact:
+        ipc_discovery_data: "{{ discovery_file_raw.content | b64decode | from_json }}"
+
+    - name: Struktur der Discovery-Datei prüfen
+      ansible.builtin.assert:
+        that:
+          - ipc_discovery_data is mapping
+          - ipc_discovery_data.groups is defined
+          - ipc_discovery_data.groups is mapping
+          - ipc_discovery_data.groups.ipc_os is defined
+          - ipc_discovery_data.groups.ipc_os is sequence
+        fail_msg: >-
+          {{ discovery_latest_file }} enthält keine gültige Gruppe groups.ipc_os.
+          Bitte 0000IPC_Discovery_Classification.yml erneut ausführen.
+
+    - name: OS-Server aus der Discovery-Gruppe übernehmen
+      ansible.builtin.set_fact:
+        ipc_os_server_discovery_hosts: >-
+          {{
+            ipc_discovery_data.groups.ipc_os
+            | selectattr('ip', 'defined')
+            | selectattr('ip', 'string')
+            | list
+          }}
+
+    - name: Geladene OS-Server-Zielmenge anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Discovery-Datei: {{ discovery_latest_file }}"
+          - "Discovery-Zeit: {{ ipc_discovery_data.generated_at | default('') }}"
+          - "Stationstyp: {{ station_type }}"
+          - "OS-Server-IP-Adressen: {{ ipc_os_server_discovery_hosts | map(attribute='ip') | list }}"
+          - "Anzahl OS-Server-Zielrechner: {{ ipc_os_server_discovery_hosts | length }}"
+
+    - name: Hinweis ausgeben, wenn kein OS-Server klassifiziert wurde
+      ansible.builtin.debug:
+        msg: >-
+          In groups.ipc_os sind keine IP-Adressen enthalten. Die Prüfung enthält
+          deshalb keine Zielrechner; JSON und CSV werden ohne Ergebniszeilen erzeugt.
+      when: ipc_os_server_discovery_hosts | length == 0
 
     - name: nmap auf dem Ansible-Controller prüfen
       ansible.builtin.command: "{{ nmap_binary }} --version"
@@ -239,57 +299,62 @@
         msg: "nmap ist unter {{ nmap_binary }} nicht ausführbar."
       when: nmap_check.rc != 0
 
-    - name: Ziel-IP aus Rollenvariable oder /24-Zielnetz bilden
-      ansible.builtin.set_fact:
-        resolved_target_ip: >-
-          {{
-            role_target_ip
-            if role_target_ip | string | length > 0
-            else (
-              (target_network | regex_replace('/.*$', ''))
-              | regex_replace('\\.[0-9]+$', '.' ~ (target_ip_octet | string))
-            )
-          }}
-
-    - name: Ziel-IP anzeigen
-      ansible.builtin.debug:
-        msg:
-          - "Stationstyp: {{ station_type }}"
-          - "Masterlisten-Spalte: {{ masterlist_column }}"
-          - "Ziel-IP: {{ resolved_target_ip }}"
-          - "Erwarteter Rechnername: {{ expected_computername }}"
-
-    - name: WinRM-Port des Zielrechners ermitteln
+    - name: Alle OS-Server-IP-Adressen erneut mit nmap auf WinRM prüfen
       ansible.builtin.shell: |
         set -o pipefail
-        scan="$({{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ resolved_target_ip }} -oG - 2>/dev/null || true)"
+        target_ip={{ item.ip | quote }}
+        scan="$({{ nmap_binary }} -n -Pn -p 5985,5986 --open "$target_ip" -oG - 2>/dev/null || true)"
+
+        open_ports=""
+        if grep -q '5985/open/tcp' <<<"$scan"; then
+          open_ports="5985"
+        fi
         if grep -q '5986/open/tcp' <<<"$scan"; then
-          printf '%s;5986;https' '{{ resolved_target_ip }}'
+          if [[ -n "$open_ports" ]]; then
+            open_ports="${open_ports},5986"
+          else
+            open_ports="5986"
+          fi
+        fi
+
+        if grep -q '5986/open/tcp' <<<"$scan"; then
+          printf '%s;true;5986;https;%s' "$target_ip" "$open_ports"
         elif grep -q '5985/open/tcp' <<<"$scan"; then
-          printf '%s;5985;http' '{{ resolved_target_ip }}'
+          printf '%s;true;5985;http;%s' "$target_ip" "$open_ports"
         else
-          # Host trotzdem aufnehmen, damit alle Masterlistenzeilen als Nicht_Pruefbar protokolliert werden.
-          printf '%s;5985;http' '{{ resolved_target_ip }}'
+          # Host bleibt in der Zielgruppe, damit er als Nicht_Pruefbar protokolliert wird.
+          printf '%s;false;5985;http;' "$target_ip"
         fi
       args:
         executable: /bin/bash
-      register: winrm_scan
+      loop: "{{ ipc_os_server_discovery_hosts }}"
+      loop_control:
+        label: "{{ item.ip }}"
+      register: os_server_nmap_scan_results
       changed_when: false
+      failed_when: false
 
-    - name: WinRM-Verbindungsparameter zerlegen
-      ansible.builtin.set_fact:
-        winrm_connection_parts: "{{ (winrm_scan.stdout | trim).split(';') }}"
+    - name: nmap-Ergebnisse der OS-Server-IP-Adressen anzeigen
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.ip }}: Nmap-WinRM-erreichbar={{ item.stdout.split(';')[1] | default('false') }},
+          Port={{ item.stdout.split(';')[2] | default('5985') }},
+          Schema={{ item.stdout.split(';')[3] | default('http') }},
+          offene Ports={{ item.stdout.split(';')[4] | default('') }}
+      loop: "{{ os_server_nmap_scan_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.ip }}"
 
-    - name: Zielrechner dynamisch aufnehmen
+    - name: Alle OS-Server-Zielrechner dynamisch aufnehmen
       ansible.builtin.add_host:
-        name: "{{ resolved_target_ip }}"
+        name: "{{ scan_parts[0] }}"
         groups: "{{ station_group }}"
-        ansible_host: "{{ resolved_target_ip }}"
+        ansible_host: "{{ scan_parts[0] }}"
         ansible_connection: winrm
         ansible_user: "{{ win_user }}"
         ansible_password: "{{ win_password }}"
-        ansible_port: "{{ winrm_connection_parts[1] | int }}"
-        ansible_winrm_scheme: "{{ winrm_connection_parts[2] }}"
+        ansible_port: "{{ scan_parts[2] | int }}"
+        ansible_winrm_scheme: "{{ scan_parts[3] }}"
         ansible_winrm_transport: "{{ winrm_transport }}"
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_operation_timeout_sec: 90
@@ -299,9 +364,13 @@
         validation_master_column: "{{ masterlist_column }}"
         validation_report_prefix: "{{ report_prefix }}"
         validation_check_catalog: "{{ validation_catalog }}"
-        validation_expected_computername: "{{ expected_computername }}"
+        validation_expected_computername: >-
+          {{
+            expected_computername_by_ip[item.item.ip]
+            | default(expected_computername)
+          }}
         validation_expected_os_pattern: "{{ expected_os_pattern }}"
-        validation_expected_ip: "{{ resolved_target_ip }}"
+        validation_expected_ip: "{{ scan_parts[0] }}"
         validation_expected_prefix_length: "{{ expected_prefix_length }}"
         validation_expected_gateway: "{{ expected_gateway }}"
         validation_expected_adapter_pattern: "{{ expected_adapter_pattern }}"
@@ -316,6 +385,20 @@
         validation_comm_remote_value_name: "{{ comm_remote_value_name }}"
         validation_comm_psk_value_name: "{{ comm_psk_value_name }}"
         validation_comm_adapter_value_name: "{{ comm_adapter_value_name }}"
+
+        validation_discovery_group: "ipc_os"
+        validation_discovery_file: "{{ discovery_latest_file }}"
+        validation_discovery_generated_at: "{{ ipc_discovery_data.generated_at | default('') }}"
+        validation_discovery_computername: "{{ item.item.computername | default('') }}"
+        validation_nmap_reachable: "{{ scan_parts[1] | bool }}"
+        validation_nmap_winrm_port: "{{ scan_parts[2] | int }}"
+        validation_nmap_winrm_scheme: "{{ scan_parts[3] }}"
+        validation_nmap_open_ports: "{{ scan_parts[4] | default('') }}"
+      vars:
+        scan_parts: "{{ (item.stdout | trim).split(';') }}"
+      loop: "{{ os_server_nmap_scan_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.ip }}"
       no_log: true
 
 
@@ -328,6 +411,7 @@
     - name: WinRM-Verbindung testen
       ansible.windows.win_ping:
       register: win_ping_result
+      when: validation_nmap_reachable | default(false) | bool
       changed_when: false
       failed_when: false
       ignore_unreachable: true
@@ -1141,12 +1225,33 @@
           [
           {% for h in groups[station_group] | default([]) %}
           {% if hostvars[h].ipc_validation_info is defined %}
-          {{ (hostvars[h].ipc_validation_info | combine({'scan_timestamp': report_timestamp_iso})) | to_nice_json }}
+          {{
+            (
+              hostvars[h].ipc_validation_info
+              | combine({
+                  'scan_timestamp': report_timestamp_iso,
+                  'discovery_group': hostvars[h].validation_discovery_group | default('ipc_os'),
+                  'discovery_file': hostvars[h].validation_discovery_file | default(''),
+                  'discovery_generated_at': hostvars[h].validation_discovery_generated_at | default(''),
+                  'nmap_reachable': hostvars[h].validation_nmap_reachable | default(false) | bool,
+                  'nmap_winrm_port': hostvars[h].validation_nmap_winrm_port | default(''),
+                  'nmap_winrm_scheme': hostvars[h].validation_nmap_winrm_scheme | default(''),
+                  'nmap_open_ports': hostvars[h].validation_nmap_open_ports | default('')
+                })
+            ) | to_nice_json
+          }}
           {% else %}
           {
             "scan_timestamp": {{ report_timestamp_iso | to_json }},
             "target_timestamp": null,
             "ip": {{ h | to_json }},
+            "discovery_group": {{ hostvars[h].validation_discovery_group | default('ipc_os') | to_json }},
+            "discovery_file": {{ hostvars[h].validation_discovery_file | default('') | to_json }},
+            "discovery_generated_at": {{ hostvars[h].validation_discovery_generated_at | default('') | to_json }},
+            "nmap_reachable": {{ hostvars[h].validation_nmap_reachable | default(false) | bool | to_json }},
+            "nmap_winrm_port": {{ hostvars[h].validation_nmap_winrm_port | default('') | to_json }},
+            "nmap_winrm_scheme": {{ hostvars[h].validation_nmap_winrm_scheme | default('') | to_json }},
+            "nmap_open_ports": {{ hostvars[h].validation_nmap_open_ports | default('') | to_json }},
             "ansible_reachable": false,
             "computername": "",
             "station_type": {{ station_type | to_json }},
@@ -1162,13 +1267,25 @@
                 "schritt": {{ c.title | to_json }},
                 "status": "Nicht_Pruefbar",
                 "istwert": "",
-                "sollwert": "Zielrechner per WinRM erreichbar",
-                "pruefmethode": "WinRM",
-                "hinweis": "WinRM nicht erreichbar oder Zugriff verweigert"
+                "sollwert": "Nmap erkennt offenen WinRM-Port und Zielrechner ist per WinRM erreichbar",
+                "pruefmethode": "Nmap + WinRM",
+                "hinweis": {{
+                  (
+                    'Nmap hat keinen offenen WinRM-Port 5985/5986 erkannt'
+                    if not (hostvars[h].validation_nmap_reachable | default(false) | bool)
+                    else 'Nmap hat einen WinRM-Port erkannt, aber WinRM war nicht erreichbar oder der Zugriff wurde verweigert'
+                  ) | to_json
+                }}
               }{% if not loop.last %},{% endif %}
             {% endfor %}
             ],
-            "error": "WinRM nicht erreichbar oder Zugriff verweigert"
+            "error": {{
+              (
+                'Nmap hat keinen offenen WinRM-Port 5985/5986 erkannt'
+                if not (hostvars[h].validation_nmap_reachable | default(false) | bool)
+                else 'Nmap hat einen WinRM-Port erkannt, aber WinRM war nicht erreichbar oder der Zugriff wurde verweigert'
+              ) | to_json
+            }}
           }
           {% endif %}
           {% if not loop.last %},{% endif %}
@@ -1190,6 +1307,12 @@
         fieldnames = [
             "Pruefzeit",
             "IP",
+            "Discovery_Gruppe",
+            "Discovery_Zeit",
+            "Nmap_WinRM_erreichbar",
+            "Nmap_WinRM_Port",
+            "Nmap_WinRM_Schema",
+            "Nmap_offene_WinRM_Ports",
             "Ansible_erreichbar",
             "Computername",
             "Stationstyp",
@@ -1211,6 +1334,12 @@
                 rows.append({
                     "Pruefzeit": host.get("scan_timestamp", ""),
                     "IP": host.get("ip", ""),
+                    "Discovery_Gruppe": host.get("discovery_group", ""),
+                    "Discovery_Zeit": host.get("discovery_generated_at", ""),
+                    "Nmap_WinRM_erreichbar": host.get("nmap_reachable", False),
+                    "Nmap_WinRM_Port": host.get("nmap_winrm_port", ""),
+                    "Nmap_WinRM_Schema": host.get("nmap_winrm_scheme", ""),
+                    "Nmap_offene_WinRM_Ports": host.get("nmap_open_ports", ""),
                     "Ansible_erreichbar": host.get("ansible_reachable", False),
                     "Computername": host.get("computername", ""),
                     "Stationstyp": host.get("station_type", ""),
