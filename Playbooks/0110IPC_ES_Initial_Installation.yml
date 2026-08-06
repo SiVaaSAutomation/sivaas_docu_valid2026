@@ -41,10 +41,74 @@
           Installation zum Beispiel mit: sudo apt install nmap
       when: validation_nmap_check.rc != 0
 
-    - name: Netzwerk nach offenen WinRM-Ports 5985 und 5986 scannen
+    - name: Pfad zur IPC-Discovery-Datei festlegen
+      ansible.builtin.set_fact:
+        validation_discovery_file: >-
+          {{
+            ipc_discovery_file
+            | default(result_dir ~ '/ipc_discovery_groups_latest.json')
+          }}
+
+    - name: Pruefen, ob die IPC-Discovery-Datei vorhanden ist
+      ansible.builtin.stat:
+        path: "{{ validation_discovery_file }}"
+      register: validation_discovery_file_stat
+
+    - name: Abbrechen, wenn die IPC-Discovery-Datei fehlt
+      ansible.builtin.fail:
+        msg: >-
+          Die IPC-Discovery-Datei {{ validation_discovery_file }} wurde nicht
+          gefunden. Fuehre zuerst das Playbook
+          0000IPC_Discovery_Classification.yml aus.
+      when: not (validation_discovery_file_stat.stat.exists | default(false))
+
+    - name: IPC-Discovery-Datei einlesen
+      ansible.builtin.slurp:
+        src: "{{ validation_discovery_file }}"
+      register: validation_discovery_file_raw
+
+    - name: IPC-Discovery-Daten speichern
+      ansible.builtin.set_fact:
+        validation_discovery_data: >-
+          {{
+            validation_discovery_file_raw.content
+            | b64decode
+            | from_json
+          }}
+
+    - name: IP-Adressen aus der Gruppe IPC ES speichern
+      ansible.builtin.set_fact:
+        validation_ipc_es_ips: >-
+          {{
+            validation_discovery_data.groups.ipc_es
+            | default([])
+            | selectattr('ip', 'defined')
+            | map(attribute='ip')
+            | map('string')
+            | map('trim')
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+
+    - name: IPC-ES-IP-Adressen anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Discovery-Datei: {{ validation_discovery_file }}"
+          - "IPC-ES-Teilnehmer: {{ validation_ipc_es_ips | length }}"
+          - "IPC-ES-IP-Adressen: {{ validation_ipc_es_ips }}"
+
+    - name: Hinweis ausgeben, wenn die Gruppe IPC ES leer ist
+      ansible.builtin.debug:
+        msg: >-
+          In {{ validation_discovery_file }} sind unter groups.ipc_es keine
+          IP-Adressen eingetragen. Es werden deshalb keine Zielsysteme geprueft.
+      when: validation_ipc_es_ips | length == 0
+
+    - name: IPC-ES-IP-Adressen nach offenen WinRM-Ports 5985 und 5986 scannen
       ansible.builtin.shell: |
         set -o pipefail
-        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ target_network }} -oG - |
+        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ validation_ipc_es_ips | join(' ') }} -oG - |
         awk '
           /Ports:/ {
             host=$2
@@ -63,6 +127,7 @@
         executable: /bin/bash
       register: validation_scan_result
       changed_when: false
+      when: validation_ipc_es_ips | length > 0
 
     - name: Gefundene IP-Adressen und WinRM-Infos speichern
       ansible.builtin.set_fact:
@@ -90,16 +155,17 @@
       ansible.builtin.debug:
         var: validation_discovered_ips
 
-    - name: Hinweis ausgeben, wenn keine WinRM-Teilnehmer gefunden wurden
+    - name: Hinweis ausgeben, wenn kein IPC-ES-Teilnehmer per WinRM erreichbar ist
       ansible.builtin.debug:
         msg: >-
-          Es wurden keine Hosts mit offenem WinRM-Port 5985 oder 5986
-          im Zielnetz {{ target_network }} gefunden.
-          Der Report enthaelt dann keine Zielsysteme.
-          Pruefe target_network, Firewall und WinRM.
-      when: validation_discovered_winrm_hosts | length == 0
+          Von den IP-Adressen aus groups.ipc_es wurde kein Host mit offenem
+          WinRM-Port 5985 oder 5986 gefunden.
+          Pruefe Firewall, WinRM und die Discovery-Datei.
+      when:
+        - validation_ipc_es_ips | length > 0
+        - validation_discovered_winrm_hosts | length == 0
 
-    - name: Gefundene Hosts temporaer in das Inventory aufnehmen
+    - name: Gefundene IPC-ES-Hosts temporaer in das Inventory aufnehmen
       ansible.builtin.add_host:
         name: "{{ item.split(';')[0] }}"
         groups: ipc_es_validation_targets
