@@ -755,9 +755,9 @@
           ansible.builtin.set_fact:
             validation_terminalbus_config: >-
               {{
-                (validation_netconfig | selectattr('InterfaceAlias', 'equalto', expected_terminalbus_adapter_name) | list | first)
-                if ((validation_netconfig | selectattr('InterfaceAlias', 'equalto', expected_terminalbus_adapter_name) | list | length) > 0)
-                else {'InterfaceAlias': expected_terminalbus_adapter_name, 'IPv4Address': [], 'IPv4DefaultGateway': [], 'DnsServer': []}
+                (validation_netconfig | selectattr('InterfaceAlias', 'equalto', validation_expected_terminalbus_adapter_name) | list | first)
+                if ((validation_netconfig | selectattr('InterfaceAlias', 'equalto', validation_expected_terminalbus_adapter_name) | list | length) > 0)
+                else {'InterfaceAlias': validation_expected_terminalbus_adapter_name, 'IPv4Address': [], 'IPv4DefaultGateway': [], 'DnsServer': []}
               }}
 
         - name: IPC0043 Zeitzone
@@ -795,10 +795,10 @@
             validation_results: "{{ validation_results + [ {
               'ansible_id':'IPC0050',
               'schritt':'Terminalbus-Adresse einstellen',
-              'status': (validation_status_ok if (((validation_terminalbus_config.IPv4Address | default([]) | select('match', expected_terminalbus_ip_regex) | list | length) > 0)) else validation_status_nok),
+              'status': (validation_status_ok if (((validation_terminalbus_config.IPv4Address | default([]) | select('match', validation_expected_terminalbus_ip_regex) | list | length) > 0)) else validation_status_nok),
               'check_type':'direct',
               'istwert': ('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; IP=' ~ ((validation_terminalbus_config.IPv4Address | default([])) | join(', '))),
-              'sollwert': ('Adapter=' ~ expected_terminalbus_adapter_name ~ '; IP Regex=' ~ expected_terminalbus_ip_regex),
+              'sollwert': ('Adapter=' ~ validation_expected_terminalbus_adapter_name ~ '; IP Regex=' ~ validation_expected_terminalbus_ip_regex),
               'pruefmethode':'Get-NetIPConfiguration',
               'hinweis':'',
               'evidence': (validation_terminalbus_config | to_json),
@@ -810,10 +810,10 @@
             validation_results: "{{ validation_results + [ {
               'ansible_id':'IPC0051',
               'schritt':'Terminalbus Gateway korrigieren',
-              'status': (validation_status_ok if ((expected_terminalbus_gateway | length > 0) and ((validation_terminalbus_config.IPv4DefaultGateway | default([])) | select('equalto', expected_terminalbus_gateway) | list | length > 0)) else validation_status_nok),
+              'status': (validation_status_ok if ((validation_expected_terminalbus_gateway | length > 0) and ((validation_terminalbus_config.IPv4DefaultGateway | default([])) | select('equalto', validation_expected_terminalbus_gateway) | list | length > 0)) else validation_status_nok),
               'check_type':'direct',
               'istwert': ('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; Gateway=' ~ ((validation_terminalbus_config.IPv4DefaultGateway | default([])) | join(', '))),
-              'sollwert': ('Gateway=' ~ expected_terminalbus_gateway),
+              'sollwert': ('Gateway=' ~ validation_expected_terminalbus_gateway),
               'pruefmethode':'Get-NetIPConfiguration',
               'hinweis':'',
               'evidence': (validation_terminalbus_config | to_json),
@@ -825,10 +825,10 @@
             validation_results: "{{ validation_results + [ {
               'ansible_id':'IPC0055',
               'schritt':'DNS und WINS-Server eintragen',
-              'status': (validation_status_ok if (((expected_terminalbus_dns_servers | difference(validation_terminalbus_config.DnsServer | default([])) | length) == 0) and ((expected_terminalbus_wins_servers | length == 0) or ((expected_terminalbus_wins_servers | join(',')) in ((validation_registry.WINS | default([]) | map(attribute='NameServerList') | list | join(';')))))) else validation_status_nok),
+              'status': (validation_status_ok if (((validation_expected_terminalbus_dns_servers | difference(validation_terminalbus_config.DnsServer | default([])) | length) == 0) and ((validation_expected_terminalbus_wins_servers | length == 0) or ((validation_expected_terminalbus_wins_servers | join(',')) in ((validation_registry.WINS | default([]) | map(attribute='NameServerList') | list | join(';')))))) else validation_status_nok),
               'check_type':'direct',
               'istwert': ('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; DNS=' ~ ((validation_terminalbus_config.DnsServer | default([])) | join(', ')) ~ '; WINS=' ~ ((validation_registry.WINS | default([]) | map(attribute='NameServerList') | list | join(' | ')))),
-              'sollwert': ('DNS=' ~ (expected_terminalbus_dns_servers | join(', ')) ~ '; WINS=' ~ (expected_terminalbus_wins_servers | join(', '))),
+              'sollwert': ('DNS=' ~ (validation_expected_terminalbus_dns_servers | join(', ')) ~ '; WINS=' ~ (validation_expected_terminalbus_wins_servers | join(', '))),
               'pruefmethode':'Get-NetIPConfiguration + Registry',
               'hinweis':'',
               'evidence': (({'netconfig': validation_terminalbus_config, 'wins': validation_registry.WINS | default([])}) | to_json),
@@ -855,16 +855,16 @@
             validation_results: "{{ validation_results + [ {
               'ansible_id':'IPC0059',
               'schritt':'Rechner in die Domäne aufnehmen',
-              'status': (validation_status_ok if ((expected_domain_name | length > 0) and ((validation_domain_info.Domain | default('')) | lower == (expected_domain_name | lower))) else validation_status_nok),
+              'status': (validation_status_ok if ((validation_expected_domain_name | length > 0) and ((validation_domain_info.Domain | default('')) | lower == (validation_expected_domain_name | lower))) else validation_status_nok),
               'check_type':'direct',
               'istwert': ('PartOfDomain=' ~ (validation_domain_info.PartOfDomain | default(false) | string) ~ '; Domain=' ~ (validation_domain_info.Domain | default(''))),
-              'sollwert': ('Domain=' ~ expected_domain_name),
+              'sollwert': ('Domain=' ~ validation_expected_domain_name),
               'pruefmethode':'Win32_ComputerSystem',
               'hinweis':'',
               'evidence': (validation_domain_info | to_json),
               'timestamp': validation_scan_timestamp
               } ] }}"
-          when: expected_domain_name | length > 0
+          when: validation_expected_domain_name | length > 0
 
         - name: IPC0060 OU
           ansible.builtin.set_fact:
