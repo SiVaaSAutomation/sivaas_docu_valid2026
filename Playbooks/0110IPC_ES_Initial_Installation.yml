@@ -202,12 +202,12 @@
     validation_status_info: "Info"
     validation_status_nr: "Nicht relevant"
 
-    expected_terminalbus_adapter_name: "{{ expected_terminalbus_adapter_name | default('Terminalbus') }}"
-    expected_domain_name: "{{ expected_domain_name | default('') }}"
-    expected_terminalbus_ip_regex: "{{ expected_terminalbus_ip_regex | default('^192\\.168\\.210\\.') }}"
-    expected_terminalbus_gateway: "{{ expected_terminalbus_gateway | default('') }}"
-    expected_terminalbus_dns_servers: "{{ expected_terminalbus_dns_servers | default([]) }}"
-    expected_terminalbus_wins_servers: "{{ expected_terminalbus_wins_servers | default([]) }}"
+    validation_expected_terminalbus_adapter_name: "{{ expected_terminalbus_adapter_name | default('Terminalbus') }}"
+    validation_expected_domain_name: "{{ expected_domain_name | default('') }}"
+    validation_expected_terminalbus_ip_regex: "{{ expected_terminalbus_ip_regex | default('^192\\.168\\.210\\.') }}"
+    validation_expected_terminalbus_gateway: "{{ expected_terminalbus_gateway | default('') }}"
+    validation_expected_terminalbus_dns_servers: "{{ expected_terminalbus_dns_servers | default([]) }}"
+    validation_expected_terminalbus_wins_servers: "{{ expected_terminalbus_wins_servers | default([]) }}"
 
   tasks:
     - name: Ergebnisliste initialisieren
