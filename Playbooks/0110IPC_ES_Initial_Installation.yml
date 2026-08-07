@@ -1,137 +1,41 @@
 ---
-- name: "0110 IPC ES Validation vorbereiten"
+- name: "0110 IPC ES - Discovery einlesen und Zielsysteme vorbereiten"
   hosts: localhost
   connection: local
   become: false
   gather_facts: false
 
+  vars:
+    # Die PowerShell-Skripte liegen im Repository auf derselben Ebene wie
+    # der Ordner Playbooks:
+    #   <Repository>/Playbooks/0110IPC_ES_PowerShell_Validation.yml
+    #   <Repository>/PowershellBatch/1.ps1 ... 6.ps1
+    validation_script_source_dir: "{{ playbook_dir }}/../PowershellBatch"
+
+    # Exemplarische Skriptnamen. Spaeter einfach durch die echten Namen ersetzen.
+    validation_script_names:
+      - "1.ps1"
+      - "2.ps1"
+      - "3.ps1"
+      - "4.ps1"
+      - "5.ps1"
+      - "6.ps1"
+
   tasks:
-    - name: Pruefen, ob benoetigte Semaphore-Variablen uebergeben wurden
+    - name: Benoetigte Semaphore-Variablen pruefen
       ansible.builtin.assert:
         that:
-          - target_network is defined
-          - nmap_binary is defined
           - win_user is defined
           - win_password is defined
           - winrm_transport is defined
           - result_dir is defined
-          - pcs7_setup_log_path is defined
-          - target_network | string | length > 0
-          - nmap_binary | string | length > 0
           - win_user | string | length > 0
           - win_password | string | length > 0
           - winrm_transport | string | length > 0
           - result_dir | string | length > 0
-          - pcs7_setup_log_path | string | length > 0
         fail_msg: >-
-          Es fehlen benoetigte Variablen aus Semaphore.
-          Benoetigt werden mindestens target_network, nmap_binary, win_user,
-          win_password, winrm_transport, result_dir und pcs7_setup_log_path.
-
-    - name: Pruefen, ob nmap auf dem Ansible-Controller vorhanden ist
-      ansible.builtin.command: "{{ nmap_binary }} --version"
-      register: validation_nmap_check
-      changed_when: false
-      failed_when: false
-
-    - name: Abbrechen, wenn nmap fehlt
-      ansible.builtin.fail:
-        msg: >-
-          nmap ist auf dem Ansible-Controller nicht installiert.
-          Installation zum Beispiel mit: sudo apt install nmap
-      when: validation_nmap_check.rc != 0
-
-    - name: Pfad zur Installationsliste festlegen
-      ansible.builtin.set_fact:
-        validation_installation_list_file: >-
-          {{
-            ipc_installation_list_path
-            | default(playbook_dir ~ '/../IPC_Liste_Kompakt.csv')
-          }}
-
-    - name: Pruefen, ob die Installationsliste vorhanden ist
-      ansible.builtin.stat:
-        path: "{{ validation_installation_list_file }}"
-      register: validation_installation_list_stat
-
-    - name: Abbrechen, wenn die Installationsliste fehlt
-      ansible.builtin.fail:
-        msg: >-
-          Die Installationsliste {{ validation_installation_list_file }} wurde
-          nicht gefunden. Lege IPC_Liste_Kompakt.csv im Repository ab oder setze
-          ipc_installation_list_path in Semaphore.
-      when: not (validation_installation_list_stat.stat.exists | default(false))
-
-    - name: Vollstaendigen IPC-Pruefkatalog aus der CSV einlesen
-      ansible.builtin.shell: |
-        set -euo pipefail
-        "{{ ansible_playbook_python }}" - <<'PY'
-        import csv
-        import json
-        import os
-        import re
-        from pathlib import Path
-
-        path = Path(os.environ["IPC_INSTALLATION_LIST_PATH"])
-        raw = path.read_bytes()
-        text = None
-        used_encoding = None
-        for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
-            try:
-                text = raw.decode(encoding)
-                used_encoding = encoding
-                break
-            except UnicodeDecodeError:
-                continue
-        if text is None:
-            raise RuntimeError(f"Kodierung von {path} konnte nicht ermittelt werden")
-
-        catalog = []
-        seen = set()
-        reader = csv.reader(text.splitlines(), delimiter=";")
-        for row in reader:
-            if not row:
-                continue
-            ansible_id = row[0].strip() if len(row) > 0 else ""
-            if not re.fullmatch(r"IPC\d{4}", ansible_id):
-                continue
-            if ansible_id in seen:
-                continue
-            seen.add(ansible_id)
-            catalog.append({
-                "ansible_id": ansible_id,
-                "schritt": row[1].strip() if len(row) > 1 else "",
-                "anleitung": row[2].strip() if len(row) > 2 else "",
-            })
-
-        catalog.sort(key=lambda item: int(item["ansible_id"][3:]))
-        if not catalog:
-            raise RuntimeError(f"Keine IPC-IDs in {path} gefunden")
-        print(json.dumps({
-            "source": str(path),
-            "encoding": used_encoding,
-            "count": len(catalog),
-            "catalog": catalog,
-        }, ensure_ascii=False))
-        PY
-      args:
-        executable: /bin/bash
-      environment:
-        IPC_INSTALLATION_LIST_PATH: "{{ validation_installation_list_file }}"
-      register: validation_catalog_raw
-      changed_when: false
-
-    - name: IPC-Pruefkatalog speichern
-      ansible.builtin.set_fact:
-        validation_catalog_meta: "{{ validation_catalog_raw.stdout | from_json }}"
-        validation_check_catalog: "{{ (validation_catalog_raw.stdout | from_json).catalog }}"
-
-    - name: IPC-Pruefkatalog anzeigen
-      ansible.builtin.debug:
-        msg:
-          - "Installationsliste: {{ validation_catalog_meta.source }}"
-          - "Kodierung: {{ validation_catalog_meta.encoding }}"
-          - "IPC-IDs: {{ validation_catalog_meta.count }}"
+          Benoetigt werden mindestens win_user, win_password,
+          winrm_transport und result_dir.
 
     - name: Pfad zur IPC-Discovery-Datei festlegen
       ansible.builtin.set_fact:
@@ -140,1616 +44,272 @@
             ipc_discovery_file
             | default(result_dir ~ '/ipc_discovery_groups_latest.json')
           }}
+        validation_run_id: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
-    - name: Pruefen, ob die IPC-Discovery-Datei vorhanden ist
+    - name: IPC-Discovery-Datei pruefen
       ansible.builtin.stat:
         path: "{{ validation_discovery_file }}"
-      register: validation_discovery_file_stat
+      register: validation_discovery_stat
 
-    - name: Abbrechen, wenn die IPC-Discovery-Datei fehlt
+    - name: Abbrechen wenn IPC-Discovery-Datei fehlt
       ansible.builtin.fail:
         msg: >-
-          Die IPC-Discovery-Datei {{ validation_discovery_file }} wurde nicht
-          gefunden. Fuehre zuerst das Playbook
-          0000IPC_Discovery_Classification.yml aus.
-      when: not (validation_discovery_file_stat.stat.exists | default(false))
+          {{ validation_discovery_file }} wurde nicht gefunden.
+          Fuehre zuerst 0000IPC_Discovery_Classification.yml aus.
+      when: not (validation_discovery_stat.stat.exists | default(false))
 
     - name: IPC-Discovery-Datei einlesen
       ansible.builtin.slurp:
         src: "{{ validation_discovery_file }}"
-      register: validation_discovery_file_raw
+      register: validation_discovery_raw
 
     - name: IPC-Discovery-Daten speichern
       ansible.builtin.set_fact:
         validation_discovery_data: >-
-          {{
-            validation_discovery_file_raw.content
-            | b64decode
-            | from_json
-          }}
-
-    - name: IP-Adressen aus der Gruppe IPC ES speichern
-      ansible.builtin.set_fact:
-        validation_ipc_es_ips: >-
-          {{
-            validation_discovery_data.groups.ipc_es
-            | default([])
-            | selectattr('ip', 'defined')
-            | map(attribute='ip')
-            | map('string')
-            | map('trim')
-            | reject('equalto', '')
-            | unique
-            | list
-          }}
-
-    - name: IPC-ES-IP-Adressen anzeigen
-      ansible.builtin.debug:
-        msg:
-          - "Discovery-Datei: {{ validation_discovery_file }}"
-          - "IPC-ES-Teilnehmer: {{ validation_ipc_es_ips | length }}"
-          - "IPC-ES-IP-Adressen: {{ validation_ipc_es_ips }}"
-
-    - name: Hinweis ausgeben, wenn die Gruppe IPC ES leer ist
-      ansible.builtin.debug:
-        msg: >-
-          In {{ validation_discovery_file }} sind unter groups.ipc_es keine
-          IP-Adressen eingetragen. Es werden deshalb keine Zielsysteme geprueft.
-      when: validation_ipc_es_ips | length == 0
-
-    - name: IPC-ES-IP-Adressen nach offenen WinRM-Ports 5985 und 5986 scannen
-      ansible.builtin.shell: |
-        set -o pipefail
-        {{ nmap_binary }} -n -Pn -p 5985,5986 --open {{ validation_ipc_es_ips | join(' ') }} -oG - |
-        awk '
-          /Ports:/ {
-            host=$2
-            has_http = ($0 ~ /5985\/open\/tcp/)
-            has_https = ($0 ~ /5986\/open\/tcp/)
-
-            if (has_https) {
-              ports = has_http ? "5985,5986" : "5986"
-              print host ";5986;https;" ports
-            } else if (has_http) {
-              print host ";5985;http;5985"
-            }
-          }
-        '
-      args:
-        executable: /bin/bash
-      register: validation_scan_result
-      changed_when: false
-      when: validation_ipc_es_ips | length > 0
-
-    - name: Gefundene IP-Adressen und WinRM-Infos speichern
-      ansible.builtin.set_fact:
-        validation_discovered_winrm_hosts: >-
-          {{
-            validation_scan_result.stdout_lines
-            | default([])
-            | unique
-            | list
-          }}
-        validation_discovered_ips: >-
-          {{
-            validation_scan_result.stdout_lines
-            | default([])
-            | map('regex_replace', ';.*$', '')
-            | unique
-            | list
-          }}
-
-    - name: Gefundene WinRM-Teilnehmer anzeigen
-      ansible.builtin.debug:
-        var: validation_discovered_winrm_hosts
-
-    - name: Gefundene IP-Adressen anzeigen
-      ansible.builtin.debug:
-        var: validation_discovered_ips
-
-    - name: Hinweis ausgeben, wenn kein IPC-ES-Teilnehmer per WinRM erreichbar ist
-      ansible.builtin.debug:
-        msg: >-
-          Von den IP-Adressen aus groups.ipc_es wurde kein Host mit offenem
-          WinRM-Port 5985 oder 5986 gefunden.
-          Pruefe Firewall, WinRM und die Discovery-Datei.
-      when:
-        - validation_ipc_es_ips | length > 0
-        - validation_discovered_winrm_hosts | length == 0
-
-    - name: WinRM-Ergebnisse als IP-Mapping vorbereiten
-      ansible.builtin.set_fact:
-        validation_winrm_map: {}
-
-    - name: Gefundene WinRM-Verbindungen in Mapping eintragen
-      ansible.builtin.set_fact:
-        validation_winrm_map: >-
-          {{
-            validation_winrm_map
-            | combine({
-                item.split(';')[0]: {
-                  'port': item.split(';')[1] | int,
-                  'scheme': item.split(';')[2],
-                  'open_ports': item.split(';')[3],
-                  'nmap_reachable': true
-                }
-              })
-          }}
-      loop: "{{ validation_discovered_winrm_hosts }}"
-      loop_control:
-        label: "{{ item.split(';')[0] }}"
-
-    - name: Alle IPC-ES-Hosts temporaer in das Inventory aufnehmen
-      ansible.builtin.add_host:
-        name: "{{ item }}"
-        groups: ipc_es_validation_targets
-        ansible_host: "{{ item }}"
-        ansible_connection: winrm
-        ansible_user: "{{ win_user }}"
-        ansible_password: "{{ win_password }}"
-        ansible_port: "{{ validation_winrm_map.get(item, {}).get('port', winrm_default_port | default(5985)) | int }}"
-        ansible_winrm_scheme: "{{ validation_winrm_map.get(item, {}).get('scheme', 'http') }}"
-        ansible_winrm_transport: "{{ winrm_transport }}"
-        ansible_winrm_server_cert_validation: ignore
-        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
-        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(90) }}"
-        discovered_winrm_open_ports: "{{ validation_winrm_map.get(item, {}).get('open_ports', '') }}"
-        validation_nmap_winrm_reachable: "{{ validation_winrm_map.get(item, {}).get('nmap_reachable', false) }}"
-      loop: "{{ validation_ipc_es_ips }}"
-      loop_control:
-        label: "{{ item }}"
-      no_log: true
-
-    - name: Dynamische IPC-ES-Zielgruppe anzeigen
-      ansible.builtin.debug:
-        msg: "{{ groups['ipc_es_validation_targets'] | default([]) }}"
-
-- name: "0110 IPC ES Validation auf Windows-Zielsystem"
-  hosts: ipc_es_validation_targets
-  gather_facts: false
-  ignore_unreachable: true
-  any_errors_fatal: false
-
-  vars:
-    validation_report_prefix: "0110_ipc_es_validation"
-    validation_status_ok: "OK"
-    validation_status_nok: "NOK"
-    validation_status_info: "Info"
-    validation_status_nr: "Nicht relevant"
-    validation_status_not_checked: "Nicht geprüft"
-    validation_status_not_testable: "Nicht prüfbar"
-
-    validation_expected_terminalbus_adapter_name: "{{ expected_terminalbus_adapter_name | default('Terminalbus') }}"
-    validation_expected_domain_name: "{{ expected_domain_name | default('') }}"
-    validation_expected_terminalbus_ip_regex: "{{ expected_terminalbus_ip_regex | default('^192\\.168\\.210\\.') }}"
-    validation_expected_terminalbus_gateway: "{{ expected_terminalbus_gateway | default('') }}"
-    validation_expected_terminalbus_dns_servers: "{{ expected_terminalbus_dns_servers | default([]) }}"
-    validation_expected_terminalbus_wins_servers: "{{ expected_terminalbus_wins_servers | default([]) }}"
-
-  tasks:
-    - name: Ergebnisliste initialisieren
-      ansible.builtin.set_fact:
-        validation_results: []
-        validation_scan_timestamp: "{{ lookup('pipe', 'date -Iseconds') }}"
-        validation_os_info: {}
-        validation_hostname: ""
-        validation_ip: "{{ ansible_host | default(inventory_hostname) }}"
-        validation_timezone: ""
-        validation_language: {}
-        validation_netadapters: []
-        validation_netconfig: []
-        validation_vnc_rules: []
-        validation_ultravnc: {}
-        validation_registry: {}
-        validation_powerplan_text: ""
-        validation_features: {}
-        validation_services: []
-        validation_tls: []
-        validation_cipher_suites: []
-        validation_volumes: []
-        validation_shares: []
-        validation_hotfixes: []
-        validation_desktop_bginfo: {}
-        validation_snmp: {}
-        validation_w32time: {}
-        validation_domain_info: {}
-        validation_ou_info: {}
-        validation_firewall_profiles: []
-       
-
-    - name: WinRM-Verbindung testen
-      ansible.windows.win_ping:
-      register: validation_win_ping
-      changed_when: false
-      ignore_errors: true
-      ignore_unreachable: true
-
-    - name: WinRM-Fehler als Ergebnis festhalten
-      ansible.builtin.set_fact:
-        validation_results: >-
-          {{
-            validation_results
-            + [
-              {
-                'ansible_id': 'CONNECTIVITY',
-                'schritt': 'WinRM-Verbindung',
-                'status': validation_status_nok,
-                'check_type': 'connectivity',
-                'istwert': 'win_ping fehlgeschlagen',
-                'sollwert': 'win_ping erfolgreich',
-                'pruefmethode': 'ansible.windows.win_ping',
-                'hinweis': (
-                  validation_win_ping.msg
-                  | default(
-                      validation_win_ping.module_stderr
-                      | default(
-                          'Host nicht erreichbar oder Authentifizierung fehlgeschlagen'
-                        )
-                    )
-                ),
-                'evidence': validation_win_ping | to_json,
-                'timestamp': validation_scan_timestamp
-              }
-            ]
-          }}
-      when: validation_win_ping.ping | default('') != 'pong'
-
-    - block:
-        - name: Computername lesen
-          ansible.windows.win_shell: |
-            $env:COMPUTERNAME
-          register: validation_hostname_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Computername übernehmen
-          ansible.builtin.set_fact:
-            validation_hostname: "{{ validation_hostname_raw.stdout | default('') | string | trim }}"
-
-        - name: OS-Informationen lesen
-          ansible.windows.win_shell: |
-            Get-CimInstance Win32_OperatingSystem |
-            Select-Object Caption, Version |
-            ConvertTo-Json -Compress
-          register: validation_os_raw
-          changed_when: false
-          failed_when: false
-
-        - name: OS-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_os_stdout: "{{ validation_os_raw.stdout | default('{}') | string }}"
-
-        - name: OS-Informationen übernehmen
-          ansible.builtin.set_fact:
-            validation_os_info: "{{ validation_os_stdout | from_json }}"
-          when: validation_os_stdout | trim | length > 0
-
-        - name: Zeitzone lesen
-          ansible.windows.win_shell: |
-            (Get-TimeZone).Id
-          register: validation_timezone_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Zeitzone übernehmen
-          ansible.builtin.set_fact:
-            validation_timezone: "{{ validation_timezone_raw.stdout | default('') | string | trim }}"
-
-        - name: Sprache und Region lesen
-          ansible.windows.win_shell: |
-            [PSCustomObject]@{
-              Culture = (Get-Culture).Name
-              UICulture = (Get-UICulture).Name
-              SystemLocale = (Get-WinSystemLocale).Name
-              UserLanguageList = @((Get-WinUserLanguageList) | ForEach-Object { $_.LanguageTag })
-              HomeLocation = (Get-WinHomeLocation).GeoId
-            } | ConvertTo-Json -Depth 6 -Compress
-          register: validation_language_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Sprache-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_language_stdout: "{{ validation_language_raw.stdout | default('{}') | string }}"
-
-        - name: Sprache und Region uebernehmen
-          ansible.builtin.set_fact:
-            validation_language: "{{ validation_language_stdout | from_json }}"
-          when: validation_language_stdout | trim | length > 0
-
-        - name: Netzwerkadapter lesen
-          ansible.windows.win_shell: |
-            $items = Get-NetAdapter | Select-Object Name, Status, InterfaceDescription
-            ConvertTo-Json -InputObject @($items) -Compress
-          register: validation_netadapters_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Netzwerkadapter-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_netadapters_stdout: "{{ validation_netadapters_raw.stdout | default('[]') | string }}"
-
-        - name: Netzwerkadapter übernehmen
-          ansible.builtin.set_fact:
-            validation_netadapters: "{{ validation_netadapters_stdout | from_json }}"
-          when: validation_netadapters_stdout | trim | length > 0
-
-        - name: IP, Gateway und DNS lesen
-          ansible.windows.win_shell: |
-            $adapters = Get-NetIPConfiguration | ForEach-Object {
-              [PSCustomObject]@{
-                InterfaceAlias = $_.InterfaceAlias
-                IPv4Address = @($_.IPv4Address | ForEach-Object { $_.IPAddress })
-                IPv4DefaultGateway = @($_.IPv4DefaultGateway | ForEach-Object { $_.NextHop })
-                DnsServer = @($_.DNSServer.ServerAddresses)
-              }
-            }
-            ConvertTo-Json -InputObject @($adapters) -Depth 6 -Compress
-          register: validation_netconfig_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Netconfig-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_netconfig_stdout: "{{ validation_netconfig_raw.stdout | default('[]') | string }}"
-
-        - name: Netconfig übernehmen
-          ansible.builtin.set_fact:
-            validation_netconfig: "{{ validation_netconfig_stdout | from_json }}"
-          when: validation_netconfig_stdout | trim | length > 0
-
-        - name: WINS und Registrywerte lesen
-          ansible.windows.win_shell: |
-            $result = [ordered]@{}
-            $veeamPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-            $veeam = Get-ItemProperty -Path $veeamPath -Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue
-            $result.LocalAccountTokenFilterPolicy = if ($null -ne $veeam.LocalAccountTokenFilterPolicy) { [int]$veeam.LocalAccountTokenFilterPolicy } else { $null }
-
-            $searchPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search'
-            $searchMode = Get-ItemProperty -Path $searchPath -Name SearchboxTaskbarMode -ErrorAction SilentlyContinue
-            $result.SearchboxTaskbarMode = if ($null -ne $searchMode.SearchboxTaskbarMode) { [int]$searchMode.SearchboxTaskbarMode } else { $null }
-
-            $netbtPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
-            $lmhosts = @()
-            $wins = @()
-            if (Test-Path $netbtPath) {
-              Get-ChildItem $netbtPath -ErrorAction SilentlyContinue | ForEach-Object {
-                $item = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
-                $lmhosts += [PSCustomObject]@{
-                  Interface = $_.PSChildName
-                  EnableLMHOSTS = if ($null -ne $item.EnableLMHOSTS) { [int]$item.EnableLMHOSTS } else { $null }
-                }
-                $wins += [PSCustomObject]@{
-                  Interface = $_.PSChildName
-                  NameServerList = if ($null -ne $item.NameServerList) { $item.NameServerList } else { '' }
-                }
-              }
-            }
-            $result.LMHOSTS = $lmhosts
-            $result.WINS = $wins
-            $result | ConvertTo-Json -Depth 8 -Compress
-          register: validation_registry_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Registry-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_registry_stdout: "{{ validation_registry_raw.stdout | default('{}') | string }}"
-
-        - name: Registry übernehmen
-          ansible.builtin.set_fact:
-            validation_registry: "{{ validation_registry_stdout | from_json }}"
-          when: validation_registry_stdout | trim | length > 0
-
-        - name: Firewallprofile lesen
-          ansible.windows.win_shell: |
-            $items = Get-NetFirewallProfile | ForEach-Object {
-              [PSCustomObject]@{
-                Name = $_.Name.ToString()
-                Enabled = [bool]($_.Enabled.ToString() -eq 'True')
-                DefaultInboundAction = $_.DefaultInboundAction.ToString()
-                DefaultOutboundAction = $_.DefaultOutboundAction.ToString()
-              }
-            }
-            ConvertTo-Json -InputObject @($items) -Compress
-          register: validation_firewall_profiles_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Firewallprofile-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_firewall_profiles_stdout: "{{ validation_firewall_profiles_raw.stdout | default('[]') | string }}"
-
-        - name: Firewallprofile übernehmen
-          ansible.builtin.set_fact:
-            validation_firewall_profiles: "{{ validation_firewall_profiles_stdout | from_json }}"
-          when: validation_firewall_profiles_stdout | trim | length > 0
-
-        - name: VNC Firewallregeln lesen
-          ansible.windows.win_shell: |
-            $rules = Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {
-              $_.DisplayName -match 'VNC' -or $_.Name -match 'VNC'
-            }
-            $result = foreach ($rule in $rules) {
-              $pf = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
-              [PSCustomObject]@{
-                Name = $rule.Name
-                DisplayName = $rule.DisplayName
-                Enabled = [bool]($rule.Enabled.ToString() -eq 'True')
-                Profile = $rule.Profile.ToString()
-                AllProfiles = [bool]($rule.Profile.ToString() -eq 'Any')
-                Action = $rule.Action.ToString()
-                LocalPort = @($pf.LocalPort)
-                ExpectedPorts = @($pf.LocalPort | Where-Object { $_ -in @('5800','5900',5800,5900) })
-              }
-            }
-            ConvertTo-Json -InputObject @($result) -Compress
-          register: validation_vnc_rules_raw
-          changed_when: false
-          failed_when: false
-
-        - name: VNC-Regeln-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_vnc_rules_stdout: "{{ validation_vnc_rules_raw.stdout | default('[]') | string }}"
-
-        - name: VNC-Regeln übernehmen
-          ansible.builtin.set_fact:
-            validation_vnc_rules: "{{ validation_vnc_rules_stdout | from_json }}"
-          when: validation_vnc_rules_stdout | trim | length > 0
-
-        - name: UltraVNC Indikatoren lesen
-          ansible.windows.win_shell: |
-            $service = Get-Service -Name uvnc_service -ErrorAction SilentlyContinue
-            $paths = @('C:\Program Files\uvnc bvba\UltraVNC\winvnc.exe','C:\Program Files\UltraVNC\winvnc.exe')
-            $viewerPaths = @('C:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe','C:\Program Files\UltraVNC\vncviewer.exe')
-            $binaryPath = @($paths | Where-Object { Test-Path $_ } | Select-Object -First 1)
-            $viewerPath = @($viewerPaths | Where-Object { Test-Path $_ } | Select-Object -First 1)
-            $version = ''
-            if ($binaryPath.Count -gt 0) {
-              $version = (Get-Item -LiteralPath $binaryPath[0]).VersionInfo.ProductVersion
-            }
-            $listeningPorts = @(
-              Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-              Where-Object { $_.LocalPort -in @(5800,5900) } |
-              Select-Object -ExpandProperty LocalPort -Unique
-            )
-            $iniPaths = @(
-            {% for p in expected_vnc_ini_paths | default([]) %}
-              '{{ p }}'{% if not loop.last %},{% endif %}
-            {% endfor %}
-            )
-            $foundIni = @($iniPaths | Where-Object { Test-Path $_ })
-            [PSCustomObject]@{
-              ServiceExists = [bool]$service
-              ServiceStatus = if ($service) { $service.Status.ToString() } else { '' }
-              BinaryExists = [bool]($binaryPath.Count -gt 0)
-              BinaryPath = if ($binaryPath.Count -gt 0) { $binaryPath[0] } else { '' }
-              Version = $version
-              ViewerExists = [bool]($viewerPath.Count -gt 0)
-              ViewerPath = if ($viewerPath.Count -gt 0) { $viewerPath[0] } else { '' }
-              ListeningPorts = $listeningPorts
-              IniExists = [bool]($foundIni.Count -gt 0)
-              IniPaths = $foundIni
-            } | ConvertTo-Json -Depth 6 -Compress
-          register: validation_ultravnc_raw
-          changed_when: false
-          failed_when: false
-
-        - name: UltraVNC-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_ultravnc_stdout: "{{ validation_ultravnc_raw.stdout | default('{}') | string }}"
-
-        - name: UltraVNC übernehmen
-          ansible.builtin.set_fact:
-            validation_ultravnc: "{{ validation_ultravnc_stdout | from_json }}"
-          when: validation_ultravnc_stdout | trim | length > 0
-
-        - name: Energieplan lesen
-          ansible.windows.win_shell: |
-            powercfg /GETACTIVESCHEME
-          register: validation_powerplan_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Energieplan übernehmen
-          ansible.builtin.set_fact:
-            validation_powerplan_text: "{{ validation_powerplan_raw.stdout | default('') | string | trim }}"
-
-        - name: Windows Features lesen
-          ansible.windows.win_shell: |
-            $result = [ordered]@{}
-            $result.NetFx3 = (Get-WindowsFeature -Name NET-Framework-Core -ErrorAction SilentlyContinue | Select-Object Name, InstallState)
-            $result.MSMQ = (Get-WindowsFeature -Name MSMQ -ErrorAction SilentlyContinue | Select-Object Name, InstallState)
-            $features = @()
-            foreach ($name in @(
-            {% for f in expected_disabled_windows_features | default([]) %}
-              '{{ f }}'{% if not loop.last %},{% endif %}
-            {% endfor %}
-            )) {
-              $item = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction SilentlyContinue
-              if ($item) {
-                $features += [PSCustomObject]@{ FeatureName = $item.FeatureName; State = $item.State.ToString() }
-              } else {
-                $features += [PSCustomObject]@{ FeatureName = $name; State = 'Unknown' }
-              }
-            }
-            $result.DisabledWindowsFeatures = $features
-            $result | ConvertTo-Json -Depth 8 -Compress
-          register: validation_features_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Feature-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_features_stdout: "{{ validation_features_raw.stdout | default('{}') | string }}"
-
-        - name: Features übernehmen
-          ansible.builtin.set_fact:
-            validation_features: "{{ validation_features_stdout | from_json }}"
-          when: validation_features_stdout | trim | length > 0
-
-        - name: Dienste lesen
-          ansible.windows.win_shell: |
-            $items = Get-Service | Select-Object Name, DisplayName, Status, StartType
-            ConvertTo-Json -InputObject @($items) -Depth 6 -Compress
-          register: validation_services_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Dienste-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_services_stdout: "{{ validation_services_raw.stdout | default('[]') | string }}"
-
-        - name: Dienste übernehmen
-          ansible.builtin.set_fact:
-            validation_services: "{{ validation_services_stdout | from_json }}"
-          when: validation_services_stdout | trim | length > 0
-
-        - name: TLS Protokolle lesen
-          ansible.windows.win_shell: |
-            $protocols = @('SSL 2.0','SSL 3.0','TLS 1.0','TLS 1.1','TLS 1.2')
-            $result = foreach ($p in $protocols) {
-              $serverPath = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$p\Server"
-              $clientPath = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$p\Client"
-              $serverEnabled = $null
-              $clientEnabled = $null
-              if (Test-Path $serverPath) { $serverEnabled = (Get-ItemProperty -Path $serverPath -ErrorAction SilentlyContinue).Enabled }
-              if (Test-Path $clientPath) { $clientEnabled = (Get-ItemProperty -Path $clientPath -ErrorAction SilentlyContinue).Enabled }
-              [PSCustomObject]@{ Protocol = $p; ServerEnabled = $serverEnabled; ClientEnabled = $clientEnabled }
-            }
-            ConvertTo-Json -InputObject @($result) -Compress
-          register: validation_tls_raw
-          changed_when: false
-          failed_when: false
-
-        - name: TLS-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_tls_stdout: "{{ validation_tls_raw.stdout | default('[]') | string }}"
-
-        - name: TLS übernehmen
-          ansible.builtin.set_fact:
-            validation_tls: "{{ validation_tls_stdout | from_json }}"
-          when: validation_tls_stdout | trim | length > 0
-
-        - name: Cipher Suites lesen
-          ansible.windows.win_shell: |
-            $items = Get-TlsCipherSuite | Select-Object -ExpandProperty Name
-            ConvertTo-Json -InputObject @($items) -Compress
-          register: validation_cipher_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Cipher-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_cipher_stdout: "{{ validation_cipher_raw.stdout | default('[]') | string }}"
-
-        - name: Cipher übernehmen
-          ansible.builtin.set_fact:
-            validation_cipher_suites: "{{ validation_cipher_stdout | from_json }}"
-          when: validation_cipher_stdout | trim | length > 0
-
-        - name: Partitionen lesen
-          ansible.windows.win_shell: |
-            $items = Get-Volume | Where-Object { $_.DriveLetter } | Select-Object DriveLetter, Size, SizeRemaining
-            ConvertTo-Json -InputObject @($items) -Depth 6 -Compress
-          register: validation_volumes_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Volumes-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_volumes_stdout: "{{ validation_volumes_raw.stdout | default('[]') | string }}"
-
-        - name: Volumes übernehmen
-          ansible.builtin.set_fact:
-            validation_volumes: "{{ validation_volumes_stdout | from_json }}"
-          when: validation_volumes_stdout | trim | length > 0
-
-        - name: Shares lesen
-          ansible.windows.win_shell: |
-            $items = Get-SmbShare | Select-Object Name, Path, Description
-            ConvertTo-Json -InputObject @($items) -Depth 6 -Compress
-          register: validation_shares_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Shares-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_shares_stdout: "{{ validation_shares_raw.stdout | default('[]') | string }}"
-
-        - name: Shares übernehmen
-          ansible.builtin.set_fact:
-            validation_shares: "{{ validation_shares_stdout | from_json }}"
-          when: validation_shares_stdout | trim | length > 0
-
-        - name: Hotfixes lesen
-          ansible.windows.win_shell: |
-            $items = Get-HotFix | Select-Object HotFixID, InstalledOn, Description
-            ConvertTo-Json -InputObject @($items) -Depth 6 -Compress
-          register: validation_hotfixes_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Hotfix-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_hotfixes_stdout: "{{ validation_hotfixes_raw.stdout | default('[]') | string }}"
-
-        - name: Hotfixes übernehmen
-          ansible.builtin.set_fact:
-            validation_hotfixes: "{{ validation_hotfixes_stdout | from_json }}"
-          when: validation_hotfixes_stdout | trim | length > 0
-
-        - name: Desktop und BGInfo lesen
-          ansible.windows.win_shell: |
-            $publicDesktop = Join-Path $env:PUBLIC 'Desktop'
-            $edgeLinks = @()
-            if (Test-Path $publicDesktop) {
-              $edgeLinks = Get-ChildItem -Path $publicDesktop -Filter '*Edge*.lnk' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-            }
-            $bginfoPaths = @(
-            {% for p in expected_bginfo_paths | default([]) %}
-              '{{ p }}'{% if not loop.last %},{% endif %}
-            {% endfor %}
-            )
-            $bgFound = @($bginfoPaths | Where-Object { Test-Path $_ })
-            $startupPath = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp'
-            $startupEntries = @()
-            if (Test-Path $startupPath) {
-              $startupEntries = Get-ChildItem -Path $startupPath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-            }
-            [PSCustomObject]@{
-              EdgeLinks = $edgeLinks
-              BgInfoPaths = $bgFound
-              StartupEntries = $startupEntries
-            } | ConvertTo-Json -Depth 6 -Compress
-          register: validation_desktop_bginfo_raw
-          changed_when: false
-          failed_when: false
-
-        - name: BGInfo-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_desktop_bginfo_stdout: "{{ validation_desktop_bginfo_raw.stdout | default('{}') | string }}"
-
-        - name: BGInfo übernehmen
-          ansible.builtin.set_fact:
-            validation_desktop_bginfo: "{{ validation_desktop_bginfo_stdout | from_json }}"
-          when: validation_desktop_bginfo_stdout | trim | length > 0
-
-        - name: SNMP lesen
-          ansible.windows.win_shell: |
-            $svc = Get-Service -Name SNMP -ErrorAction SilentlyContinue
-            $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -match 'SNMP' } | Select-Object Name, State
-            [PSCustomObject]@{
-              ServiceExists = [bool]$svc
-              ServiceStatus = if ($svc) { $svc.Status.ToString() } else { '' }
-              Capabilities = @($cap)
-            } | ConvertTo-Json -Depth 6 -Compress
-          register: validation_snmp_raw
-          changed_when: false
-          failed_when: false
-
-        - name: SNMP-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_snmp_stdout: "{{ validation_snmp_raw.stdout | default('{}') | string }}"
-
-        - name: SNMP übernehmen
-          ansible.builtin.set_fact:
-            validation_snmp: "{{ validation_snmp_stdout | from_json }}"
-          when: validation_snmp_stdout | trim | length > 0
-
-        - name: W32Time lesen
-          ansible.windows.win_shell: |
-            $svc = Get-Service -Name W32Time -ErrorAction SilentlyContinue
-            $source = ''
-            $statusText = ''
-            try { $source = (w32tm /query /source 2>$null | Out-String).Trim() } catch {}
-            try { $statusText = (w32tm /query /status 2>$null | Out-String).Trim() } catch {}
-            [PSCustomObject]@{
-              ServiceExists = [bool]$svc
-              ServiceStatus = if ($svc) { $svc.Status.ToString() } else { '' }
-              Source = $source
-              StatusText = $statusText
-            } | ConvertTo-Json -Depth 4 -Compress
-          register: validation_w32time_raw
-          changed_when: false
-          failed_when: false
-
-        - name: W32Time-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_w32time_stdout: "{{ validation_w32time_raw.stdout | default('{}') | string }}"
-
-        - name: W32Time übernehmen
-          ansible.builtin.set_fact:
-            validation_w32time: "{{ validation_w32time_stdout | from_json }}"
-          when: validation_w32time_stdout | trim | length > 0
-
-        - name: Domäne lesen
-          ansible.windows.win_shell: |
-            $cs = Get-CimInstance Win32_ComputerSystem
-            [PSCustomObject]@{
-              PartOfDomain = [bool]$cs.PartOfDomain
-              Domain = $cs.Domain
-            } | ConvertTo-Json -Compress
-          register: validation_domain_raw
-          changed_when: false
-          failed_when: false
-
-        - name: Domain-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_domain_stdout: "{{ validation_domain_raw.stdout | default('{}') | string }}"
-
-        - name: Domäne übernehmen
-          ansible.builtin.set_fact:
-            validation_domain_info: "{{ validation_domain_stdout | from_json }}"
-          when: validation_domain_stdout | trim | length > 0
-
-        - name: OU lesen
-          ansible.windows.win_shell: |
-            try {
-              $dn = ([adsisearcher]"(&(objectCategory=computer)(name=$env:COMPUTERNAME))").FindOne().Properties.distinguishedname
-              [PSCustomObject]@{ DistinguishedName = $dn } | ConvertTo-Json -Compress
-            } catch {
-              [PSCustomObject]@{ DistinguishedName = '' } | ConvertTo-Json -Compress
-            }
-          register: validation_ou_raw
-          changed_when: false
-          failed_when: false
-
-        - name: OU-stdout sicher vorbereiten
-          ansible.builtin.set_fact:
-            validation_ou_stdout: "{{ validation_ou_raw.stdout | default('{}') | string }}"
-
-        - name: OU übernehmen
-          ansible.builtin.set_fact:
-            validation_ou_info: "{{ validation_ou_stdout | from_json }}"
-          when: validation_ou_stdout | trim | length > 0
-
-        - name: Terminalbus Konfiguration ableiten
-          ansible.builtin.set_fact:
-            validation_terminalbus_config: >-
-              {{
-                (validation_netconfig | selectattr('InterfaceAlias', 'equalto', validation_expected_terminalbus_adapter_name) | list | first)
-                if ((validation_netconfig | selectattr('InterfaceAlias', 'equalto', validation_expected_terminalbus_adapter_name) | list | length) > 0)
-                else {'InterfaceAlias': validation_expected_terminalbus_adapter_name, 'IPv4Address': [], 'IPv4DefaultGateway': [], 'DnsServer': []}
-              }}
-
-        - name: IPC0015 Computername als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0015',
-              'schritt':'Rechnernamen anpassen',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': ('Computername=' ~ validation_hostname),
-              'sollwert':'',
-              'pruefmethode':'Umgebungsvariable COMPUTERNAME',
-              'hinweis':'Ohne vorgegebenes Namensmuster erfolgt eine Informationsausgabe.',
-              'evidence': validation_hostname,
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0026 UltraVNC Installation und Version
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0026',
-              'schritt':'UltraVNC 1.4.3.6 installieren',
-              'status': (validation_status_ok if ((validation_ultravnc.ServiceExists | default(false)) and (validation_ultravnc.BinaryExists | default(false)) and ((validation_ultravnc.Version | default('') | string) is search(expected_ultravnc_version | default('1.4.3.6') | regex_escape))) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Dienst=' ~ (validation_ultravnc.ServiceExists | default(false) | string) ~ '; Status=' ~ (validation_ultravnc.ServiceStatus | default('')) ~ '; Version=' ~ (validation_ultravnc.Version | default(''))),
-              'sollwert': ('UltraVNC installiert; Dienst vorhanden; Version=' ~ (expected_ultravnc_version | default('1.4.3.6'))),
-              'pruefmethode':'Get-Service und Dateiversion winvnc.exe',
-              'hinweis':'',
-              'evidence': (validation_ultravnc | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0027 VNC Firewallregeln
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0027',
-              'schritt':'Windows Firewall Regeln für VNC anpassen',
-              'status': (validation_status_ok if ((['5800','5900'] | difference(validation_vnc_rules | selectattr('Enabled', 'equalto', true) | selectattr('Action', 'equalto', 'Allow') | selectattr('AllProfiles', 'equalto', true) | map(attribute='ExpectedPorts') | flatten | map('string') | list) | length) == 0) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('VNC-Regeln=' ~ (validation_vnc_rules | to_json)),
-              'sollwert':'Aktive Allow-Regeln für TCP 5800 und 5900 in allen Profilen',
-              'pruefmethode':'Get-NetFirewallRule und Get-NetFirewallPortFilter',
-              'hinweis':'Detailwerte stehen in evidence.',
-              'evidence': (validation_vnc_rules | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0028 VEEAM Registrywert
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0028',
-              'schritt':'Registry Eintrag für VEEAM setzen',
-              'status': (validation_status_ok if (validation_registry.LocalAccountTokenFilterPolicy | default(none)) == 1 else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('LocalAccountTokenFilterPolicy=' ~ (validation_registry.LocalAccountTokenFilterPolicy | default('nicht vorhanden') | string)),
-              'sollwert':'LocalAccountTokenFilterPolicy=1',
-              'pruefmethode':'Registry HKLM Policies System',
-              'hinweis':'',
-              'evidence': (validation_registry | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0029 UltraVNC Funktionsindikatoren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0029',
-              'schritt':'Überprüfung Funktion UltraVNC',
-              'status': (validation_status_ok if ((validation_ultravnc.ServiceStatus | default('')) == 'Running' and (5900 in (validation_ultravnc.ListeningPorts | default([])))) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Dienststatus=' ~ (validation_ultravnc.ServiceStatus | default('')) ~ '; ListeningPorts=' ~ ((validation_ultravnc.ListeningPorts | default([])) | join(', '))),
-              'sollwert':'uvnc_service läuft und TCP 5900 lauscht',
-              'pruefmethode':'Get-Service und Get-NetTCPConnection',
-              'hinweis':'Ein vollständiger externer Viewer-Verbindungstest ist damit nicht ersetzt.',
-              'evidence': (validation_ultravnc | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0044 Windows Sprache
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0044',
-              'schritt':'Language',
-              'status': (validation_status_ok if ((validation_language.Culture | default('')) == (expected_language_tag | default('de-DE')) and (validation_language.UICulture | default('')) == (expected_language_tag | default('de-DE')) and (validation_language.SystemLocale | default('')) == (expected_language_tag | default('de-DE'))) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Culture=' ~ (validation_language.Culture | default('')) ~ '; UICulture=' ~ (validation_language.UICulture | default('')) ~ '; SystemLocale=' ~ (validation_language.SystemLocale | default(''))),
-              'sollwert': ('Sprache=' ~ (expected_language_tag | default('de-DE'))),
-              'pruefmethode':'Get-Culture, Get-UICulture und Get-WinSystemLocale',
-              'hinweis':'',
-              'evidence': (validation_language | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0072 Partitionen als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0072',
-              'schritt':'Partition (C: 100GB; D Rest)',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': (validation_volumes | to_json),
-              'sollwert':'',
-              'pruefmethode':'Get-Volume',
-              'hinweis':'Die vorhandenen Partitionen und Größen werden ausgegeben.',
-              'evidence': (validation_volumes | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0075 Suchsymbol in der Taskleiste
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0075',
-              'schritt':'Lupe zur Suche in Taskleiste',
-              'status': (validation_status_ok if (validation_registry.SearchboxTaskbarMode | default(-1) | int) == (expected_searchbox_taskbar_mode | default(1) | int) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('SearchboxTaskbarMode=' ~ (validation_registry.SearchboxTaskbarMode | default('nicht vorhanden') | string)),
-              'sollwert': ('SearchboxTaskbarMode=' ~ (expected_searchbox_taskbar_mode | default(1) | string)),
-              'pruefmethode':'Registry HKCU Search',
-              'hinweis':'Der HKCU-Wert gehört zum WinRM-Anmeldebenutzer.',
-              'evidence': (validation_registry | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0077 Edge-Verknuepfung auf Public Desktop
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0077',
-              'schritt':'Microsoft Edge Verknüpfung löschen',
-              'status': (validation_status_ok if (validation_desktop_bginfo.EdgeLinks | default([]) | length) == 0 else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('EdgeLinks=' ~ ((validation_desktop_bginfo.EdgeLinks | default([])) | join(', '))),
-              'sollwert':'Keine Edge-Verknüpfung auf dem öffentlichen Desktop',
-              'pruefmethode':'Get-ChildItem Public Desktop',
-              'hinweis':'',
-              'evidence': (validation_desktop_bginfo | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0082 MSMQ Server Feature
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0082',
-              'schritt':'Microsoft Message Queue (MSMQ) Server aktivieren',
-              'status': (validation_status_ok if (validation_features.MSMQ.InstallState | default('')) == 'Installed' else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('MSMQ=' ~ (validation_features.MSMQ.InstallState | default('nicht gefunden'))),
-              'sollwert':'MSMQ InstallState=Installed',
-              'pruefmethode':'Get-WindowsFeature MSMQ',
-              'hinweis':'',
-              'evidence': (validation_features | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0087 Energieplan Hoechstleistung
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0087',
-              'schritt':'Energieoptionen auf Höchstleistung setzen',
-              'status': (validation_status_ok if (validation_powerplan_text is search(expected_powerplan_regex | default('Höchstleistung|High performance|SIMATIC IPC'))) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': validation_powerplan_text,
-              'sollwert': ('Regex=' ~ (expected_powerplan_regex | default('Höchstleistung|High performance|SIMATIC IPC'))),
-              'pruefmethode':'powercfg /GETACTIVESCHEME',
-              'hinweis':'',
-              'evidence': validation_powerplan_text,
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0088 Aktiven Energieplan als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0088',
-              'schritt':'Kontrolle Energieoptionen',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': validation_powerplan_text,
-              'sollwert':'',
-              'pruefmethode':'powercfg /GETACTIVESCHEME',
-              'hinweis':'Aktiver Energieplan wird ausgegeben.',
-              'evidence': validation_powerplan_text,
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0091 NET Framework 3.5
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0091',
-              'schritt':'.NET Framework 3.5 SP1 installieren',
-              'status': (validation_status_ok if (validation_features.NetFx3.InstallState | default('')) == 'Installed' else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('NET-Framework-Core=' ~ (validation_features.NetFx3.InstallState | default('nicht gefunden'))),
-              'sollwert':'InstallState=Installed',
-              'pruefmethode':'Get-WindowsFeature NET-Framework-Core',
-              'hinweis':'',
-              'evidence': (validation_features | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0149 Windows-Komponenten protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0149',
-              'schritt':'Deinstallieren von Windows-Komponenten',
-              'status': (validation_status_ok if ((expected_disabled_windows_features | default([]) | length > 0) and ((validation_features.DisabledWindowsFeatures | default([]) | selectattr('State', 'equalto', 'Enabled') | list | length) == 0)) else (validation_status_info if (expected_disabled_windows_features | default([]) | length == 0) else validation_status_nok)),
-              'check_type': ('direct' if (expected_disabled_windows_features | default([]) | length > 0) else 'indirect'),
-              'istwert': ((validation_features.DisabledWindowsFeatures | default([])) | to_json),
-              'sollwert': ('Deaktiviert=' ~ ((expected_disabled_windows_features | default([])) | join(', '))),
-              'pruefmethode':'Get-WindowsOptionalFeature',
-              'hinweis':'Ohne expected_disabled_windows_features erfolgt nur eine Informationsausgabe.',
-              'evidence': (validation_features | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0151 Dienstestatus protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0151',
-              'schritt':'Deaktivieren von Diensten',
-              'status': (validation_status_ok if ((expected_disabled_services | default([]) | length > 0) and ((expected_disabled_services | default([]) | difference(validation_services | selectattr('StartType', 'equalto', 'Disabled') | map(attribute='Name') | list) | length) == 0)) else (validation_status_info if (expected_disabled_services | default([]) | length == 0) else validation_status_nok)),
-              'check_type': ('direct' if (expected_disabled_services | default([]) | length > 0) else 'indirect'),
-              'istwert': ('Deaktivierte Dienste=' ~ ((validation_services | selectattr('StartType', 'equalto', 'Disabled') | map(attribute='Name') | list) | join(', '))),
-              'sollwert': ('Deaktiviert=' ~ ((expected_disabled_services | default([])) | join(', '))),
-              'pruefmethode':'Get-Service',
-              'hinweis':'Ohne expected_disabled_services erfolgt eine Informationsausgabe.',
-              'evidence': (validation_services | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0159 TLS-Konfiguration als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0159',
-              'schritt':'Deaktivierung von veralteten SSL-/TLS-Kommunikationsverfahren',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': (validation_tls | to_json),
-              'sollwert':'',
-              'pruefmethode':'SCHANNEL Registry',
-              'hinweis':'Registrywerte werden ausgegeben; fehlende Werte sind keine belastbare Sollwertbestätigung.',
-              'evidence': (validation_tls | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0160 Sichere Cipher Suites als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0160',
-              'schritt':'Verwendung von sicheren Cipher Suites',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': ('Anzahl=' ~ (validation_cipher_suites | length | string) ~ '; Cipher=' ~ ((validation_cipher_suites | default([])) | join(', '))),
-              'sollwert':'',
-              'pruefmethode':'Get-TlsCipherSuite',
-              'hinweis':'Aktive Cipher Suites werden ausgegeben.',
-              'evidence': (validation_cipher_suites | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0161 Sichere Cipher Suites als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0161',
-              'schritt':'Verwendung von sicheren Cipher Suites',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': ('Anzahl=' ~ (validation_cipher_suites | length | string) ~ '; Cipher=' ~ ((validation_cipher_suites | default([])) | join(', '))),
-              'sollwert':'',
-              'pruefmethode':'Get-TlsCipherSuite',
-              'hinweis':'Aktive Cipher Suites werden ausgegeben.',
-              'evidence': (validation_cipher_suites | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0166 Windows Firewall
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0166',
-              'schritt':'Windows-Firewall',
-              'status': (validation_status_ok if ((validation_firewall_profiles | length) > 0 and (validation_firewall_profiles | rejectattr('Enabled', 'equalto', true) | list | length) == 0) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': (validation_firewall_profiles | to_json),
-              'sollwert':'Alle Firewallprofile Enabled=true',
-              'pruefmethode':'Get-NetFirewallProfile',
-              'hinweis':'Die Netzwerkprofil-Kategorie der Adapter wird in dieser Prüfung nicht bewertet.',
-              'evidence': (validation_firewall_profiles | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0168 SMB-Freigaben als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0168',
-              'schritt':'Ordner freigeben',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': (validation_shares | to_json),
-              'sollwert':'',
-              'pruefmethode':'Get-SmbShare',
-              'hinweis':'Vorhandene SMB-Freigaben werden ausgegeben.',
-              'evidence': (validation_shares | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0173 SNMP Installation
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0173',
-              'schritt':'SNMP installieren',
-              'status': (validation_status_ok if (validation_snmp.ServiceExists | default(false)) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('ServiceExists=' ~ (validation_snmp.ServiceExists | default(false) | string) ~ '; Capabilities=' ~ ((validation_snmp.Capabilities | default([])) | to_json)),
-              'sollwert':'SNMP-Dienst vorhanden',
-              'pruefmethode':'Get-Service und Get-WindowsCapability',
-              'hinweis':'',
-              'evidence': (validation_snmp | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0174 SNMP Status als Information protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0174',
-              'schritt':'SNMP konfigurieren',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': ('ServiceStatus=' ~ (validation_snmp.ServiceStatus | default(''))),
-              'sollwert':'',
-              'pruefmethode':'Get-Service SNMP',
-              'hinweis':'Community- und Sicherheitseinstellungen werden noch nicht direkt bewertet.',
-              'evidence': (validation_snmp | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0182 BGInfo Installation und Autostart
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0182',
-              'schritt':'BGInfo/BGSiVaaS',
-              'status': (validation_status_ok if ((expected_bginfo_paths | default([]) | length > 0) and (validation_desktop_bginfo.BgInfoPaths | default([]) | length) > 0 and (validation_desktop_bginfo.StartupEntries | default([]) | select('search', 'BG|bg') | list | length) > 0) else (validation_status_info if expected_bginfo_paths | default([]) | length == 0 else validation_status_nok)),
-              'check_type': ('indirect' if expected_bginfo_paths | default([]) | length == 0 else 'direct'),
-              'istwert': ('Pfade=' ~ ((validation_desktop_bginfo.BgInfoPaths | default([])) | join(', ')) ~ '; Startup=' ~ ((validation_desktop_bginfo.StartupEntries | default([])) | join(', '))),
-              'sollwert':'BGInfo-Pfad vorhanden und Autostart-Eintrag vorhanden',
-              'pruefmethode':'Dateiprüfung und Common Startup',
-              'hinweis':'',
-              'evidence': (validation_desktop_bginfo | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0184 BGInfo Informationen protokollieren
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0184',
-              'schritt':'Hintergrundbild anpassen',
-              'status': validation_status_info,
-              'check_type':'indirect',
-              'istwert': ('BGInfoPaths=' ~ ((validation_desktop_bginfo.BgInfoPaths | default([])) | join(', '))),
-              'sollwert':'',
-              'pruefmethode':'Dateiprüfung',
-              'hinweis':'Vorhandene BGInfo-Pfade werden ausgegeben.',
-              'evidence': (validation_desktop_bginfo | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0187 VNC Firewallregel
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0187',
-              'schritt':'VNC',
-              'status': (validation_status_ok if ((validation_vnc_rules | selectattr('Enabled', 'equalto', true) | selectattr('Action', 'equalto', 'Allow') | selectattr('AllProfiles', 'equalto', true) | list | length) > 0) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': (validation_vnc_rules | to_json),
-              'sollwert':'Mindestens eine aktivierte VNC-Allow-Regel',
-              'pruefmethode':'Get-NetFirewallRule',
-              'hinweis':'',
-              'evidence': (validation_vnc_rules | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0245 VNC Viewer Firewallregel
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0245',
-              'schritt':'VNC-Viewer Firewallregel prüfen',
-              'status': (validation_status_ok if ((validation_vnc_rules | selectattr('Enabled', 'equalto', true) | selectattr('Action', 'equalto', 'Allow') | selectattr('AllProfiles', 'equalto', true) | list | length) > 0) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': (validation_vnc_rules | to_json),
-              'sollwert':'VNC-Zugriff durch aktive Allow-Regel freigegeben',
-              'pruefmethode':'Get-NetFirewallRule',
-              'hinweis':'',
-              'evidence': (validation_vnc_rules | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0246 Firewall fuer alle Profile aktiviert
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0246',
-              'schritt':'Firewall für alle Profile aktiviert',
-              'status': (validation_status_ok if ((validation_firewall_profiles | length) > 0 and (validation_firewall_profiles | rejectattr('Enabled', 'equalto', true) | list | length) == 0) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': (validation_firewall_profiles | to_json),
-              'sollwert':'Alle Firewallprofile Enabled=true',
-              'pruefmethode':'Get-NetFirewallProfile',
-              'hinweis':'',
-              'evidence': (validation_firewall_profiles | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0252 UltraVNC Viewer Installation
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0252',
-              'schritt':'UltraVNC-Viewer nachinstallieren',
-              'status': (validation_status_ok if (validation_ultravnc.ViewerExists | default(false)) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('ViewerExists=' ~ (validation_ultravnc.ViewerExists | default(false) | string) ~ '; Pfad=' ~ (validation_ultravnc.ViewerPath | default(''))),
-              'sollwert':'vncviewer.exe vorhanden',
-              'pruefmethode':'Dateiprüfung',
-              'hinweis':'',
-              'evidence': (validation_ultravnc | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0259 Zeitsynchronisation
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0259',
-              'schritt':'Kontrolle Uhrzeit',
-              'status': (validation_status_ok if ((validation_w32time.ServiceStatus | default('')) == 'Running' and ((validation_w32time.Source | default('')) is regex(expected_time_source_regex | default('^(?!Local CMOS Clock$).+')))) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Dienst=' ~ (validation_w32time.ServiceStatus | default('')) ~ '; Quelle=' ~ (validation_w32time.Source | default(''))),
-              'sollwert': ('W32Time läuft; Quelle Regex=' ~ (expected_time_source_regex | default('^(?!Local CMOS Clock$).+'))),
-              'pruefmethode':'Get-Service und w32tm /query',
-              'hinweis':'Optional kann die genaue Quelle über expected_time_source_regex enger geprüft werden.',
-              'evidence': (validation_w32time | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0043 Zeitzone
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0043',
-              'schritt':'Date and Time',
-              'status': (validation_status_ok if validation_timezone == (expected_timezone_id | default('W. Europe Standard Time')) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Zeitzone=' ~ validation_timezone),
-              'sollwert': ('Zeitzone=' ~ (expected_timezone_id | default('W. Europe Standard Time'))),
-              'pruefmethode':'Get-TimeZone',
-              'hinweis':'',
-              'evidence': validation_timezone,
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0049 Adapter Namen
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0049',
-              'schritt':'Netzwerkadapter umbenennen',
-              'status': (validation_status_ok if ((expected_present_adapters | default([]) | length > 0) and ((expected_present_adapters | default([]) | difference(validation_netadapters | map(attribute='Name') | list) | length) == 0)) else (validation_status_info if (expected_present_adapters | default([]) | length == 0) else validation_status_nok)),
-              'check_type': ('direct' if (expected_present_adapters | default([]) | length > 0) else 'indirect'),
-              'istwert': ('Adapter=' ~ ((validation_netadapters | map(attribute='Name') | list) | join(', '))),
-              'sollwert': ('Erwartet=' ~ ((expected_present_adapters | default([])) | join(', '))),
-              'pruefmethode':'Get-NetAdapter',
-              'hinweis': ('Ohne expected_present_adapters Informationsausgabe. Fehlend=' ~ (((expected_present_adapters | default([])) | difference(validation_netadapters | map(attribute='Name') | list)) | join(', '))),
-              'evidence': (validation_netadapters | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0050 Terminalbus IP
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0050',
-              'schritt':'Terminalbus-Adresse einstellen',
-              'status': (validation_status_ok if (((validation_terminalbus_config.IPv4Address | default([]) | select('match', validation_expected_terminalbus_ip_regex) | list | length) > 0)) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; IP=' ~ ((validation_terminalbus_config.IPv4Address | default([])) | join(', '))),
-              'sollwert': ('Adapter=' ~ validation_expected_terminalbus_adapter_name ~ '; IP Regex=' ~ validation_expected_terminalbus_ip_regex),
-              'pruefmethode':'Get-NetIPConfiguration',
-              'hinweis':'',
-              'evidence': (validation_terminalbus_config | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0051 Terminalbus Gateway
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0051',
-              'schritt':'Terminalbus Gateway korrigieren',
-              'status': (validation_status_ok if ((validation_expected_terminalbus_gateway | length > 0) and ((validation_terminalbus_config.IPv4DefaultGateway | default([])) | select('equalto', validation_expected_terminalbus_gateway) | list | length > 0)) else (validation_status_nr if validation_expected_terminalbus_gateway | length == 0 else validation_status_nok)),
-              'check_type': ('not_relevant' if validation_expected_terminalbus_gateway | length == 0 else 'direct'),
-              'istwert': ('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; Gateway=' ~ ((validation_terminalbus_config.IPv4DefaultGateway | default([])) | join(', '))),
-              'sollwert': ('Gateway=' ~ validation_expected_terminalbus_gateway),
-              'pruefmethode':'Get-NetIPConfiguration',
-              'hinweis':'',
-              'evidence': (validation_terminalbus_config | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0055 DNS und WINS
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0055',
-              'schritt':'DNS und WINS-Server eintragen',
-              'status': (validation_status_ok if (((validation_expected_terminalbus_dns_servers | length > 0) or (validation_expected_terminalbus_wins_servers | length > 0)) and ((validation_expected_terminalbus_dns_servers | difference(validation_terminalbus_config.DnsServer | default([])) | length) == 0) and ((validation_expected_terminalbus_wins_servers | length == 0) or ((validation_expected_terminalbus_wins_servers | join(',')) in ((validation_registry.WINS | default([]) | map(attribute='NameServerList') | list | join(';')))))) else (validation_status_info if ((validation_expected_terminalbus_dns_servers | length == 0) and (validation_expected_terminalbus_wins_servers | length == 0)) else validation_status_nok)),
-              'check_type': ('indirect' if ((validation_expected_terminalbus_dns_servers | length == 0) and (validation_expected_terminalbus_wins_servers | length == 0)) else 'direct'),
-              'istwert': ('Adapter=' ~ (validation_terminalbus_config.InterfaceAlias | default('')) ~ '; DNS=' ~ ((validation_terminalbus_config.DnsServer | default([])) | join(', ')) ~ '; WINS=' ~ ((validation_registry.WINS | default([]) | map(attribute='NameServerList') | list | join(' | ')))),
-              'sollwert': ('DNS=' ~ (validation_expected_terminalbus_dns_servers | join(', ')) ~ '; WINS=' ~ (validation_expected_terminalbus_wins_servers | join(', '))),
-              'pruefmethode':'Get-NetIPConfiguration + Registry',
-              'hinweis':'',
-              'evidence': (({'netconfig': validation_terminalbus_config, 'wins': validation_registry.WINS | default([])}) | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0056 LMHOSTS
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0056',
-              'schritt':'LMHOSTS-Abfrage deaktivieren',
-              'status': (validation_status_ok if ((validation_registry.LMHOSTS | default([]) | map(attribute='EnableLMHOSTS') | reject('equalto', none) | list | unique) == [expected_enable_lmhosts | default(0)]) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('LMHOSTS=' ~ ((validation_registry.LMHOSTS | default([])) | to_json)),
-              'sollwert': ('EnableLMHOSTS=' ~ (expected_enable_lmhosts | default(0) | string)),
-              'pruefmethode':'Registry Tcpip NetBT Parameters',
-              'hinweis':'',
-              'evidence': ((validation_registry.LMHOSTS | default([])) | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0059 Domäne
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0059',
-              'schritt':'Rechner in die Domäne aufnehmen',
-              'status': (validation_status_ok if ((validation_expected_domain_name | length > 0) and ((validation_domain_info.Domain | default('')) | lower == (validation_expected_domain_name | lower))) else (validation_status_info if validation_expected_domain_name | length == 0 else validation_status_nok)),
-              'check_type': ('indirect' if validation_expected_domain_name | length == 0 else 'direct'),
-              'istwert': ('PartOfDomain=' ~ (validation_domain_info.PartOfDomain | default(false) | string) ~ '; Domain=' ~ (validation_domain_info.Domain | default(''))),
-              'sollwert': ('Domain=' ~ validation_expected_domain_name),
-              'pruefmethode':'Win32_ComputerSystem',
-              'hinweis':'',
-              'evidence': (validation_domain_info | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: IPC0060 OU
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id':'IPC0060',
-              'schritt':'Rechner in der OU einsortieren',
-              'status': (validation_status_ok if ((expected_computer_ou_regex | default('') | length > 0) and ((validation_ou_info.DistinguishedName | default('')) is regex(expected_computer_ou_regex))) else (validation_status_info if expected_computer_ou_regex | default('') | length == 0 else validation_status_nok)),
-              'check_type': ('indirect' if expected_computer_ou_regex | default('') | length == 0 else 'direct'),
-              'istwert': ('DistinguishedName=' ~ (validation_ou_info.DistinguishedName | default(''))),
-              'sollwert': ('OU Regex=' ~ (expected_computer_ou_regex | default(''))),
-              'pruefmethode':'ADSI Searcher',
-              'hinweis':'',
-              'evidence': (validation_ou_info | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-
-        - name: Installierte KB-IDs vorbereiten
-          ansible.builtin.set_fact:
-            validation_installed_kb_ids: "{{ validation_hotfixes | default([]) | map(attribute='HotFixID') | map('upper') | list }}"
-
-        - name: Erwartete installierte KBs aus der Installationsliste prüfen
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id': item.ansible_id,
-              'schritt': item.schritt,
-              'status': (validation_status_ok if ((item.schritt | regex_search('KB[0-9]+') | upper) in validation_installed_kb_ids) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Installierte KBs=' ~ (validation_installed_kb_ids | join(', '))),
-              'sollwert': (item.schritt | regex_search('KB[0-9]+') | upper) ~ ' installiert',
-              'pruefmethode':'Get-HotFix',
-              'hinweis':'',
-              'evidence': (validation_hotfixes | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-          loop: "{{ hostvars['localhost'].validation_check_catalog }}"
-          loop_control:
-            label: "{{ item.ansible_id }}"
-          when:
-            - item.schritt is match('^KB[0-9]+$')
-
-        - name: Erwartete deinstallierte KBs aus der Installationsliste prüfen
-          ansible.builtin.set_fact:
-            validation_results: "{{ validation_results + [ {
-              'ansible_id': item.ansible_id,
-              'schritt': item.schritt,
-              'status': (validation_status_ok if ((item.schritt | regex_search('KB[0-9]+') | upper) not in validation_installed_kb_ids) else validation_status_nok),
-              'check_type':'direct',
-              'istwert': ('Installierte KBs=' ~ (validation_installed_kb_ids | join(', '))),
-              'sollwert': (item.schritt | regex_search('KB[0-9]+') | upper) ~ ' nicht installiert',
-              'pruefmethode':'Get-HotFix',
-              'hinweis':'',
-              'evidence': (validation_hotfixes | to_json),
-              'timestamp': validation_scan_timestamp
-              } ] }}"
-          loop: "{{ hostvars['localhost'].validation_check_catalog }}"
-          loop_control:
-            label: "{{ item.ansible_id }}"
-          when:
-            - item.schritt is match('^KB[0-9]+ deinstalliert$')
-
-      when: validation_win_ping.ping | default('') == 'pong'
-
-    - name: Vollstaendige Ergebnisliste fuer alle IPC-IDs erzeugen
-      ansible.builtin.set_fact:
-        validation_results: >-
-          {%- set ns = namespace(current={}, completed=[]) -%}
-          {%- for check in (validation_results | default([])) -%}
-            {%- if check.ansible_id is defined and check.ansible_id is match('^IPC[0-9]{4}$') -%}
-              {%- set ns.current = ns.current | combine({check.ansible_id: check}) -%}
-            {%- endif -%}
-          {%- endfor -%}
-          {%- set reachable = (validation_win_ping.ping | default('') == 'pong') -%}
-          {%- set nr_global = ipc_es_not_relevant_ids | default([]) -%}
-          {%- set nr_by_host = (ipc_not_relevant_ids_by_host | default({})).get(validation_ip, []) -%}
-          {%- set nr_ids = (nr_global + nr_by_host) | unique | list -%}
-          {%- for catalog_item in hostvars['localhost'].validation_check_catalog -%}
-            {%- set cid = catalog_item.ansible_id -%}
-            {%- if cid in ns.current -%}
-              {%- set result = ns.current[cid] -%}
-            {%- elif cid in nr_ids -%}
-              {%- set result = {
-                'ansible_id': cid,
-                'schritt': catalog_item.schritt,
-                'status': validation_status_nr,
-                'check_type': 'not_relevant',
-                'istwert': '',
-                'sollwert': '',
-                'pruefmethode': 'Relevanzkonfiguration',
-                'hinweis': 'Für IPC ES über ipc_es_not_relevant_ids als nicht relevant festgelegt.',
-                'evidence': catalog_item.anleitung | default(''),
-                'timestamp': validation_scan_timestamp
-              } -%}
-            {%- elif not reachable -%}
-              {%- set result = {
-                'ansible_id': cid,
-                'schritt': catalog_item.schritt,
-                'status': validation_status_not_testable,
-                'check_type': 'unavailable',
-                'istwert': 'WinRM-Verbindung nicht verfügbar',
-                'sollwert': '',
-                'pruefmethode': 'ansible.windows.win_ping',
-                'hinweis': validation_win_ping.msg | default('Host nicht erreichbar oder Authentifizierung fehlgeschlagen'),
-                'evidence': validation_win_ping | to_json,
-                'timestamp': validation_scan_timestamp
-              } -%}
-            {%- else -%}
-              {%- set result = {
-                'ansible_id': cid,
-                'schritt': catalog_item.schritt,
-                'status': validation_status_not_checked,
-                'check_type': 'not_implemented',
-                'istwert': '',
-                'sollwert': '',
-                'pruefmethode': '',
-                'hinweis': 'Für diese ID ist im Playbook noch keine direkte oder indirekte Prüfung implementiert.',
-                'evidence': catalog_item.anleitung | default(''),
-                'timestamp': validation_scan_timestamp
-              } -%}
-            {%- endif -%}
-            {%- set ns.completed = ns.completed + [result] -%}
-          {%- endfor -%}
-          {{ ns.completed }}
-
-- name: "0110 IPC ES Validation Report"
-  hosts: localhost
-  connection: local
-  become: false
-  gather_facts: false
-
-  vars:
-    validation_report_prefix: "0110_ipc_es_validation"
-
-  tasks:
-    - name: Report-Zeitstempel setzen
-      ansible.builtin.set_fact:
-        validation_report_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-        validation_report_timestamp_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
-
-    - name: Report-Verzeichnis erzeugen
+          {{ validation_discovery_raw.content | b64decode | from_json }}
+
+    - name: Pruefen ob Gruppe ipc_es vorhanden ist
+      ansible.builtin.assert:
+        that:
+          - validation_discovery_data.groups is defined
+          - validation_discovery_data.groups.ipc_es is defined
+        fail_msg: >-
+          In {{ validation_discovery_file }} wurde groups.ipc_es nicht gefunden.
+
+    - name: Lokalen Basis-Ergebnisordner anlegen
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
         mode: "0755"
 
-    - name: Reportdaten sammeln
-      ansible.builtin.set_fact:
-        validation_report_hosts: >-
-          {%- set ns = namespace(items=[]) -%}
-          {%- for host in (groups['ipc_es_validation_targets'] | default([])) -%}
-            {%- set hv = hostvars[host] -%}
-            {%- if hv.validation_results is defined and (hv.validation_results | length > 0) -%}
-              {%- set ns.items = ns.items + [hv] -%}
-            {%- endif -%}
-          {%- endfor -%}
-          {{ ns.items }}
+    - name: PowerShell-Pruefskripte auf dem Controller pruefen
+      ansible.builtin.stat:
+        path: "{{ validation_script_source_dir }}/{{ item }}"
+      loop: "{{ validation_script_names }}"
+      register: validation_script_stats
+      loop_control:
+        label: "{{ item }}"
 
-    - name: Reportdaten Debug
+    - name: Abbrechen wenn ein PowerShell-Pruefskript fehlt
+      ansible.builtin.fail:
+        msg: >-
+          PowerShell-Skript fehlt:
+          {{ item.stat.path | default(validation_script_source_dir ~ '/' ~ item.item) }}
+      loop: "{{ validation_script_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not (item.stat.exists | default(false))
+
+    - name: IPC-ES-Hosts dynamisch aus Discovery-JSON anlegen
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: ipc_es_validation_targets
+        ansible_host: "{{ item.ip }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ item.winrm_port | default(winrm_default_port | default(5985)) | int }}"
+        ansible_winrm_scheme: "{{ item.winrm_scheme | default('http') }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(90) }}"
+        validation_script_source_dir: "{{ validation_script_source_dir }}"
+        validation_script_names: "{{ validation_script_names }}"
+        validation_run_id: "{{ validation_run_id }}"
+      loop: "{{ validation_discovery_data.groups.ipc_es | default([]) }}"
+      loop_control:
+        label: "{{ item.ip }}"
+      no_log: true
+
+    - name: Gefundene IPC-ES-Ziele anzeigen
       ansible.builtin.debug:
         msg:
-          - "Targets: {{ groups['ipc_es_validation_targets'] | default([]) }}"
-          - "Report hosts count: {{ validation_report_hosts | length }}"
-          - "Report hosts ips: {{ validation_report_hosts | map(attribute='validation_ip') | list }}"
-          - "Report hosts names: {{ validation_report_hosts | map(attribute='validation_hostname') | list }}"
+          - "Discovery-Datei: {{ validation_discovery_file }}"
+          - "IPC ES Anzahl: {{ validation_discovery_data.groups.ipc_es | default([]) | length }}"
+          - "IPC ES IPs: {{ validation_discovery_data.groups.ipc_es | default([]) | map(attribute='ip') | list }}"
 
-    - name: JSON Report schreiben
-      ansible.builtin.copy:
-        dest: "{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.json"
-        mode: "0644"
-        content: |
-          [
-          {% for hv in validation_report_hosts | sort(attribute='validation_ip') %}
-            {
-              "pruefzeit": {{ hv.validation_scan_timestamp | default('') | to_json }},
-              "ip": {{ hv.validation_ip | default(hv.inventory_hostname | default('')) | to_json }},
-              "computername": {{ hv.validation_hostname | default('') | to_json }},
-              "os_caption": {{ hv.validation_os_info.Caption | default('') | to_json }},
-              "os_version": {{ hv.validation_os_info.Version | default('') | to_json }},
-              "winrm_reachable": {{ ((hv.validation_win_ping.ping | default('')) == 'pong') | to_json }},
-              "nmap_winrm_reachable": {{ hv.validation_nmap_winrm_reachable | default(false) | bool | to_json }},
-              "checks": {{ (hv.validation_results | default([]) | sort(attribute='ansible_id')) | to_nice_json }}
-            }{% if not loop.last %},{% endif %}
-          {% endfor %}
-          ]
+    - name: Hinweis wenn keine IPC ES vorhanden sind
+      ansible.builtin.debug:
+        msg: >-
+          In groups.ipc_es sind keine Zielsysteme enthalten.
+          Es werden keine PowerShell-Pruefungen ausgefuehrt.
+      when: validation_discovery_data.groups.ipc_es | default([]) | length == 0
 
-    - name: CSV Reports schreiben
-      ansible.builtin.shell: |
-        set -euo pipefail
-        "{{ ansible_playbook_python }}" - <<'PY'
-        import csv, json
-        from pathlib import Path
 
-        json_path = Path("{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.json")
-        detail_csv_path = Path("{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_details.csv")
-        matrix_csv_path = Path("{{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_matrix.csv")
-        data = json.loads(json_path.read_text(encoding="utf-8"))
+- name: "0110 IPC ES - PowerShell-Pruefungen ausfuehren und Ergebnisse einsammeln"
+  hosts: ipc_es_validation_targets
+  gather_facts: false
+  become: false
+  any_errors_fatal: false
 
-        detail_rows = []
-        for host in data:
-            for check in sorted(host.get("checks", []), key=lambda x: str(x.get("ansible_id", ""))):
-                detail_rows.append({
-                    "pruefzeit": host.get("pruefzeit", ""),
-                    "ip": host.get("ip", ""),
-                    "computername": host.get("computername", ""),
-                    "ansible_id": check.get("ansible_id", ""),
-                    "schritt": check.get("schritt", ""),
-                    "status": check.get("status", ""),
-                    "check_type": check.get("check_type", ""),
-                    "istwert": check.get("istwert", ""),
-                    "sollwert": check.get("sollwert", ""),
-                    "pruefmethode": check.get("pruefmethode", ""),
-                    "hinweis": check.get("hinweis", ""),
-                    "evidence": check.get("evidence", ""),
-                    "timestamp": check.get("timestamp", ""),
-                })
+  vars:
+    # Ausschliesslich temporaerer Arbeitsordner auf dem Zielrechner.
+    # Der komplette Ordner wird im always-Block wieder entfernt.
+    validation_remote_work_dir: >-
+      C:\Windows\Temp\Ansible_IPC_ES_Validation_{{ validation_run_id }}
 
-        detail_rows.sort(key=lambda r: (str(r["ip"]), str(r["ansible_id"])))
-        detail_fieldnames = [
-            "pruefzeit", "ip", "computername", "ansible_id", "schritt", "status",
-            "check_type", "istwert", "sollwert", "pruefmethode", "hinweis", "evidence", "timestamp"
-        ]
-        with detail_csv_path.open("w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=detail_fieldnames, delimiter=";")
-            writer.writeheader()
-            writer.writerows(detail_rows)
+    # Die Skripte sollten ihre JSON-Dateien in das aktuelle Arbeitsverzeichnis
+    # oder in $env:VALIDATION_RESULT_DIR schreiben.
+    validation_local_host_result_dir: >-
+      {{ result_dir }}/{{ ansible_host | default(inventory_hostname) }}
 
-        hosts = sorted(data, key=lambda h: (str(h.get("ip", "")), str(h.get("computername", ""))))
-        host_columns = [f"{h.get('ip', '')} | {h.get('computername', '')}" for h in hosts]
+  tasks:
+    - name: Lokalen Ergebnisordner fuer diese IP anlegen
+      ansible.builtin.file:
+        path: "{{ validation_local_host_result_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
 
-        catalog = json.loads({{ hostvars['localhost'].validation_check_catalog | to_json | to_json }})
-        descriptions = {str(item.get("ansible_id", "")): item.get("schritt", "") for item in catalog}
-        check_types = {}
-        check_map = {}
-        for host in hosts:
-            host_key = f"{host.get('ip', '')} | {host.get('computername', '')}"
-            for check in host.get("checks", []):
-                cid = str(check.get("ansible_id", ""))
-                descriptions[cid] = check.get("schritt", descriptions.get(cid, ""))
-                check_types.setdefault(cid, set()).add(str(check.get("check_type", "")))
-                check_map.setdefault(cid, {})[host_key] = check
-
-        def matrix_value(check):
-            if not check:
-                return "Nicht prüfbar"
-            check_type = str(check.get("check_type", ""))
-            status = str(check.get("status", ""))
-            istwert = str(check.get("istwert", ""))
-            if check_type == "indirect":
-                return f"Info: {istwert}" if istwert else "Info"
-            return status
-
-        sorted_ids = sorted(descriptions.keys(), key=lambda value: int(value[3:]) if value.startswith("IPC") and value[3:].isdigit() else value)
-        with matrix_csv_path.open("w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f, delimiter=";")
-            writer.writerow(["ansible_id", "beschreibung", "pruefart"] + [f"ES_{i+1}" for i in range(len(host_columns))])
-            writer.writerow(["meta", "zielsystem", ""] + host_columns)
-            for cid in sorted_ids:
-                row = [cid, descriptions.get(cid, ""), "/".join(sorted(value for value in check_types.get(cid, set()) if value))]
-                for host_col in host_columns:
-                    row.append(matrix_value(check_map.get(cid, {}).get(host_col)))
-                writer.writerow(row)
-
-        print(json.dumps({
-            "json": str(json_path),
-            "detail_csv": str(detail_csv_path),
-            "matrix_csv": str(matrix_csv_path),
-            "detail_rows": len(detail_rows),
-            "matrix_rows": len(sorted_ids)
-        }, ensure_ascii=False))
-        PY
-      args:
-        executable: /bin/bash
-      register: validation_csv_result
+    - name: WinRM-Verbindung vor der Pruefung testen
+      ansible.windows.win_ping:
+      register: validation_win_ping
       changed_when: false
 
-    - name: Reportpfade ausgeben
+    - name: Pruefablauf ausfuehren
+      block:
+        - name: Temporaeren Arbeitsordner auf Zielrechner anlegen
+          ansible.windows.win_file:
+            path: "{{ validation_remote_work_dir }}"
+            state: directory
+
+        - name: PowerShell-Pruefskripte auf Zielrechner kopieren
+          ansible.windows.win_copy:
+            src: "{{ validation_script_source_dir }}/{{ item }}"
+            dest: "{{ validation_remote_work_dir }}\\{{ item }}"
+          loop: "{{ validation_script_names }}"
+          loop_control:
+            label: "{{ item }}"
+
+        - name: PowerShell-Pruefskripte nacheinander ausfuehren
+          ansible.windows.win_shell: |
+            $ErrorActionPreference = 'Continue'
+            Set-Location -LiteralPath '{{ validation_remote_work_dir }}'
+
+            # Einheitlicher Ausgabeordner fuer die Pruefskripte.
+            # Ein Pruefskript kann diesen Wert optional verwenden.
+            $env:VALIDATION_RESULT_DIR = '{{ validation_remote_work_dir }}'
+            $env:VALIDATION_TARGET_IP = '{{ ansible_host | default(inventory_hostname) }}'
+
+            & powershell.exe `
+              -NoLogo `
+              -NoProfile `
+              -NonInteractive `
+              -ExecutionPolicy Bypass `
+              -File '{{ validation_remote_work_dir }}\{{ item }}'
+
+            exit $LASTEXITCODE
+          args:
+            chdir: "{{ validation_remote_work_dir }}"
+          loop: "{{ validation_script_names }}"
+          loop_control:
+            label: "{{ item }}"
+          register: validation_script_execution
+          changed_when: false
+          failed_when: false
+
+        - name: Fehlgeschlagene PowerShell-Pruefskripte speichern
+          ansible.builtin.set_fact:
+            validation_failed_scripts: >-
+              {{
+                validation_script_execution.results
+                | selectattr('rc', 'defined')
+                | rejectattr('rc', 'equalto', 0)
+                | list
+              }}
+
+        - name: Erzeugte JSON-Dateien auf Zielrechner suchen
+          ansible.windows.win_find:
+            paths:
+              - "{{ validation_remote_work_dir }}"
+            patterns:
+              - "*.json"
+            recurse: true
+            file_type: file
+          register: validation_remote_json_files
+          changed_when: false
+
+        - name: Gefundene JSON-Dateien anzeigen
+          ansible.builtin.debug:
+            msg: >-
+              {{ ansible_host | default(inventory_hostname) }}:
+              {{ validation_remote_json_files.files | default([]) | length }}
+              JSON-Datei(en) erzeugt.
+
+        - name: JSON-Ergebnisse auf Ansible-VM kopieren
+          ansible.builtin.fetch:
+            src: "{{ item.path }}"
+            dest: "{{ validation_local_host_result_dir }}/"
+            flat: true
+            fail_on_missing: true
+          loop: "{{ validation_remote_json_files.files | default([]) }}"
+          loop_control:
+            label: "{{ item.filename | default(item.path) }}"
+
+      rescue:
+        - name: Fehler des Pruefablaufs merken
+          ansible.builtin.set_fact:
+            validation_workflow_error: >-
+              {{ ansible_failed_result.msg | default(ansible_failed_result | to_json) }}
+
+      always:
+        - name: Temporaere Skripte und Ergebnisdateien vom Zielrechner entfernen
+          ansible.windows.win_file:
+            path: "{{ validation_remote_work_dir }}"
+            state: absent
+          register: validation_cleanup
+          failed_when: false
+
+        - name: Cleanup-Ergebnis anzeigen
+          ansible.builtin.debug:
+            msg: >-
+              Temporaerer Arbeitsordner {{ validation_remote_work_dir }} auf
+              {{ ansible_host | default(inventory_hostname) }} wurde
+              {{ 'entfernt' if not (validation_cleanup.failed | default(false)) else 'NICHT vollstaendig entfernt' }}.
+
+    - name: Fehler melden wenn der Pruefablauf selbst fehlgeschlagen ist
+      ansible.builtin.fail:
+        msg: >-
+          Pruefablauf auf {{ ansible_host | default(inventory_hostname) }} fehlgeschlagen:
+          {{ validation_workflow_error }}
+          Der Cleanup wurde trotzdem ausgefuehrt.
+      when: validation_workflow_error is defined
+
+    - name: Fehler melden wenn keine JSON-Datei erzeugt wurde
+      ansible.builtin.fail:
+        msg: >-
+          Auf {{ ansible_host | default(inventory_hostname) }} wurde von den
+          PowerShell-Pruefskripten keine JSON-Datei im temporaeren Arbeitsordner erzeugt.
+          Die Skripte muessen ihre JSON-Ausgaben in das aktuelle Arbeitsverzeichnis
+          oder nach $env:VALIDATION_RESULT_DIR schreiben.
+      when:
+        - validation_workflow_error is not defined
+        - validation_remote_json_files is defined
+        - validation_remote_json_files.files | default([]) | length == 0
+
+    - name: Fehlerhafte PowerShell-Skripte nach Ergebnisuebernahme melden
+      ansible.builtin.fail:
+        msg: >-
+          Auf {{ ansible_host | default(inventory_hostname) }} sind folgende
+          PowerShell-Pruefskripte mit einem Fehlercode beendet worden:
+          {{ validation_failed_scripts | map(attribute='item') | list }}.
+          Vorhandene JSON-Ergebnisse wurden zuvor auf die Ansible-VM kopiert
+          und der temporaere Zielordner wurde entfernt.
+      when:
+        - validation_workflow_error is not defined
+        - validation_failed_scripts is defined
+        - validation_failed_scripts | length > 0
+
+    - name: Erfolgreiche Ergebnisablage anzeigen
       ansible.builtin.debug:
         msg:
-          - "JSON: {{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}.json"
-          - "DETAIL CSV: {{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_details.csv"
-          - "MATRIX CSV: {{ result_dir }}/{{ validation_report_prefix }}_{{ validation_report_timestamp }}_matrix.csv"
-          - "Zusammenfassung: {{ validation_csv_result.stdout }}"
+          - "IP: {{ ansible_host | default(inventory_hostname) }}"
+          - "Lokaler Ergebnisordner: {{ validation_local_host_result_dir }}"
+          - "JSON-Dateien: {{ validation_remote_json_files.files | default([]) | map(attribute='filename') | list }}"
+      when:
+        - validation_workflow_error is not defined
+        - validation_remote_json_files is defined
+        - validation_remote_json_files.files | default([]) | length > 0
+        - validation_failed_scripts | default([]) | length == 0
