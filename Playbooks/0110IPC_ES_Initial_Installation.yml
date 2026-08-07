@@ -14,7 +14,7 @@
 
     # Exemplarische Skriptnamen. Spaeter einfach durch die echten Namen ersetzen.
     validation_script_names:
-      - "1.ps1"
+      - "Initial_Valid.ps1"
       - "2.ps1"
       - "3.ps1"
       - "4.ps1"
@@ -144,13 +144,16 @@
   any_errors_fatal: false
 
   vars:
-    # Ausschliesslich temporaerer Arbeitsordner auf dem Zielrechner.
-    # Der komplette Ordner wird im always-Block wieder entfernt.
-    validation_remote_work_dir: >-
-      C:\Windows\Temp\Ansible_IPC_ES_Validation_{{ validation_run_id }}
+    # Temporaerer Basisordner auf dem Windows-Zielsystem
+    validation_remote_base_dir: 'C:\temp\AnsibleValidation'
 
-    # Die Skripte sollten ihre JSON-Dateien in das aktuelle Arbeitsverzeichnis
-    # oder in $env:VALIDATION_RESULT_DIR schreiben.
+    # Hier liegen nur die PowerShell-Pruefskripte
+    validation_remote_script_dir: '{{ validation_remote_base_dir }}\skripte'
+
+    # Hier erzeugen die PowerShell-Skripte ihre JSON-Ergebnisse
+    validation_remote_result_dir: '{{ validation_remote_base_dir }}\result'
+
+    # Dauerhafte Ergebnisablage auf der Ansible-VM
     validation_local_host_result_dir: >-
       {{ result_dir }}/{{ ansible_host | default(inventory_hostname) }}
 
@@ -170,15 +173,18 @@
 
     - name: Pruefablauf ausfuehren
       block:
-        - name: Temporaeren Arbeitsordner auf Zielrechner anlegen
+        - name: Temporaere Validierungsordner auf Zielrechner anlegen
           ansible.windows.win_file:
-            path: "{{ validation_remote_work_dir }}"
+            path: "{{ item }}"
             state: directory
+          loop:
+            - "{{ validation_remote_script_dir }}"
+            - "{{ validation_remote_result_dir }}"
 
         - name: PowerShell-Pruefskripte auf Zielrechner kopieren
           ansible.windows.win_copy:
             src: "{{ validation_script_source_dir }}/{{ item }}"
-            dest: "{{ validation_remote_work_dir }}\\{{ item }}"
+            dest: "{{ validation_remote_script_dir }}\\{{ item }}"
           loop: "{{ validation_script_names }}"
           loop_control:
             label: "{{ item }}"
@@ -190,7 +196,7 @@
 
             # Einheitlicher Ausgabeordner fuer die Pruefskripte.
             # Ein Pruefskript kann diesen Wert optional verwenden.
-            $env:VALIDATION_RESULT_DIR = '{{ validation_remote_work_dir }}'
+            $env:VALIDATION_RESULT_DIR = '{{ validation_remote_result_dir }}'
             $env:VALIDATION_TARGET_IP = '{{ ansible_host | default(inventory_hostname) }}'
 
             & powershell.exe `
@@ -198,11 +204,11 @@
               -NoProfile `
               -NonInteractive `
               -ExecutionPolicy Bypass `
-              -File '{{ validation_remote_work_dir }}\{{ item }}'
+              -File '{{ validation_remote_script_dir }}\{{ item }}'
 
             exit $LASTEXITCODE
           args:
-            chdir: "{{ validation_remote_work_dir }}"
+            chdir: "{{ validation_remote_script_dir }}"
           loop: "{{ validation_script_names }}"
           loop_control:
             label: "{{ item }}"
@@ -223,7 +229,7 @@
         - name: Erzeugte JSON-Dateien auf Zielrechner suchen
           ansible.windows.win_find:
             paths:
-              - "{{ validation_remote_work_dir }}"
+              - "{{ validation_remote_result_dir }}"
             patterns:
               - "*.json"
             recurse: true
@@ -257,7 +263,7 @@
       always:
         - name: Temporaere Skripte und Ergebnisdateien vom Zielrechner entfernen
           ansible.windows.win_file:
-            path: "{{ validation_remote_work_dir }}"
+            path: "{{ validation_remote_base_dir }}"
             state: absent
           register: validation_cleanup
           failed_when: false
@@ -265,7 +271,7 @@
         - name: Cleanup-Ergebnis anzeigen
           ansible.builtin.debug:
             msg: >-
-              Temporaerer Arbeitsordner {{ validation_remote_work_dir }} auf
+              Temporaerer Arbeitsordner {{ validation_remote_base_dir }} auf
               {{ ansible_host | default(inventory_hostname) }} wurde
               {{ 'entfernt' if not (validation_cleanup.failed | default(false)) else 'NICHT vollstaendig entfernt' }}.
 
