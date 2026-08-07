@@ -516,24 +516,24 @@ $listeningEndpoints = Invoke-SafeCollection -Name 'ListeningEndpoints' -ScriptBl
 
     $servicesByPid = @{}
     foreach ($s in @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { $_.ProcessId -gt 0 })) {
-        $pid = [int]$s.ProcessId
-        if (-not $servicesByPid.ContainsKey($pid)) { $servicesByPid[$pid] = New-Object System.Collections.ArrayList }
-        [void]$servicesByPid[$pid].Add($s.Name)
+        $processid = [int]$s.ProcessId
+        if (-not $servicesByPid.ContainsKey($processid)) { $servicesByPid[$processid] = New-Object System.Collections.ArrayList }
+        [void]$servicesByPid[$processid].Add($s.Name)
     }
 
     $tcp = @()
     if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
         $tcp = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Sort-Object LocalPort, LocalAddress | ForEach-Object {
-            $pid = [int]$_.OwningProcess
+            $processid = [int]$_.OwningProcess
             [pscustomobject][ordered]@{
                 Protocol      = 'TCP'
                 LocalAddress  = $_.LocalAddress
                 LocalPort     = $_.LocalPort
                 State         = [string]$_.State
-                OwningProcess = $pid
-                ProcessName   = if ($processNames.ContainsKey($pid)) { $processNames[$pid].Name } else { $null }
-                ExecutablePath = if ($processNames.ContainsKey($pid)) { $processNames[$pid].ExecutablePath } else { $null }
-                Services      = if ($servicesByPid.ContainsKey($pid)) { @($servicesByPid[$pid]) } else { @() }
+                OwningProcess = $processid
+                ProcessName   = if ($processNames.ContainsKey($processid)) { $processNames[$processid].Name } else { $null }
+                ExecutablePath = if ($processNames.ContainsKey($processid)) { $processNames[$processid].ExecutablePath } else { $null }
+                Services      = if ($servicesByPid.ContainsKey($processid)) { @($servicesByPid[$processid]) } else { @() }
             }
         })
     }
@@ -541,15 +541,15 @@ $listeningEndpoints = Invoke-SafeCollection -Name 'ListeningEndpoints' -ScriptBl
     $udp = @()
     if (Get-Command Get-NetUDPEndpoint -ErrorAction SilentlyContinue) {
         $udp = @(Get-NetUDPEndpoint -ErrorAction SilentlyContinue | Sort-Object LocalPort, LocalAddress | ForEach-Object {
-            $pid = [int]$_.OwningProcess
+            $processid = [int]$_.OwningProcess
             [pscustomobject][ordered]@{
                 Protocol      = 'UDP'
                 LocalAddress  = $_.LocalAddress
                 LocalPort     = $_.LocalPort
-                OwningProcess = $pid
-                ProcessName   = if ($processNames.ContainsKey($pid)) { $processNames[$pid].Name } else { $null }
-                ExecutablePath = if ($processNames.ContainsKey($pid)) { $processNames[$pid].ExecutablePath } else { $null }
-                Services      = if ($servicesByPid.ContainsKey($pid)) { @($servicesByPid[$pid]) } else { @() }
+                OwningProcess = $processid
+                ProcessName   = if ($processNames.ContainsKey($processid)) { $processNames[$processid].Name } else { $null }
+                ExecutablePath = if ($processNames.ContainsKey($processid)) { $processNames[$processid].ExecutablePath } else { $null }
+                Services      = if ($servicesByPid.ContainsKey($processid)) { @($servicesByPid[$processid]) } else { @() }
             }
         })
     }
