@@ -16,7 +16,7 @@
     validation_script_names:
       - "Initial_Valid.ps1"
       - "GPOs_Valid.ps1"
-      - "3.ps1"
+      - "Certificates_Services_Drivers_Valid.ps1"
       - "4.ps1"
       - "5.ps1"
       - "6.ps1"
