@@ -1,12 +1,14 @@
 ---
-# Erkennt alle per WinRM erreichbaren Windows-Teilnehmer im Zielnetz,
-# liest technische Rollenmerkmale aus und ordnet sie dauerhaft den Gruppen
-# ipc_es, ipc_os oder ipc_os_client zu.
+# Erkennt erreichbare Netzwerkteilnehmer ueber nmap, prueft bei vorhandenem
+# WinRM-Port den Ansible-Zugriff und gruppiert die Teilnehmer in:
+#   - ipc_es
+#   - ipc_os
+#   - ipc_os_client
+#   - sonstige
+#   - kein_zugriff
 #
-# Die dynamischen Ansible-Gruppen gelten nur innerhalb dieses Laufs.
-# Fuer nachfolgende Semaphore-Templates wird deshalb zusaetzlich die Datei
+# Ergebnisdatei:
 #   {{ result_dir }}/ipc_discovery_groups_latest.json
-# geschrieben. 0110/0120/0130 laden diese Datei bei jedem Lauf erneut.
 
 - name: IPC-Teilnehmer mit nmap erkennen und temporaer aufnehmen
   hosts: localhost
@@ -52,6 +54,26 @@
         msg: "nmap ist unter {{ nmap_binary }} nicht ausfuehrbar."
       when: nmap_check.rc != 0
 
+    # Zuerst werden alle von nmap als erreichbar erkannten Netzwerkteilnehmer
+    # aufgenommen. Dadurch landen auch Teilnehmer ohne offenen WinRM-Port
+    # spaeter in der Gruppe kein_zugriff.
+    - name: Erreichbare Netzwerkteilnehmer mit nmap erkennen
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ nmap_binary }} -n -sn {{ target_network }} -oG - |
+        awk '/Status: Up/ { print $2 }'
+      args:
+        executable: /bin/bash
+      register: discovery_reachable_scan
+      changed_when: false
+
+    - name: Erreichbare Netzwerkteilnehmer speichern
+      ansible.builtin.set_fact:
+        discovered_reachable_hosts: "{{ discovery_reachable_scan.stdout_lines | default([]) | unique | list }}"
+
+    # Die vorhandene WinRM-nmap-Struktur bleibt erhalten. Sie ermittelt,
+    # welche der Teilnehmer Port 5985 und/oder 5986 offen haben und welche
+    # Verbindung Ansible anschliessend testen soll.
     - name: Zielnetz nach offenen WinRM-Ports scannen
       ansible.builtin.shell: |
         set -o pipefail
@@ -83,10 +105,37 @@
       ansible.builtin.debug:
         msg:
           - "Zielnetz: {{ target_network }}"
-          - "Gefundene WinRM-Teilnehmer: {{ discovered_winrm_hosts | length }}"
-          - "Teilnehmer: {{ discovered_winrm_hosts | map('regex_replace', ';.*$', '') | list }}"
+          - "Von nmap erreichbare Netzwerkteilnehmer: {{ discovered_reachable_hosts | length }}"
+          - "Teilnehmer mit offenem WinRM-Port: {{ discovered_winrm_hosts | length }}"
+          - "Erreichbare IPs: {{ discovered_reachable_hosts }}"
+          - "WinRM-IP-Adressen: {{ discovered_winrm_hosts | map('regex_replace', ';.*$', '') | list }}"
 
-    - name: Gefundene Windows-Teilnehmer temporaer aufnehmen
+    # Zuerst alle erreichbaren Teilnehmer aufnehmen. Ohne erkannten WinRM-Port
+    # werden sie nicht per win_ping angesprochen, sondern direkt als
+    # kein_zugriff behandelt.
+    - name: Alle erreichbaren Netzwerkteilnehmer temporaer aufnehmen
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: "{{ discovery_group }}"
+        ansible_host: "{{ item }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: 5985
+        ansible_winrm_scheme: http
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(180) }}"
+        discovery_open_ports: ""
+        discovery_winrm_detected: false
+      loop: "{{ discovered_reachable_hosts }}"
+      no_log: true
+
+    # Teilnehmer mit offenem WinRM-Port werden mit den vom vorhandenen Scan
+    # ermittelten Verbindungsdaten aktualisiert. Dieser Schritt nimmt auch
+    # Hosts auf, die auf Host-Discovery nicht antworten, aber WinRM offen haben.
+    - name: Teilnehmer mit offenem WinRM-Port aktualisieren
       ansible.builtin.add_host:
         name: "{{ item.split(';')[0] }}"
         groups: "{{ discovery_group }}"
@@ -101,22 +150,35 @@
         ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
         ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(180) }}"
         discovery_open_ports: "{{ item.split(';')[3] }}"
+        discovery_winrm_detected: true
       loop: "{{ discovered_winrm_hosts }}"
       no_log: true
 
 
-- name: Rollenmerkmale der gefundenen IPCs auslesen
+- name: Ansible-Zugriff pruefen und Rollenmerkmale auslesen
   hosts: ipc_discovery_candidates
   gather_facts: false
   ignore_unreachable: true
 
   tasks:
-    - name: WinRM-Verbindung testen
+    - name: WinRM-Verbindung mit Ansible testen
       ansible.windows.win_ping:
       register: discovery_ping
+      when: discovery_winrm_detected | default(false) | bool
       changed_when: false
       failed_when: false
       ignore_unreachable: true
+
+    - name: Ansible-Zugriff als Host-Fact speichern
+      ansible.builtin.set_fact:
+        discovery_ansible_access: >-
+          {{
+            (discovery_winrm_detected | default(false) | bool)
+            and discovery_ping is defined
+            and not (discovery_ping.unreachable | default(false) | bool)
+            and not (discovery_ping.failed | default(false) | bool)
+            and discovery_ping.ping | default('') == 'pong'
+          }}
 
     - name: Betriebssystem, Siemens-Produkte und relevante Dienste auslesen
       ansible.windows.win_shell: |
@@ -134,41 +196,44 @@
         $roleProductPattern = '(?i)(Siemens|SIMATIC|PCS\s*7|PCS7|WinCC|STEP\s*7|SIMATIC\s+Manager|Engineering\s+System|OS\s*Server|OS\s*Client|CFC|SFC|SQL\s+Server)'
         $products = @()
         foreach ($root in $registryRoots) {
-          $products += @(Get-ItemProperty $root -ErrorAction SilentlyContinue |
+          $products += @(
+            Get-ItemProperty $root -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.DisplayName -and ([string]$_.DisplayName -match $roleProductPattern)
+              } |
+              ForEach-Object {
+                [ordered]@{
+                  name = [string]$_.DisplayName
+                  version = [string]$_.DisplayVersion
+                  publisher = [string]$_.Publisher
+                }
+              }
+          )
+        }
+
+        $products = @($products | Sort-Object name, version -Unique)
+
+        $servicePattern = '(?i)(Siemens|SIMATIC|WinCC|S7|PCS7|SQL)'
+        $services = @(
+          Get-CimInstance Win32_Service |
             Where-Object {
-              $_.DisplayName -and ([string]$_.DisplayName -match $roleProductPattern)
+              ([string]$_.Name -match $servicePattern) -or
+              ([string]$_.DisplayName -match $servicePattern)
             } |
             ForEach-Object {
               [ordered]@{
-                name = [string]$_.DisplayName
-                version = [string]$_.DisplayVersion
-                publisher = [string]$_.Publisher
+                name = [string]$_.Name
+                display_name = [string]$_.DisplayName
+                state = [string]$_.State
+                start_mode = [string]$_.StartMode
               }
-            })
-        }
-
-        $products = @($products |
-          Sort-Object name, version -Unique)
-
-        $servicePattern = '(?i)(Siemens|SIMATIC|WinCC|S7|PCS7|SQL)'
-        $services = @(Get-CimInstance Win32_Service |
-          Where-Object {
-            ([string]$_.Name -match $servicePattern) -or
-            ([string]$_.DisplayName -match $servicePattern)
-          } |
-          ForEach-Object {
-            [ordered]@{
-              name = [string]$_.Name
-              display_name = [string]$_.DisplayName
-              state = [string]$_.State
-              start_mode = [string]$_.StartMode
-            }
-          } |
-          Sort-Object name -Unique)
+            } |
+            Sort-Object name -Unique
+        )
 
         $result = [ordered]@{
           ip = [string]$env:ANSIBLE_DISCOVERY_IP
-          winrm_reachable = $true
+          ansible_access = $true
           computername = [string]$env:COMPUTERNAME
           domain = [string]$cs.Domain
           part_of_domain = [bool]$cs.PartOfDomain
@@ -189,11 +254,7 @@
       environment:
         ANSIBLE_DISCOVERY_IP: "{{ ansible_host | default(inventory_hostname) }}"
       register: discovery_raw
-      when:
-        - discovery_ping is defined
-        - not (discovery_ping.unreachable | default(false) | bool)
-        - not (discovery_ping.failed | default(false) | bool)
-        - discovery_ping.ping | default('') == 'pong'
+      when: discovery_ansible_access | bool
       changed_when: false
       failed_when: false
 
@@ -201,15 +262,16 @@
       ansible.builtin.set_fact:
         ipc_discovery_info: "{{ discovery_raw.stdout | trim | from_json }}"
       when:
+        - discovery_ansible_access | bool
         - discovery_raw is defined
         - discovery_raw.stdout is defined
         - discovery_raw.stdout | trim | length > 0
 
-    - name: Nicht erreichbaren Teilnehmer als unklassifiziert vormerken
+    - name: Teilnehmer ohne Ansible-Zugriff vormerken
       ansible.builtin.set_fact:
         ipc_discovery_info:
           ip: "{{ ansible_host | default(inventory_hostname) }}"
-          winrm_reachable: false
+          ansible_access: false
           computername: ""
           domain: ""
           part_of_domain: false
@@ -221,11 +283,37 @@
           os_product_type: 0
           installed_products: []
           relevant_services: []
-          error: "WinRM nicht erreichbar oder Zugriff verweigert"
-      when: ipc_discovery_info is not defined
+          error: >-
+            {{
+              'WinRM-Port 5985/5986 nicht offen'
+              if not (discovery_winrm_detected | default(false) | bool)
+              else 'WinRM-Port offen, aber kein Ansible-/WinRM-Zugriff'
+            }}
+      when: not (discovery_ansible_access | bool)
+
+    - name: Teilnehmer mit Zugriff aber ohne auswertbare Discovery-Daten vormerken
+      ansible.builtin.set_fact:
+        ipc_discovery_info:
+          ip: "{{ ansible_host | default(inventory_hostname) }}"
+          ansible_access: true
+          computername: ""
+          domain: ""
+          part_of_domain: false
+          manufacturer: ""
+          model: ""
+          os_caption: ""
+          os_version: ""
+          os_build_number: ""
+          os_product_type: 0
+          installed_products: []
+          relevant_services: []
+          error: "Ansible-Zugriff vorhanden, Rollenmerkmale konnten nicht ausgelesen werden"
+      when:
+        - discovery_ansible_access | bool
+        - ipc_discovery_info is not defined
 
 
-- name: IPC-Rollen klassifizieren und dauerhaft protokollieren
+- name: IPC-Rollen klassifizieren und JSON erzeugen
   hosts: localhost
   connection: local
   gather_facts: false
@@ -233,10 +321,8 @@
   vars:
     discovery_group: "ipc_discovery_candidates"
     discovery_latest_file: "{{ ipc_discovery_file | default(result_dir ~ '/ipc_discovery_groups_latest.json') }}"
-    discovery_latest_inventory_file: "{{ ipc_discovery_inventory_file | default(result_dir ~ '/ipc_discovery_inventory_latest.yml') }}"
 
-    # Die Namensmuster passen zu den Bezeichnungen der Masterliste, z. B.
-    # ES02, OSS01APERI/OSS01BPERI und OSC02.
+    # Namensmuster fuer die drei bekannten IPC-Rollen.
     es_name_regex: "{{ ipc_es_name_regex | default('(?i)^(ES[0-9]|ES[-_]|ENG)') }}"
     os_server_name_regex: "{{ ipc_os_server_name_regex | default('(?i)^(OSS|OS[-_]?S|.*OSSERVER)') }}"
     os_client_name_regex: "{{ ipc_os_client_name_regex | default('(?i)^(OSC|OS[-_]?C|.*OSCLIENT)') }}"
@@ -254,23 +340,25 @@
     role_overrides: "{{ ipc_role_overrides | default({}) }}"
 
   tasks:
-    - name: Report-Verzeichnis erzeugen
+    - name: Ergebnisverzeichnis erzeugen
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
         mode: "0755"
 
-    - name: Rohdaten der Discovery als JSON erzeugen
+    # Diese Datei dient nur als interne Uebergabe an den lokalen Python-Block
+    # und wird nach der Klassifizierung wieder entfernt.
+    - name: Discovery-Rohdaten temporaer als JSON bereitstellen
       ansible.builtin.copy:
-        dest: "{{ result_dir }}/ipc_discovery_raw_{{ hostvars['localhost'].discovery_timestamp }}.json"
-        mode: "0644"
+        dest: "{{ result_dir }}/.ipc_discovery_raw_{{ hostvars['localhost'].discovery_timestamp }}.json"
+        mode: "0600"
         content: |
           [
           {% for h in groups[discovery_group] | default([]) %}
           {{
             (hostvars[h].ipc_discovery_info | default({
               'ip': hostvars[h].ansible_host | default(h),
-              'winrm_reachable': false,
+              'ansible_access': false,
               'computername': '',
               'installed_products': [],
               'relevant_services': [],
@@ -286,11 +374,11 @@
           {% endfor %}
           ]
 
-    - name: Teilnehmer klassifizieren sowie Latest-Datei, CSV und Inventory schreiben
+    - name: Teilnehmer klassifizieren und gruppierte JSON-Datei schreiben
       ansible.builtin.shell: |
         set -euo pipefail
         "{{ ansible_playbook_python }}" - <<'PY'
-        import csv
+        import ipaddress
         import json
         import re
         from pathlib import Path
@@ -300,11 +388,8 @@
         timestamp_iso = {{ hostvars['localhost'].discovery_timestamp_iso | to_json }}
         target_network = {{ target_network | to_json }}
 
-        raw_path = result_dir / f"ipc_discovery_raw_{timestamp}.json"
-        detailed_path = result_dir / f"ipc_discovery_classification_{timestamp}.json"
-        csv_path = result_dir / f"ipc_discovery_classification_{timestamp}.csv"
+        raw_path = result_dir / f".ipc_discovery_raw_{timestamp}.json"
         latest_path = Path({{ discovery_latest_file | to_json }})
-        inventory_path = Path({{ discovery_latest_inventory_file | to_json }})
 
         patterns = {
             "es_name": re.compile({{ es_name_regex | to_json }}),
@@ -317,6 +402,7 @@
             "os_server_service": re.compile({{ os_server_service_regex | to_json }}),
             "os_client_service": re.compile({{ os_client_service_regex | to_json }}),
         }
+
         min_score = int({{ classification_min_score | int }})
         min_margin = int({{ classification_min_margin | int }})
         overrides = {{ role_overrides | to_json }}
@@ -330,9 +416,17 @@
             "CLIENT": "OS_Client",
             "OS_CLIENT": "OS_Client",
             "IPC_OS_CLIENT": "OS_Client",
-            "IGNORE": "Ignore",
-            "UNCLASSIFIED": "Unclassified",
+            "SONSTIGE": "Sonstige",
+            "OTHER": "Sonstige",
+            "UNCLASSIFIED": "Sonstige",
         }
+
+        def ip_sort_key(host):
+            value = str(host.get("ip") or "")
+            try:
+                return (0, int(ipaddress.ip_address(value)))
+            except ValueError:
+                return (1, value)
 
         def text_products(host):
             values = []
@@ -362,6 +456,18 @@
         for host in raw_hosts:
             ip = str(host.get("ip") or "")
             name = str(host.get("computername") or "")
+
+            # Offener WinRM-Port allein bedeutet noch nicht, dass Ansible
+            # sich erfolgreich anmelden und Befehle ausfuehren kann.
+            if not bool(host.get("ansible_access", False)):
+                host["classification"] = "Kein_Zugriff"
+                host["classification_confidence"] = "none"
+                host["classification_reason"] = host.get("error") or "Kein Ansible-/WinRM-Zugriff"
+                host["classification_scores"] = {"ES": 0, "OS_Server": 0, "OS_Client": 0}
+                host["classification_evidence"] = {"ES": [], "OS_Server": [], "OS_Client": []}
+                classified.append(host)
+                continue
+
             product_type = int(host.get("os_product_type") or 0)
             os_caption = str(host.get("os_caption") or "")
             products = text_products(host)
@@ -414,15 +520,7 @@
             second_score = ordered[1][1]
             margin = best_score - second_score
 
-            if not host.get("winrm_reachable", False):
-                classification = "Unclassified"
-                confidence = "none"
-                classification_reason = host.get("error") or "WinRM nicht erreichbar"
-            elif override == "Ignore":
-                classification = "Ignore"
-                confidence = "override"
-                classification_reason = "Manueller Ausschluss ueber ipc_role_overrides"
-            elif override in ("ES", "OS_Server", "OS_Client", "Unclassified"):
+            if override in ("ES", "OS_Server", "OS_Client", "Sonstige"):
                 classification = override
                 confidence = "override"
                 classification_reason = f"Manuelle Zuordnung ueber ipc_role_overrides: {override_raw}"
@@ -431,7 +529,7 @@
                 confidence = "high" if best_score >= 10 and margin >= 4 else "medium"
                 classification_reason = "; ".join(reasons[best_role]) or "hoechster Klassifizierungswert"
             else:
-                classification = "Unclassified"
+                classification = "Sonstige"
                 confidence = "low"
                 classification_reason = (
                     f"Keine eindeutige Zuordnung: bester Wert {best_role}={best_score}, "
@@ -445,82 +543,33 @@
             host["classification_evidence"] = reasons
             classified.append(host)
 
+        classified = sorted(classified, key=ip_sort_key)
+
         groups = {
             "ipc_es": [h for h in classified if h.get("classification") == "ES"],
             "ipc_os": [h for h in classified if h.get("classification") == "OS_Server"],
             "ipc_os_client": [h for h in classified if h.get("classification") == "OS_Client"],
-            "unclassified": [h for h in classified if h.get("classification") == "Unclassified"],
-            "ignored": [h for h in classified if h.get("classification") == "Ignore"],
+            "sonstige": [h for h in classified if h.get("classification") == "Sonstige"],
+            "kein_zugriff": [h for h in classified if h.get("classification") == "Kein_Zugriff"],
         }
 
         output = {
             "generated_at": timestamp_iso,
             "target_network": target_network,
-            "classification_version": 1,
+            "classification_version": 2,
             "groups": groups,
             "hosts": classified,
             "summary": {key: len(value) for key, value in groups.items()},
         }
 
-        text = json.dumps(output, ensure_ascii=False, indent=2)
-        detailed_path.write_text(text, encoding="utf-8")
         latest_path.parent.mkdir(parents=True, exist_ok=True)
-        latest_path.write_text(text, encoding="utf-8")
-
-        fieldnames = [
-            "Pruefzeit", "IP", "WinRM_Port", "WinRM_Schema", "WinRM_erreichbar",
-            "Computername", "Domaene", "Betriebssystem", "OS_ProductType",
-            "Klassifizierung", "Vertrauen", "Score_ES", "Score_OS_Server",
-            "Score_OS_Client", "Klassifizierungsgrund", "Fehler"
-        ]
-        with csv_path.open("w", encoding="utf-8-sig", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter=";")
-            writer.writeheader()
-            for host in sorted(classified, key=lambda h: str(h.get("ip", ""))):
-                scores = host.get("classification_scores") or {}
-                writer.writerow({
-                    "Pruefzeit": timestamp_iso,
-                    "IP": host.get("ip", ""),
-                    "WinRM_Port": host.get("winrm_port", ""),
-                    "WinRM_Schema": host.get("winrm_scheme", ""),
-                    "WinRM_erreichbar": host.get("winrm_reachable", False),
-                    "Computername": host.get("computername", ""),
-                    "Domaene": host.get("domain", ""),
-                    "Betriebssystem": host.get("os_caption", ""),
-                    "OS_ProductType": host.get("os_product_type", ""),
-                    "Klassifizierung": host.get("classification", ""),
-                    "Vertrauen": host.get("classification_confidence", ""),
-                    "Score_ES": scores.get("ES", 0),
-                    "Score_OS_Server": scores.get("OS_Server", 0),
-                    "Score_OS_Client": scores.get("OS_Client", 0),
-                    "Klassifizierungsgrund": host.get("classification_reason", ""),
-                    "Fehler": host.get("error", ""),
-                })
-
-        # Statisches Inventory nur als zusaetzliche, lesbare Diagnoseausgabe.
-        # Die Folge-Playbooks verwenden aus Sicherheitsgruenden die JSON-Datei,
-        # damit keine Zugangsdaten in dieser Datei gespeichert werden muessen.
-        lines = ["all:", "  children:"]
-        for group_name in ("ipc_es", "ipc_os", "ipc_os_client"):
-            lines.append(f"    {group_name}:")
-            lines.append("      hosts:")
-            members = groups[group_name]
-            if not members:
-                lines[-1] = "      hosts: {}"
-            else:
-                for host in members:
-                    ip = str(host.get("ip", ""))
-                    lines.append(f"        {ip}:")
-                    lines.append(f"          ansible_host: {ip}")
-                    lines.append(f"          discovery_computername: {json.dumps(host.get('computername', ''), ensure_ascii=False)}")
-        inventory_path.parent.mkdir(parents=True, exist_ok=True)
-        inventory_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        latest_path.write_text(
+            json.dumps(output, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
 
         print(json.dumps({
             "latest_json": str(latest_path),
-            "classification_json": str(detailed_path),
-            "csv": str(csv_path),
-            "inventory": str(inventory_path),
             "summary": output["summary"],
         }, ensure_ascii=False))
         PY
@@ -528,6 +577,11 @@
         executable: /bin/bash
       register: classification_result
       changed_when: false
+
+    - name: Temporaere Discovery-Rohdaten entfernen
+      ansible.builtin.file:
+        path: "{{ result_dir }}/.ipc_discovery_raw_{{ hostvars['localhost'].discovery_timestamp }}.json"
+        state: absent
 
     - name: Klassifizierungsdatei erneut einlesen
       ansible.builtin.slurp:
@@ -538,7 +592,7 @@
       ansible.builtin.set_fact:
         classification_latest: "{{ classification_latest_raw.content | b64decode | from_json }}"
 
-    - name: ES-IPCs auch im aktuellen Lauf gruppieren
+    - name: ES-IPCs im aktuellen Lauf gruppieren
       ansible.builtin.add_host:
         name: "{{ item.ip }}"
         groups: "ipc_es"
@@ -546,7 +600,7 @@
       loop_control:
         label: "{{ item.ip }} -> ipc_es"
 
-    - name: OS-Server-IPCs auch im aktuellen Lauf gruppieren
+    - name: OS-Server-IPCs im aktuellen Lauf gruppieren
       ansible.builtin.add_host:
         name: "{{ item.ip }}"
         groups: "ipc_os"
@@ -554,7 +608,7 @@
       loop_control:
         label: "{{ item.ip }} -> ipc_os"
 
-    - name: OS-Client-IPCs auch im aktuellen Lauf gruppieren
+    - name: OS-Client-IPCs im aktuellen Lauf gruppieren
       ansible.builtin.add_host:
         name: "{{ item.ip }}"
         groups: "ipc_os_client"
@@ -562,12 +616,28 @@
       loop_control:
         label: "{{ item.ip }} -> ipc_os_client"
 
+    - name: Sonstige Teilnehmer im aktuellen Lauf gruppieren
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: "sonstige"
+      loop: "{{ classification_latest.groups.sonstige | default([]) }}"
+      loop_control:
+        label: "{{ item.ip }} -> sonstige"
+
+    - name: Teilnehmer ohne Ansible-Zugriff im aktuellen Lauf gruppieren
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: "kein_zugriff"
+      loop: "{{ classification_latest.groups.kein_zugriff | default([]) }}"
+      loop_control:
+        label: "{{ item.ip }} -> kein_zugriff"
+
     - name: Ergebnis und Gruppengroessen anzeigen
       ansible.builtin.debug:
         msg:
-          - "{{ classification_result.stdout }}"
-          - "ES IPC: {{ classification_latest.summary.ipc_es | default(0) }}"
-          - "IPC OS: {{ classification_latest.summary.ipc_os | default(0) }}"
-          - "IPC OS Client: {{ classification_latest.summary.ipc_os_client | default(0) }}"
-          - "Nicht eindeutig: {{ classification_latest.summary.unclassified | default(0) }}"
-          - "Folge-Playbooks laden: {{ discovery_latest_file }}"
+          - "JSON: {{ discovery_latest_file }}"
+          - "ES: {{ classification_latest.summary.ipc_es | default(0) }}"
+          - "OS Server: {{ classification_latest.summary.ipc_os | default(0) }}"
+          - "OS Client: {{ classification_latest.summary.ipc_os_client | default(0) }}"
+          - "Sonstige: {{ classification_latest.summary.sonstige | default(0) }}"
+          - "Kein Zugriff: {{ classification_latest.summary.kein_zugriff | default(0) }}"
