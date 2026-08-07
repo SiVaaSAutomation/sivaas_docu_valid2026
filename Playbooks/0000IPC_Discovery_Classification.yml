@@ -180,6 +180,63 @@
             and discovery_ping.ping | default('') == 'pong'
           }}
 
+    - name: Rueckmeldung des WinRM-Tests fuer Diagnose speichern
+      ansible.builtin.set_fact:
+        discovery_access_detail: >-
+          {{
+            discovery_ping.msg
+            | default(discovery_ping.stderr
+            | default(discovery_ping.exception
+            | default('')))
+            | string
+            | trim
+          }}
+
+    - name: Ursache des Ansible-Zugriffs bestimmen
+      ansible.builtin.set_fact:
+        discovery_access_error_code: >-
+          {% set detail = discovery_access_detail | default('') | lower %}
+          {% if discovery_ansible_access | bool %}
+          OK
+          {% elif not (discovery_winrm_detected | default(false) | bool) %}
+          WINRM_PORT_CLOSED
+          {% elif '401' in detail or 'unauthorized' in detail or 'authentication' in detail or 'credentials' in detail or 'logon failure' in detail or 'user name or password' in detail or 'access is denied' in detail %}
+          AUTHENTICATION_FAILED
+          {% elif 'timed out' in detail or 'timeout' in detail %}
+          WINRM_TIMEOUT
+          {% elif 'certificate' in detail or 'ssl' in detail or 'tls' in detail %}
+          WINRM_TLS_ERROR
+          {% elif discovery_ping.unreachable | default(false) | bool %}
+          WINRM_UNREACHABLE
+          {% elif discovery_ping.failed | default(false) | bool %}
+          WIN_PING_FAILED
+          {% elif discovery_ping.ping | default('') != 'pong' %}
+          WIN_PING_NO_PONG
+          {% else %}
+          UNKNOWN_ACCESS_ERROR
+          {% endif %}
+        discovery_access_reason: >-
+          {% set detail = discovery_access_detail | default('') | lower %}
+          {% if discovery_ansible_access | bool %}
+          Ansible-/WinRM-Zugriff erfolgreich
+          {% elif not (discovery_winrm_detected | default(false) | bool) %}
+          Kein offener WinRM-Port 5985/5986 durch nmap erkannt
+          {% elif '401' in detail or 'unauthorized' in detail or 'authentication' in detail or 'credentials' in detail or 'logon failure' in detail or 'user name or password' in detail or 'access is denied' in detail %}
+          WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen
+          {% elif 'timed out' in detail or 'timeout' in detail %}
+          WinRM-Port offen, aber die Verbindung ist in ein Timeout gelaufen
+          {% elif 'certificate' in detail or 'ssl' in detail or 'tls' in detail %}
+          WinRM-Verbindung wegen TLS-/Zertifikatsproblem fehlgeschlagen
+          {% elif discovery_ping.unreachable | default(false) | bool %}
+          WinRM-Port offen, Ziel fuer Ansible jedoch nicht erreichbar
+          {% elif discovery_ping.failed | default(false) | bool %}
+          Ansible win_ping wurde ausgefuehrt, ist aber fehlgeschlagen
+          {% elif discovery_ping.ping | default('') != 'pong' %}
+          Ansible win_ping lieferte keine gueltige pong-Antwort
+          {% else %}
+          Ansible-/WinRM-Zugriff aus unbekanntem Grund fehlgeschlagen
+          {% endif %}
+
     - name: Betriebssystem, Siemens-Produkte und relevante Dienste auslesen
       ansible.windows.win_shell: |
         $ErrorActionPreference = 'SilentlyContinue'
@@ -283,12 +340,10 @@
           os_product_type: 0
           installed_products: []
           relevant_services: []
-          error: >-
-            {{
-              'WinRM-Port 5985/5986 nicht offen'
-              if not (discovery_winrm_detected | default(false) | bool)
-              else 'WinRM-Port offen, aber kein Ansible-/WinRM-Zugriff'
-            }}
+          access_error_code: "{{ discovery_access_error_code | default('UNKNOWN_ACCESS_ERROR') | trim }}"
+          access_error_reason: "{{ discovery_access_reason | default('Ansible-/WinRM-Zugriff fehlgeschlagen') | trim }}"
+          access_error_detail: "{{ discovery_access_detail | default('') | trim }}"
+          error: "{{ discovery_access_reason | default('Ansible-/WinRM-Zugriff fehlgeschlagen') | trim }}"
       when: not (discovery_ansible_access | bool)
 
     - name: Teilnehmer mit Zugriff aber ohne auswertbare Discovery-Daten vormerken
@@ -365,9 +420,13 @@
               'error': 'Keine Discovery-Daten vorhanden'
             }))
             | combine({
+              'winrm_detected': hostvars[h].discovery_winrm_detected | default(false),
               'winrm_port': hostvars[h].ansible_port | default(5985),
               'winrm_scheme': hostvars[h].ansible_winrm_scheme | default('http'),
-              'winrm_open_ports': hostvars[h].discovery_open_ports | default('')
+              'winrm_open_ports': hostvars[h].discovery_open_ports | default(''),
+              'access_error_code': hostvars[h].discovery_access_error_code | default('UNKNOWN_ACCESS_ERROR') | trim,
+              'access_error_reason': hostvars[h].discovery_access_reason | default('Keine Zugriffsinformation vorhanden') | trim,
+              'access_error_detail': hostvars[h].discovery_access_detail | default('') | trim
             })
             | to_nice_json
           }}{% if not loop.last %},{% endif %}
@@ -553,13 +612,19 @@
             "kein_zugriff": [h for h in classified if h.get("classification") == "Kein_Zugriff"],
         }
 
+        kein_zugriff_reasons = {}
+        for host in groups["kein_zugriff"]:
+            code = str(host.get("access_error_code") or "UNKNOWN_ACCESS_ERROR")
+            kein_zugriff_reasons[code] = kein_zugriff_reasons.get(code, 0) + 1
+
         output = {
             "generated_at": timestamp_iso,
             "target_network": target_network,
-            "classification_version": 2,
+            "classification_version": 3,
             "groups": groups,
             "hosts": classified,
             "summary": {key: len(value) for key, value in groups.items()},
+            "kein_zugriff_summary": kein_zugriff_reasons,
         }
 
         latest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -641,3 +706,4 @@
           - "OS Client: {{ classification_latest.summary.ipc_os_client | default(0) }}"
           - "Sonstige: {{ classification_latest.summary.sonstige | default(0) }}"
           - "Kein Zugriff: {{ classification_latest.summary.kein_zugriff | default(0) }}"
+          - "Kein-Zugriff-Ursachen: {{ classification_latest.kein_zugriff_summary | default({}) }}"
