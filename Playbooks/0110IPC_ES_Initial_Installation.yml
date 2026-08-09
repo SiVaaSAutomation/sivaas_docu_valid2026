@@ -192,7 +192,7 @@
         - name: PowerShell-Pruefskripte nacheinander ausfuehren
           ansible.windows.win_shell: |
             $ErrorActionPreference = 'Continue'
-            Set-Location -LiteralPath '{{ validation_remote_work_dir }}'
+            Set-Location -LiteralPath '{{ validation_remote_script_dir }}'
 
             # Einheitlicher Ausgabeordner fuer die Pruefskripte.
             # Ein Pruefskript kann diesen Wert optional verwenden.
