@@ -24,12 +24,35 @@
         | default(result_dir ~ '/ipc_es_id_validation_latest.json')
       }}
 
+    # Zusaetzliche CSV-Matrix: eine Zeile pro IP, eine Spalte pro ID.
+    id_validation_csv_file: >-
+      {{
+        ipc_es_id_validation_csv_file
+        | default(result_dir ~ '/ipc_es_id_validation_matrix_latest.csv')
+      }}
+
+    # Fuer die wenigen direkten Live-Pruefungen wird bewusst dieselbe
+    # Discovery-Datei und dieselbe WinRM-Zielkonfiguration wie in 0110 verwendet.
+    # add_host-Daten aus einem vorherigen Playbook-Lauf sind nicht persistent;
+    # deshalb baut 0160 die Zielgruppe aus derselben Discovery-Quelle erneut auf.
+    id_validation_discovery_file: >-
+      {{
+        ipc_discovery_file
+        | default(result_dir ~ '/ipc_discovery_groups_latest.json')
+      }}
+
   tasks:
     - name: Benoetigte Semaphore-Sollwerte pruefen
       ansible.builtin.assert:
         that:
           - result_dir is defined
           - result_dir | string | length > 0
+          - win_user is defined
+          - win_user | string | length > 0
+          - win_password is defined
+          - win_password | string | length > 0
+          - winrm_transport is defined
+          - winrm_transport | string | length > 0
           - expected_timezone_id is defined
           - expected_timezone_id | string | length > 0
           - expected_firewall_rule_name_patterns is defined
@@ -73,10 +96,88 @@
         state: directory
         mode: "0755"
 
+    # ------------------------------------------------------------------
+    # Fuer wenige IDs reicht der gespeicherte Snapshot nicht aus.
+    #
+    # Fuer diese Read-only-Live-Pruefungen wird dieselbe Discovery-Quelle
+    # und dieselbe WinRM-Konfiguration wie in 0110 verwendet. Dadurch gibt
+    # es zwischen 0110 und 0160 keine zweite, abweichende Logik fuer Port,
+    # Scheme oder Zielauswahl. Nur der Gruppenname ist 0160-spezifisch.
+    # ------------------------------------------------------------------
+    - name: IPC-Discovery-Datei fuer direkte PowerShell-Pruefungen pruefen
+      ansible.builtin.stat:
+        path: "{{ id_validation_discovery_file }}"
+      register: id_validation_discovery_stat
+
+    - name: Abbrechen wenn IPC-Discovery-Datei fuer Live-Pruefungen fehlt
+      ansible.builtin.fail:
+        msg: >-
+          {{ id_validation_discovery_file }} wurde nicht gefunden.
+          0160 verwendet fuer seine direkten PowerShell-Pruefungen dieselbe
+          Discovery-Datei wie 0110. Fuehre zuerst
+          0000IPC_Discovery_Classification.yml aus.
+      when: not (id_validation_discovery_stat.stat.exists | default(false))
+
+    - name: IPC-Discovery-Datei fuer direkte PowerShell-Pruefungen einlesen
+      ansible.builtin.slurp:
+        src: "{{ id_validation_discovery_file }}"
+      register: id_validation_discovery_raw
+
+    - name: IPC-Discovery-Daten fuer direkte PowerShell-Pruefungen speichern
+      ansible.builtin.set_fact:
+        id_validation_discovery_data: >-
+          {{ id_validation_discovery_raw.content | b64decode | from_json }}
+
+    - name: Pruefen ob Discovery-Gruppe ipc_es vorhanden ist
+      ansible.builtin.assert:
+        that:
+          - id_validation_discovery_data.groups is defined
+          - id_validation_discovery_data.groups.ipc_es is defined
+          - id_validation_discovery_data.groups.ipc_es is iterable
+        fail_msg: >-
+          In {{ id_validation_discovery_file }} wurde groups.ipc_es nicht gefunden.
+          0160 erwartet fuer den direkten Zugriff dieselbe ES-Zielgruppe wie 0110.
+
+    - name: ES-Ziele fuer direkte PowerShell-Pruefungen wie in 0110 dynamisch anlegen
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: ipc_es_0160_live_targets
+        ansible_host: "{{ item.ip }}"
+        ansible_connection: winrm
+        ansible_user: "{{ win_user }}"
+        ansible_password: "{{ win_password }}"
+        ansible_port: "{{ item.winrm_port | default(winrm_default_port | default(5985)) | int }}"
+        ansible_winrm_scheme: "{{ item.winrm_scheme | default('http') }}"
+        ansible_winrm_transport: "{{ winrm_transport }}"
+        ansible_winrm_server_cert_validation: ignore
+        ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
+        ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(90) }}"
+      loop: "{{ id_validation_discovery_data.groups.ipc_es | default([]) }}"
+      loop_control:
+        label: "{{ item.ip }}"
+      no_log: true
+
+    - name: Direkte 0160-ES-Ziele anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Discovery-Datei: {{ id_validation_discovery_file }}"
+          - "IPC ES Anzahl fuer Live-Pruefung: {{ id_validation_discovery_data.groups.ipc_es | default([]) | length }}"
+          - "IPC ES IPs: {{ id_validation_discovery_data.groups.ipc_es | default([]) | map(attribute='ip') | list }}"
+
+    - name: Hinweis wenn keine IPC ES fuer Live-Pruefungen vorhanden sind
+      ansible.builtin.debug:
+        msg: >-
+          In groups.ipc_es sind keine Zielsysteme enthalten.
+          Die JSON-basierte 0160-Auswertung wird trotzdem erzeugt;
+          die direkten PowerShell-Pruefungen IPC0047, IPC0073, IPC0076
+          und IPC0089 werden fuer keine ES ausgefuehrt.
+      when: id_validation_discovery_data.groups.ipc_es | default([]) | length == 0
+
     - name: ES-Aufgaben gegen vorhandene JSON-Informationen pruefen
       ansible.builtin.shell: |
         set -euo pipefail
         "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
         import ipaddress
         import json
         import os
@@ -86,6 +187,7 @@
 
         library_path = Path({{ id_validation_library_file | to_json }})
         output_path = Path({{ id_validation_output_file | to_json }})
+        csv_output_path = Path({{ id_validation_csv_file | to_json }})
 
         # ------------------------------------------------------------------
         # Projektabhaengige Sollwerte kommen ausschliesslich aus Semaphore.
@@ -104,6 +206,8 @@
             "disabled_service_patterns": {{ expected_disabled_service_patterns | to_json }},
             "disabled_schannel_protocols": {{ expected_disabled_schannel_protocols | to_json }},
             "enabled_schannel_protocols": {{ expected_enabled_schannel_protocols | to_json }},
+            "project_folder": {{ expected_project_folder | default('D:\\Projekt') | to_json }},
+            "project_share": {{ expected_project_share | default('Projekt') | to_json }},
         }
 
         # ------------------------------------------------------------------
@@ -430,6 +534,232 @@
                 })
 
             return ok, details
+
+        def make_information(task_id, task_name, information, source, note):
+            available = information not in (None, "", [], {})
+            return {
+                "pruefart": "INDIREKT",
+                "status": "INFORMATION" if available else "KEINE_INFORMATION",
+                "manuelle_bewertung_erforderlich": True,
+                "aufgabe": task_name,
+                "information": information if available else None,
+                "quelle": source,
+                "hinweis": note,
+            }
+
+        def service_rows(service_inventory):
+            return as_list(as_dict(service_inventory).get("Services"))
+
+        def matching_services(service_inventory, pattern):
+            result = []
+            for service in service_rows(service_inventory):
+                if not isinstance(service, dict):
+                    continue
+                haystack = " ".join(text(service.get(k)) for k in ("Name", "DisplayName", "Description", "PathName"))
+                if regex_search(pattern, haystack):
+                    result.append({
+                        "Name": service.get("Name"),
+                        "DisplayName": service.get("DisplayName"),
+                        "State": service.get("State"),
+                        "StartMode": service.get("StartMode"),
+                        "StartClassification": service.get("StartClassification"),
+                        "PathName": service.get("PathName"),
+                    })
+            return result
+
+        def software_matches(installed_software, name_pattern, version_pattern=None):
+            return product_matches(software_products(installed_software), name_pattern, version_pattern)
+
+        def software_presence_check(task_id, task_name, installed_software, name_pattern, version_pattern, soll):
+            products = software_products(installed_software)
+            if not products:
+                return missing_check(
+                    task_id, task_name, soll,
+                    "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                    "Aufgabenliste"
+                )
+            matches = product_matches(products, name_pattern, version_pattern)
+            return make_check(
+                task_id, task_name, bool(matches), soll, matches,
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                "Aufgabenliste"
+            )
+
+        def registry_evidence_matches(evidence_section, pattern):
+            evidence = as_list(as_dict(evidence_section).get("Evidence"))
+            result = []
+            for item in evidence:
+                if not isinstance(item, dict):
+                    continue
+                haystack = " ".join(text(item.get(k)) for k in ("Path", "ValueName", "Value"))
+                if regex_search(pattern, haystack):
+                    result.append(item)
+            return result
+
+        def startup_matches(autoruns, pattern):
+            result = []
+            autoruns = as_dict(autoruns)
+            for item in as_list(autoruns.get("RegistryEntries")):
+                if not isinstance(item, dict):
+                    continue
+                haystack = " ".join(text(item.get(k)) for k in ("Path", "Name", "Value", "Command"))
+                if regex_search(pattern, haystack):
+                    result.append({"type": "Registry", "item": item})
+            for folder in as_list(autoruns.get("StartupFolders")):
+                folder = as_dict(folder)
+                for item in as_list(folder.get("Items")):
+                    if not isinstance(item, dict):
+                        continue
+                    shortcut = as_dict(item.get("Shortcut"))
+                    haystack = " ".join([
+                        text(item.get("Name")), text(item.get("FullName")),
+                        text(shortcut.get("TargetPath")), text(shortcut.get("Arguments")),
+                    ])
+                    if regex_search(pattern, haystack):
+                        result.append({
+                            "type": folder.get("Scope") or "StartupFolder",
+                            "folder": folder.get("Path"),
+                            "item": item,
+                        })
+            return result
+
+        def certificate_rows(cert_inventory):
+            return as_list(as_dict(cert_inventory).get("Certificates"))
+
+        def matching_certificates(cert_inventory, pattern):
+            result = []
+            for cert in certificate_rows(cert_inventory):
+                if not isinstance(cert, dict):
+                    continue
+                haystack = " ".join(text(cert.get(k)) for k in ("Subject", "Issuer", "FriendlyName", "StoreLocation", "StoreName"))
+                if regex_search(pattern, haystack):
+                    result.append({
+                        "StoreLocation": cert.get("StoreLocation"),
+                        "StoreName": cert.get("StoreName"),
+                        "Subject": cert.get("Subject"),
+                        "Issuer": cert.get("Issuer"),
+                        "FriendlyName": cert.get("FriendlyName"),
+                        "Thumbprint": cert.get("Thumbprint"),
+                        "NotAfter": cert.get("NotAfter"),
+                        "ExpirationStatus": cert.get("ExpirationStatus"),
+                    })
+            return result
+
+        def current_kb_evidence(patch_status, installed_software, kb):
+            kb = text(kb).upper()
+            patch_status = as_dict(patch_status)
+            evidence = {"HotFixes": [], "InstalledWindowsPackages": [], "InstalledSoftware": []}
+            for item in as_list(patch_status.get("HotFixes")):
+                if isinstance(item, dict) and text(item.get("HotFixID")).upper() == kb:
+                    evidence["HotFixes"].append(item)
+            for item in as_list(patch_status.get("WindowsPackages")):
+                if not isinstance(item, dict):
+                    continue
+                state = text(item.get("PackageState")).lower()
+                haystack = " ".join([
+                    text(item.get("PackageName")), text(item.get("Description")),
+                    " ".join(text(x) for x in as_list(item.get("KBs"))),
+                ]).upper()
+                if state == "installed" and kb in haystack:
+                    evidence["InstalledWindowsPackages"].append(item)
+            evidence["InstalledSoftware"] = product_matches(
+                software_products(installed_software), re.escape(kb), None
+            )
+            present = any(bool(v) for v in evidence.values())
+            return present, evidence
+
+        def normalize_windows_path(value):
+            return text(value).strip().replace("/", "\\").rstrip("\\").lower()
+
+        def project_share_state(smb):
+            target_folder = normalize_windows_path(expected.get("project_folder"))
+            target_share = text(expected.get("project_share")).strip().lower()
+            matches = []
+            for share in as_list(as_dict(smb).get("Shares")):
+                if not isinstance(share, dict):
+                    continue
+                share_path = normalize_windows_path(share.get("Path"))
+                share_name = text(share.get("Name")).strip().lower()
+                path_match = bool(target_folder) and share_path == target_folder
+                name_match = bool(target_share) and share_name == target_share
+                if path_match or name_match:
+                    acl = as_dict(share.get("NtfsRootAcl"))
+                    matches.append({
+                        "Name": share.get("Name"),
+                        "Path": share.get("Path"),
+                        "ShareState": share.get("ShareState"),
+                        "SharePermissions": share.get("SharePermissions"),
+                        "NtfsRootAcl": share.get("NtfsRootAcl"),
+                        "FolderExists": bool_value(acl.get("Exists")),
+                    })
+            folder_confirmed = any(item.get("FolderExists") is True for item in matches)
+            share_confirmed = bool(matches)
+            return folder_confirmed, share_confirmed, matches
+
+        def cipher_policy_functions(policy_areas):
+            crypto = as_list(as_dict(policy_areas).get("Cryptography"))
+            candidates = []
+            for row in crypto:
+                if not isinstance(row, dict):
+                    continue
+                if text(row.get("Name")).lower() != "functions":
+                    continue
+                path = text(row.get("Path")).replace("/", "\\").lower()
+                if "cryptography\\configuration\\ssl\\00010002" not in path:
+                    continue
+                value = row.get("Value")
+                values = []
+                if isinstance(value, list):
+                    values = [text(x).strip() for x in value if text(x).strip()]
+                elif isinstance(value, dict):
+                    candidate_text = value.get("Preview") or value.get("Value")
+                    if candidate_text is not None:
+                        values = [x.strip() for x in re.split(r"[,;\\r\\n]+", text(candidate_text)) if x.strip()]
+                else:
+                    values = [x.strip() for x in re.split(r"[,;\\r\\n]+", text(value)) if x.strip()]
+                candidates.extend(values)
+            # Reihenfolge behalten, Duplikate entfernen.
+            seen = set()
+            unique = []
+            for item in candidates:
+                key = item.upper()
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(item)
+            return unique
+
+        def cipher_enabled_check(task_id, task_name, policy_areas, ciphers):
+            active = cipher_policy_functions(policy_areas)
+            active_upper = {x.upper() for x in active}
+            details = [
+                {"CipherSuite": cipher, "Aktiviert": cipher.upper() in active_upper}
+                for cipher in ciphers
+            ]
+            ok = bool(active) and all(item["Aktiviert"] for item in details)
+            return make_check(
+                task_id, task_name, ok,
+                "Alle aufgefuehrten Cipher Suites aktiviert; deaktiviert = NOK",
+                {"PolicyFunctions": active, "Pruefung": details},
+                "GPOs_Valid.PolicyAreaSnapshots.Cryptography (SSL\\00010002\\Functions)",
+                "Benutzeranweisung fuer 0160/0161"
+            )
+
+        def id_sort_key(value):
+            match = re.fullmatch(r"IPC(\\d+)", text(value).strip(), re.IGNORECASE)
+            if match:
+                return (0, int(match.group(1)), text(value))
+            return (1, text(value))
+
+        def matrix_information_value(item):
+            item = as_dict(item)
+            if item.get("status") == "KEINE_INFORMATION":
+                return "KEINE_INFORMATION"
+            value = item.get("information")
+            if value is None:
+                return "KEINE_INFORMATION"
+            if isinstance(value, str):
+                return value
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
 
         # ------------------------------------------------------------------
         # Eine ES auswerten.
@@ -1283,6 +1613,673 @@
             }
 
         # ------------------------------------------------------------------
+        # Zusaetzliche ES-Pruefungen und indirekte Informationsausgaben.
+        #
+        # WICHTIG: evaluate_es() oben bleibt unveraendert. Diese Funktion
+        # ergaenzt nur die vom Benutzer neu freigegebenen IDs. Historische
+        # Bedienhandlungen, Neustarts und explizit ignorierte IDs werden hier
+        # nicht aufgenommen.
+        # ------------------------------------------------------------------
+        def evaluate_es_additions(host):
+            checks = {}
+            info = {}
+
+            identity = library_section(host, "system_und_hardware", "Initial_Valid", "Identity")
+            language = library_section(host, "sprache_und_region", "Initial_Valid", "LanguageAndRegion")
+            storage = library_section(host, "system_und_hardware", "Initial_Valid", "Storage")
+            network_adapters = library_section(host, "netzwerk_und_domaene", "Initial_Valid", "NetworkAdapters")
+            domain_info = library_section(host, "netzwerk_und_domaene", "Initial_Valid", "DomainInformation")
+            bios = library_section(host, "system_und_hardware", "Initial_Valid", "BIOS")
+            defender = library_section(host, "sicherheit", "Initial_Valid", "MicrosoftDefender")
+            windows_components = library_section(host, "windows_software_und_features", "Initial_Valid", "WindowsComponents")
+            best_practice = library_section(host, "hinweise_und_beobachtungen", "Initial_Valid", "InstallationBestPractice")
+
+            service_inventory = library_section(host, "dienste_treiber_und_geraete", "Certificates_Services_Drivers_Valid", "Services")
+            certificates = library_section(host, "zertifikate_und_bindings", "Certificates_Services_Drivers_Valid", "Certificates")
+            certificate_bindings = library_section(host, "zertifikate_und_bindings", "Certificates_Services_Drivers_Valid", "CertificateBindings")
+
+            detailed_firewall = library_section(host, "firewall_smb_und_endpunkte", "Firewall_SMB_Patch_Valid", "Firewall")
+            smb = library_section(host, "firewall_smb_und_endpunkte", "Firewall_SMB_Patch_Valid", "SMB")
+            autoruns = library_section(host, "autostart_und_tasks", "Firewall_SMB_Patch_Valid", "Autoruns")
+            patch_status = library_section(host, "patchstand", "Firewall_SMB_Patch_Valid", "PatchStatus")
+
+            policy_areas = library_section(host, "gruppenrichtlinien", "GPOs_Valid", "PolicyAreaSnapshots")
+            certificate_policy = as_list(as_dict(policy_areas).get("Certificates"))
+
+            installed_software = library_section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "InstalledSoftware")
+            cert_prereq = library_section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "PCS7CertificatePrerequisites")
+            siemens_registry = library_section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "SiemensRegistryEvidence")
+            simatic_shell = library_section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "SimaticShellEvidence")
+            sql_components = library_section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "SQLServerComponents")
+            setup_logs = library_section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "PCS7SetupLogEvidence")
+            representative_binaries = library_section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "RepresentativeBinaries")
+
+            products = software_products(installed_software)
+
+            # --------------------------------------------------------------
+            # Konkrete Benutzeranweisungen fuer bislang fehlende IDs
+            # --------------------------------------------------------------
+            # IPC0015 - Rechnername nur ausgeben, kein Sollwertvergleich.
+            info["IPC0015"] = make_information(
+                "IPC0015", "Rechnernamen anpassen",
+                {
+                    "ComputerName": as_dict(identity).get("ComputerName"),
+                    "DNSHostName": as_dict(identity).get("DNSHostName"),
+                    "FQDN": as_dict(identity).get("FQDN"),
+                } if isinstance(identity, dict) else None,
+                "Initial_Valid.Identity",
+                "Rechnername wird fuer den manuellen Abgleich mit den Projektunterlagen ausgegeben."
+            )
+
+            # IPC0019 - SIMATIC Management Agent vorhanden.
+            sma_products = product_matches(products, r"(?i)SIMATIC.*Management.*Agent|Management.*Agent", None)
+            sma_services = matching_services(service_inventory, r"(?i)SIMATIC.*Management.*Agent|Management.*Agent")
+            checks["IPC0019"] = make_check(
+                "IPC0019", "SIMATIC Management Agent", bool(sma_products or sma_services),
+                "SIMATIC Management Agent installiert/vorhanden",
+                {"InstalledSoftware": sma_products, "Services": sma_services},
+                "Software_PCS7_Components_Valid.InstalledSoftware + Certificates_Services_Drivers_Valid.Services",
+                "Benutzeranweisung"
+            )
+
+            # IPC0024 - alle Netzwerkadapter mit allen vorhandenen Details.
+            info["IPC0024"] = make_information(
+                "IPC0024", "IP-Adresseinstellungen", network_adapters,
+                "Initial_Valid.NetworkAdapters",
+                "Alle erfassten Netzwerkadapter werden fuer den manuellen Abgleich ausgegeben."
+            )
+
+            # IPC0025 - BIOS-Version und BIOS-Metadaten ausgeben.
+            info["IPC0025"] = make_information(
+                "IPC0025", "Bios Versionsprüfung", bios,
+                "Initial_Valid.BIOS",
+                "BIOS-Version/ReleaseDate werden ausgegeben; die projektspezifische Chipset-Bezeichnung kann in abweichenden Feldern liegen."
+            )
+
+            # IPC0047 - vorhandene Tastatur-/Spracheingabeinformationen ausgeben.
+            # Der entscheidende Registry-Zweig Keyboard Layout\\Toggle wird von
+            # den aktuellen Snapshots nicht erfasst; deshalb kein erfundenes OK/NOK.
+            lang = as_dict(language)
+            current_user = as_dict(lang.get("CurrentUser"))
+            welcome = as_dict(lang.get("WelcomeScreenSystemAccount"))
+            info["IPC0047"] = make_information(
+                "IPC0047", "Tastenkombination für Eingabesprachen deaktivieren",
+                {
+                    "CurrentUserKeyboardPreload": current_user.get("KeyboardPreload"),
+                    "CurrentUserKeyboardSubstitutes": current_user.get("KeyboardSubstitutes"),
+                    "WelcomeScreenKeyboardPreload": welcome.get("KeyboardPreload"),
+                    "WelcomeScreenKeyboardSubstitutes": welcome.get("KeyboardSubstitutes"),
+                    "ExactHotkeyToggleStateAvailable": False,
+                } if isinstance(language, dict) else None,
+                "Initial_Valid.LanguageAndRegion",
+                "Die exakten Hotkey-Werte unter Keyboard Layout\\Toggle fehlen im aktuellen Snapshot; deshalb nur Informationsausgabe."
+            )
+
+            # IPC0048 - Region/Sprache fuer aktuellen Benutzer, System und Welcome Screen.
+            welcome_international = as_dict(as_dict(welcome.get("International")).get("Values"))
+            welcome_locale = welcome_international.get("LocaleName") or welcome_international.get("Locale")
+            default_user = as_dict(lang.get("DefaultUserProfile"))
+            user_languages = as_list(lang.get("CurrentUserLanguageList"))
+            language_detail = {
+                "WindowsSystemLocale": as_dict(lang.get("WindowsSystemLocale")).get("Name"),
+                "CurrentCulture": as_dict(lang.get("CurrentCulture")).get("Name"),
+                "CurrentUICulture": as_dict(lang.get("CurrentUICulture")).get("Name"),
+                "FirstCurrentUserLanguage": as_dict(user_languages[0]).get("LanguageTag") if user_languages else None,
+                "Region": lang.get("Region"),
+                "WelcomeScreenLocale": welcome_locale,
+                "WelcomeScreenInternational": welcome.get("International"),
+                "DefaultUserProfile": default_user,
+                "KnownGermanChecks": {
+                    "SystemLocaleGerman": is_german(as_dict(lang.get("WindowsSystemLocale")).get("Name")),
+                    "CurrentCultureGerman": is_german(as_dict(lang.get("CurrentCulture")).get("Name")),
+                    "CurrentUICultureGerman": is_german(as_dict(lang.get("CurrentUICulture")).get("Name")),
+                    "CurrentUserPrimaryLanguageGerman": is_german(as_dict(user_languages[0]).get("LanguageTag")) if user_languages else False,
+                    "WelcomeScreenGerman": is_german(welcome_locale),
+                    "DefaultNewUserProfileVerified": bool(default_user.get("SettingsRead")),
+                },
+            } if isinstance(language, dict) else None
+            info["IPC0048"] = make_information(
+                "IPC0048", "Region / Copy Settings",
+                language_detail,
+                "Initial_Valid.LanguageAndRegion",
+                "System, aktueller Benutzer und Welcome Screen werden geprueft/ausgegeben. Der Default-User-Hive wird vom read-only Collector bewusst nicht geladen; neue Benutzer koennen deshalb nicht vollstaendig automatisch bestaetigt werden."
+            )
+
+            # IPC0049 - mindestens einer der geforderten Adapter-Namen muss vorkommen.
+            adapter_name_details = []
+            adapter_name_ok = False
+            for adapter in as_list(network_adapters):
+                if not isinstance(adapter, dict):
+                    continue
+                name = text(adapter.get("Name"))
+                matched = bool(re.search(r"(?i)(Terminalbus|Anlagenbus|Redundanzbus)", name))
+                adapter_name_ok = adapter_name_ok or matched
+                adapter_name_details.append({"Name": name, "Matched": matched})
+            checks["IPC0049"] = make_check(
+                "IPC0049", "Netzwerkadapter umbenennen", adapter_name_ok,
+                "Mindestens ein Adaptername enthaelt Terminalbus, Anlagenbus oder Redundanzbus",
+                adapter_name_details,
+                "Initial_Valid.NetworkAdapters[].Name",
+                "Benutzeranweisung"
+            )
+
+            # IPC0050 / IPC0052 / IPC0055 - vollstaendige Adapterinformationen ausgeben.
+            for task_id, task_name in (
+                ("IPC0050", "Terminalbus-Adresse einstellen"),
+                ("IPC0052", "Anlagenbus-Adresse einstellen"),
+                ("IPC0055", "DNS und WINS-Server eintragen"),
+            ):
+                info[task_id] = make_information(
+                    task_id, task_name, network_adapters,
+                    "Initial_Valid.NetworkAdapters",
+                    "Alle Adapterdetails inkl. IP, Prefix, Gateway, DNS, WINS, Bindings, Routen und AdvancedProperties werden ausgegeben."
+                )
+
+            # IPC0059 - Domainname oder Arbeitsgruppe ausgeben.
+            domain = as_dict(domain_info)
+            domain_state = None
+            if domain:
+                if bool_value(domain.get("PartOfDomain")) is True:
+                    domain_state = {
+                        "Modus": "DOMAENE",
+                        "Domain": domain.get("Domain"),
+                        "ComputerAccountDN": domain.get("ComputerAccountDN"),
+                    }
+                else:
+                    domain_state = {
+                        "Modus": "ARBEITSGRUPPE",
+                        "Workgroup": domain.get("Workgroup"),
+                    }
+            info["IPC0059"] = make_information(
+                "IPC0059", "Rechner in die Domäne aufnehmen", domain_state,
+                "Initial_Valid.DomainInformation",
+                "Bei Domain-Mitgliedschaft wird der Domainname ausgegeben, andernfalls die Arbeitsgruppe."
+            )
+
+            # UltraVNC-Präsenz wird auf Benutzerwunsch auch fuer 0063/0065/0066 verwendet.
+            vnc_products = product_matches(products, r"(?i)(UltraVNC|uvnc)", None)
+            vnc_services = matching_services(service_inventory, r"(?i)(UltraVNC|uvnc|winvnc)")
+            vnc_present = bool(vnc_products or vnc_services)
+            for task_id, task_name in (
+                ("IPC0063", "Sichtbarkeit im Netzwerk / UltraVNC-Präsenz"),
+                ("IPC0065", "VNC-Gruppe einstellen / UltraVNC-Präsenz"),
+                ("IPC0066", "VNC-Einstellungen konfigurieren / UltraVNC-Präsenz"),
+            ):
+                checks[task_id] = make_check(
+                    task_id, task_name, vnc_present,
+                    "UltraVNC installiert/vorhanden",
+                    {"InstalledSoftware": vnc_products, "Services": vnc_services},
+                    "Software_PCS7_Components_Valid.InstalledSoftware + Certificates_Services_Drivers_Valid.Services",
+                    "Benutzeranweisung: fuer diese ID reicht UltraVNC installiert = OK"
+                )
+
+            # IPC0072 - alle Datentraeger, Partitionen und Volumes ausgeben.
+            info["IPC0072"] = make_information(
+                "IPC0072", "Partition (C: 100GB; D Rest)", storage,
+                "Initial_Valid.Storage",
+                "Disks, Partitions und Volumes inkl. SizeBytes werden fuer den manuellen Groessenvergleich ausgegeben."
+            )
+
+            # IPC0160 / IPC0161 - Benutzeranweisung: deaktiviert = NOK.
+            ipc0160_ciphers = [
+                "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_DHE_RSA_WITH_AES_128_CBC_SHA256",
+                "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256",
+                "TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",
+                "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+            ]
+            ipc0161_ciphers = [
+                "TLS_AES_256_GCM_SHA384",
+                "TLS_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+                "TLS_RSA_WITH_NULL_SHA256",
+                "TLS_RSA_WITH_NULL_SHA",
+                "TLS_PSK_WITH_AES_256_GCM_SHA384",
+                "TLS_PSK_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+                "TLS_PSK_WITH_AES_256_CBC_SHA384",
+                "TLS_PSK_WITH_AES_128_CBC_SHA256",
+                "TLS_PSK_WITH_NULL_SHA384",
+                "TLS_PSK_WITH_NULL_SHA256",
+            ]
+            checks["IPC0160"] = cipher_enabled_check(
+                "IPC0160", "Verwendung von sicheren Cipher Suites", policy_areas, ipc0160_ciphers
+            )
+            checks["IPC0161"] = cipher_enabled_check(
+                "IPC0161", "Verwendung von sicheren Cipher Suites", policy_areas, ipc0161_ciphers
+            )
+
+            # IPC0167 - Ordnerexistenz kann aus den aktuellen JSONs nur dann
+            # sicher bestaetigt werden, wenn der Ordner als SMB-Share erfasst ist.
+            project_folder_ok, project_share_ok, project_shares = project_share_state(smb)
+            info["IPC0167"] = make_information(
+                "IPC0167", "Projektordner anlegen",
+                {
+                    "ExpectedFolder": expected.get("project_folder"),
+                    "FolderExistenceConfirmedByShareSnapshot": project_folder_ok,
+                    "MatchingShares": project_shares,
+                } if project_shares else None,
+                "Firewall_SMB_Patch_Valid.SMB.Shares[].NtfsRootAcl",
+                "Der aktuelle Collector besitzt keinen allgemeinen Test-Path-Snapshot fuer D:\\Projekt. Existenz wird nur dann belastbar bestaetigt, wenn derselbe Pfad als Share erfasst wurde."
+            )
+
+            # IPC0168 - Projektordner vorhanden und als SMB-Freigabe vorhanden.
+            checks["IPC0168"] = make_check(
+                "IPC0168", "Ordner freigeben", project_folder_ok and project_share_ok,
+                {
+                    "Folder": expected.get("project_folder"),
+                    "Share": expected.get("project_share"),
+                    "FolderExists": True,
+                    "ShareExists": True,
+                },
+                project_shares if project_shares else "Keine passende Projektfreigabe im SMB-Snapshot gefunden",
+                "Firewall_SMB_Patch_Valid.SMB.Shares",
+                "Semaphore: expected_project_folder/expected_project_share (mit Fallback aus Aufgabenliste)"
+            )
+
+            # --------------------------------------------------------------
+            # Weitere vom Benutzer freigegebene IDs ab IPC0070
+            # --------------------------------------------------------------
+            # IPC0070 - Viewer-Komponente ist im MSI/Uninstall-Eintrag nicht
+            # sicher getrennt erkennbar; deshalb Software-/Binary-Evidenz.
+            vnc_binary_evidence = []
+            for location in as_list(representative_binaries):
+                if not isinstance(location, dict):
+                    continue
+                for binary in as_list(location.get("Files")):
+                    if not isinstance(binary, dict):
+                        continue
+                    haystack = " ".join(text(binary.get(k)) for k in ("Path", "OriginalFilename", "ProductName", "FileDescription"))
+                    if regex_search(r"(?i)(vncviewer|UltraVNC.*Viewer)", haystack):
+                        vnc_binary_evidence.append(binary)
+            info["IPC0070"] = make_information(
+                "IPC0070", "UltraVNC Viewer installieren",
+                {"UltraVNCProducts": vnc_products, "ViewerBinaryEvidence": vnc_binary_evidence},
+                "Software_PCS7_Components_Valid.InstalledSoftware/RepresentativeBinaries",
+                "UltraVNC-Paket und ggf. vncviewer-Binary werden ausgegeben; die MSI-Komponentenauswahl ist nicht separat erfasst."
+            )
+
+            # IPC0078 - HUP: Produktnamen sind installationsabhaengig, daher Information.
+            hup_products = product_matches(products, r"(?i)(Hardware\s*Update\s*Package|SIMATIC\s*IPC.*Update|\bHUP\b)", None)
+            info["IPC0078"] = make_information(
+                "IPC0078", "HUP installieren", hup_products,
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                "Gefundene HUP/Hardware-Update-Package-Produkte werden ausgegeben; ohne eindeutigen Produktnamen kein automatisches NOK."
+            )
+
+            # IPC0093 / IPC0108 - VeriSign G5 Root-Zertifikat.
+            verisign = as_dict(as_dict(cert_prereq).get("VeriSignClass3PublicPrimaryCertificationAuthorityG5"))
+            for task_id in ("IPC0093", "IPC0108"):
+                checks[task_id] = make_check(
+                    task_id, "Zertifikat installieren - VeriSign Class 3 Public Primary Certification Authority - G5",
+                    bool_value(verisign.get("Detected")) is True,
+                    "VeriSign Class 3 Public Primary Certification Authority - G5 im LocalMachine\\Root Store",
+                    verisign,
+                    "Software_PCS7_Components_Valid.PCS7CertificatePrerequisites",
+                    "Aufgabenliste"
+                )
+
+            # IPC0094 - Zertifikatpfad-/Network-Retrieval-Policy: vorhandene Policy-Evidenz ausgeben.
+            cert_policy_matches = []
+            for row in certificate_policy:
+                if not isinstance(row, dict):
+                    continue
+                haystack = " ".join(text(row.get(k)) for k in ("Path", "Name", "Value"))
+                if regex_search(r"(?i)(Chain|Path|Retrieval|Network|AuthRoot|Certificate)", haystack):
+                    cert_policy_matches.append(row)
+            info["IPC0094"] = make_information(
+                "IPC0094", "Zertifikataktualisierung muss zugelassen werden", cert_policy_matches,
+                "GPOs_Valid.PolicyAreaSnapshots.Certificates",
+                "Zertifikats-/Pfadvalidierungsrichtlinien werden fuer den manuellen Abgleich ausgegeben."
+            )
+
+            # IPC0095 - DisableRootAutoUpdate muss 0 sein.
+            root_update_entries = as_list(as_dict(cert_prereq).get("RootAutoUpdateRegistry"))
+            root_update_evidence = []
+            root_update_ok = False
+            for entry in root_update_entries:
+                if not isinstance(entry, dict):
+                    continue
+                values = as_dict(entry.get("Values"))
+                if "DisableRootAutoUpdate" in values:
+                    value = int_value(values.get("DisableRootAutoUpdate"))
+                    root_update_evidence.append({"Path": entry.get("Path"), "Value": value})
+                    if value == 0:
+                        root_update_ok = True
+            checks["IPC0095"] = make_check(
+                "IPC0095", "Zertifikataktualisierung muss zugelassen werden", root_update_ok,
+                "DisableRootAutoUpdate = 0",
+                root_update_evidence if root_update_evidence else "DisableRootAutoUpdate nicht gefunden",
+                "Software_PCS7_Components_Valid.PCS7CertificatePrerequisites.RootAutoUpdateRegistry",
+                "Aufgabenliste"
+            )
+
+            # IPC0109 - STEP 7 ist im Endzustand erkennbar, erneute Installation historisch nicht.
+            step7_products = product_matches(products, r"(?i)(STEP\s*7|STEP7)", None)
+            info["IPC0109"] = make_information(
+                "IPC0109", "Erneute STEP 7 Installation", step7_products,
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                "Aktueller STEP-7-Installationsstand wird ausgegeben; 'erneut installiert' ist aus einem Endzustand nicht beweisbar."
+            )
+
+            # PCS 7 V10 SP1 und Add-ons: aktuelle installierte Software ist ein
+            # belastbarer Endzustand und wird deshalb direkt bewertet.
+            software_specs = [
+                ("IPC0127", "PCS7 V10 SP1 installieren (Aktualisierung)", r"(?i)(SIMATIC\s*PCS\s*7|PCS\s*7).*V?10(?:\.0)?.*SP\s*1", None, "PCS 7 V10.0 SP1 installiert"),
+                ("IPC0128", "Industry Library 10.0 Upd1 aktualisieren", r"(?i)Industry\s*Library.*V?10(?:\.0)?.*(Upd|Update)\s*1", None, "Industry Library V10.0 Update 1 installiert"),
+                ("IPC0129", "SENTRON 3WL/3VL V10.0 SP1", r"(?i)SENTRON.*(3WL.*3VL|3WLVL).*V?10(?:\.0)?.*SP\s*1", None, "SENTRON 3WL/3VL V10.0 SP1 installiert"),
+                ("IPC0130", "SENTRON PAC V10.0 SP1", r"(?i)SENTRON.*PAC.*V?10(?:\.0)?.*SP\s*1", None, "SENTRON PAC V10.0 SP1 installiert"),
+                ("IPC0131", "SIMOCODE pro PCS7 V10.0 SP1", r"(?i)SIMOCODE\s*pro.*V?10(?:\.0)?.*SP\s*1", None, "SIMOCODE pro V10.0 SP1 installiert"),
+                ("IPC0132", "SIMOCODE Migration Legacy V10.0 SP1", r"(?i)SIMOCODE.*Migration.*Legacy.*V?10(?:\.0)?.*SP\s*1", None, "SIMOCODE Migration Legacy V10.0 SP1 installiert"),
+                ("IPC0133", "Loher Dynavert PCS7 V10", r"(?i)(Loher.*Dynavert|Dynavert.*PCS)", None, "Loher Dynavert PCS7-Komponente installiert"),
+                ("IPC0134", "SIMATIC PCS 7 Basis Library V10.0 SP1 Upd1", r"(?i)(PCS\s*7|SIMATIC).*Basis\s*Library.*V?10(?:\.0)?.*SP\s*1.*(Upd|Update)\s*1", None, "PCS 7 Basis Library V10.0 SP1 Update 1 installiert"),
+                ("IPC0171", "PDF-XChange Editor V10", r"(?i)PDF[- ]?XChange.*Editor", r"(?i)^10(?:\.|$)", "PDF-XChange Editor Version 10 installiert"),
+                ("IPC0177", "Greenshot installieren", r"(?i)Greenshot", r"(?i)^1\.2\.10\.6(?:\D|$)", "Greenshot 1.2.10.6 installiert"),
+                ("IPC0179", "WinSCP", r"(?i)^WinSCP(?:\s|$)", r"(?i)^6\.5(?:\.|$)", "WinSCP 6.5 installiert"),
+                ("IPC0180", "SQL Server Management Studio", r"(?i)(SQL\s*Server\s*Management\s*Studio|SSMS)", r"(?i)^20\.2\.1(?:\D|$)", "SQL Server Management Studio 20.2.1 installiert"),
+                ("IPC0202", "SIMATIC Logon installieren", r"(?i)SIMATIC\s*Logon", r"(?i)^2\.0(?:\D|$)", "SIMATIC Logon V2.0 installiert"),
+            ]
+            for task_id, task_name, name_pattern, version_pattern, soll in software_specs:
+                checks[task_id] = software_presence_check(
+                    task_id, task_name, installed_software, name_pattern, version_pattern, soll
+                )
+
+            # IPC0254 - SIMATIC-Shell-Proxy-Evidenz; ES02/ES03 sind in der Aufgabe explizit genannt.
+            info["IPC0254"] = make_information(
+                "IPC0254", "SIMATIC SHELL Proxy ergänzen", simatic_shell,
+                "Software_PCS7_Components_Valid.SimaticShellEvidence",
+                "SIMATIC-Shell-/Adapter-/Remote-Kommunikations-Registry-Evidenz wird ausgegeben; die vollstaendige Proxy-Stationsliste wird vom Collector nicht garantiert erfasst."
+            )
+
+            # IPC0139 - Titel und angegebener Setup-Pfad enthalten unterschiedliche
+            # Versionsangaben; daher nur installierte OPC-Server-Produkte ausgeben.
+            opc_products = product_matches(products, r"(?i)(WinCC.*OPC|OPC.*Server)", None)
+            info["IPC0139"] = make_information(
+                "IPC0139", "WinCC OPCServer", opc_products,
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                "Installierte WinCC/OPC-Server-Produkte werden ausgegeben; wegen widerspruechlicher Versionsangaben in der Aufgabenbeschreibung kein automatisches OK/NOK."
+            )
+
+            # IPC0140-IPC0146 gehoeren zum ORCLA/Maintenance-Station-Kontext und
+            # werden im reinen ES-Scope dieses Playbooks bewusst nicht bewertet.
+
+            # IPC0150 - BitLocker Aktivierung auf Systemvolume.
+            bitlocker_rows = as_list(as_dict(best_practice).get("BitLocker"))
+            system_bitlocker = []
+            for row in bitlocker_rows:
+                if not isinstance(row, dict):
+                    continue
+                if normalize_windows_path(row.get("MountPoint")) in {"c:", "c:"} or text(row.get("MountPoint")).upper().startswith("C:"):
+                    system_bitlocker.append(row)
+            bitlocker_ok = bool(system_bitlocker) and any(
+                text(row.get("ProtectionStatus")).lower() in {"on", "1", "enabled"}
+                and (int_value(row.get("EncryptionPercentage")) or 0) >= 100
+                for row in system_bitlocker
+            )
+            checks["IPC0150"] = make_check(
+                "IPC0150", "BitLocker Aktivierung", bitlocker_ok,
+                "Systemvolume C: BitLocker ProtectionStatus=On und EncryptionPercentage=100",
+                system_bitlocker if system_bitlocker else bitlocker_rows,
+                "Initial_Valid.InstallationBestPractice.BitLocker",
+                "Aufgabenliste"
+            )
+
+            # IPC0178 - Office 2019: Produktinformationen ausgeben, da Word/Excel
+            # nicht zwingend als getrennte Uninstall-Eintraege erscheinen.
+            office_products = product_matches(products, r"(?i)(Microsoft.*Office.*2019|Office.*2019|Word.*2019|Excel.*2019)", None)
+            info["IPC0178"] = make_information(
+                "IPC0178", "Office 2019", office_products,
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                "Office-/Word-/Excel-2019-Produkte werden ausgegeben; Einzelkomponenten sind in MSI/Click-to-Run nicht immer separat registriert."
+            )
+
+            # IPC0182 - BGInfo/BGSiVaaS muss ueber Startup/Run erkennbar sein.
+            bg_matches = startup_matches(autoruns, r"(?i)(BGSiVaaS|BGInfo)")
+            checks["IPC0182"] = make_check(
+                "IPC0182", "BGInfo/BGSiVaaS", bool(bg_matches),
+                "BGSiVaaS/BGInfo in Common Startup oder Autorun vorhanden",
+                bg_matches,
+                "Firewall_SMB_Patch_Valid.Autoruns",
+                "Aufgabenliste"
+            )
+            info["IPC0183"] = make_information(
+                "IPC0183", "BGInfo/BGSiVaaS - Als Administrator ausführen", bg_matches,
+                "Firewall_SMB_Patch_Valid.Autoruns.StartupFolders",
+                "Shortcut-/Startup-Evidenz wird ausgegeben. Das Shell-Link-Flag 'Als Administrator ausführen' wird vom aktuellen Collector nicht separat erfasst."
+            )
+
+            # IPC0203 - SIMATIC Logon Update 1: explizite Update-Evidenz erforderlich.
+            simatic_logon_upd = product_matches(products, r"(?i)SIMATIC\s*Logon.*(Upd|Update)\s*1", None)
+            if not simatic_logon_upd:
+                simatic_logon_upd = product_matches(products, r"(?i)SIMATIC\s*Logon", r"(?i)^2\.0(?:\.\d+)*\.1(?:\D|$)")
+            checks["IPC0203"] = make_check(
+                "IPC0203", "SIMATIC Logon aktualisieren", bool(simatic_logon_upd),
+                "SIMATIC Logon V2.0 Update 1 installiert",
+                simatic_logon_upd,
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                "Aufgabenliste"
+            )
+
+            # IPC0204 / IPC0240 - SIMATIC-Logon-Konfiguration indirekt aus Siemens Registry.
+            simatic_logon_registry = registry_evidence_matches(
+                siemens_registry, r"(?i)(SIMATIC.*Logon|Logon.*SIMATIC|Automatic.*Log|Auto.*Log|Default.*User|Default.*Group)"
+            )
+            info["IPC0204"] = make_information(
+                "IPC0204", "SIMATIC Logon konfigurieren", simatic_logon_registry,
+                "Software_PCS7_Components_Valid.SiemensRegistryEvidence",
+                "SIMATIC-Logon-Registry-Evidenz wird ausgegeben; die Checkbox 'automatisches Abmelden' ist nicht als festes Schema normalisiert."
+            )
+            # IPC0205 - PM-Logon V2.6 Update 4 installiert.
+            pm_logon_matches = product_matches(products, r"(?i)PM[- ]?Logon", None)
+            pm_logon_ok = any(
+                regex_search(r"(?i)(2[\._ ]?6.*(Upd|Update)[\s._-]*4|2\.6(?:\.\d+)*\.4)",
+                             text(x.get("DisplayName")) + " " + text(x.get("DisplayVersion")))
+                for x in pm_logon_matches
+            )
+            checks["IPC0205"] = make_check(
+                "IPC0205", "PM-Logon V2.6 Update 4 installieren", pm_logon_ok,
+                "PM-Logon V2.6 Update 4 installiert",
+                pm_logon_matches,
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                "Aufgabenliste"
+            )
+
+            # Windows-Updates, soweit der finale aktuelle Zustand belastbar ist.
+            for task_id, kb, task_name in (
+                ("IPC0222", "KB5055518", "KB5055518 installiert"),
+                ("IPC0223", "KB5050416", "KB5050416 installiert"),
+            ):
+                present, evidence = current_kb_evidence(patch_status, installed_software, kb)
+                checks[task_id] = make_check(
+                    task_id, task_name, present, kb + " aktuell installiert", evidence,
+                    "Firewall_SMB_Patch_Valid.PatchStatus + Software_PCS7_Components_Valid.InstalledSoftware",
+                    "Aufgabenliste"
+                )
+
+            # IPC0226/0227 wurden spaeter laut Aufgabenliste wieder deinstalliert;
+            # deshalb nur Historien-/Produktinformation, kein finales NOK.
+            for task_id, kb, task_name in (
+                ("IPC0226", "KB5046860", "KB5046860 zwischenzeitlich installiert"),
+                ("IPC0227", "KB5054833", "KB5054833 zwischenzeitlich installiert"),
+            ):
+                present, evidence = current_kb_evidence(patch_status, installed_software, kb)
+                history = [
+                    item for item in as_list(as_dict(as_dict(patch_status).get("WindowsUpdateHistory")).get("Entries"))
+                    if isinstance(item, dict) and kb.upper() in " ".join(text(x) for x in as_list(item.get("KBs"))).upper()
+                ]
+                info[task_id] = make_information(
+                    task_id, task_name,
+                    {"CurrentlyPresent": present, "CurrentEvidence": evidence, "UpdateHistory": history},
+                    "Firewall_SMB_Patch_Valid.PatchStatus",
+                    "Da die Aufgabenliste spaeter die Deinstallation vorsieht, wird die fruehere Installation nur historisch dokumentiert."
+                )
+
+            # IPC0228 - Edge 137.0.3296.83.
+            checks["IPC0228"] = software_presence_check(
+                "IPC0228", "Microsoft Edge Stable 137.0.3296.83", installed_software,
+                r"(?i)^Microsoft\s*Edge(?:\s|$)", r"(?i)^137\.0\.3296\.83(?:\D|$)",
+                "Microsoft Edge 137.0.3296.83 installiert"
+            )
+
+            # IPC0229/0230 - finaler Zustand: die jeweiligen KBs nicht mehr installiert.
+            for task_id, kb, task_name in (
+                ("IPC0229", "KB5054833", "KB5054833 deinstalliert"),
+                ("IPC0230", "KB5046860", "KB5046860 deinstalliert"),
+            ):
+                present, evidence = current_kb_evidence(patch_status, installed_software, kb)
+                checks[task_id] = make_check(
+                    task_id, task_name, not present, kb + " aktuell nicht installiert", evidence,
+                    "Firewall_SMB_Patch_Valid.PatchStatus + Software_PCS7_Components_Valid.InstalledSoftware",
+                    "Aufgabenliste"
+                )
+
+            # IPC0231-IPC0233 stehen im OS-Server/SQL-Reparaturkontext und
+            # werden im ES-Scope nicht bewertet.
+
+            # IPC0234 - aktuelle Pagefile-Nutzung ausgeben; 'systemverwaltet'
+            # wird vom Collector nicht separat erfasst.
+            pagefiles = as_dict(best_practice).get("PageFiles")
+            info["IPC0234"] = make_information(
+                "IPC0234", "Auslagerungsdatei konfigurieren", pagefiles,
+                "Initial_Valid.InstallationBestPractice.PageFiles",
+                "Pagefile-Pfade und aktuelle Groessen/Nutzung werden ausgegeben; AutomaticManagedPagefile/PageFileSetting wird im aktuellen Snapshot nicht erfasst."
+            )
+
+            # IPC0235-IPC0244 betreffen den WinCC-Runtime/Autologin-/OS-Kontext
+            # und werden fuer die ES-Auswertung nicht bewertet.
+
+            # IPC0245 - VNC-Firewallregeln auf allen Profilen.
+            firewall_rules = as_list(as_dict(detailed_firewall).get("Rules"))
+            pattern_results = []
+            vnc_fw_ok = bool(firewall_rules)
+            for pattern in expected["firewall_rule_name_patterns"]:
+                matches = firewall_rule_matches(firewall_rules, pattern)
+                compliant = [
+                    rule for rule in matches
+                    if bool_value(rule.get("Enabled")) is True
+                    and text(rule.get("Direction")).lower() == "inbound"
+                    and text(rule.get("Action")).lower() == "allow"
+                    and profile_is_all(rule.get("Profile"))
+                ]
+                pattern_ok = bool(compliant)
+                vnc_fw_ok = vnc_fw_ok and pattern_ok
+                pattern_results.append({"pattern": pattern, "ok": pattern_ok, "matching_compliant_rules": compliant})
+            checks["IPC0245"] = make_check(
+                "IPC0245", "VNC-Viewer Firewallregel prüfen", vnc_fw_ok,
+                "VNC-Regeln aktiviert, Inbound Allow, alle Profile",
+                pattern_results,
+                "Firewall_SMB_Patch_Valid.Firewall.Rules",
+                "Semaphore: expected_firewall_rule_name_patterns + Aufgabenliste"
+            )
+
+            # IPC0246 - Firewall fuer Domain/Private/Public aktiviert.
+            profiles = as_list(as_dict(detailed_firewall).get("Profiles"))
+            required = {"domain", "private", "public"}
+            found = {text(x.get("Name")).lower(): x for x in profiles if isinstance(x, dict)}
+            fw_all_ok = all(name in found and bool_value(found[name].get("Enabled")) is True for name in required)
+            checks["IPC0246"] = make_check(
+                "IPC0246", "Firewall für alle Profile aktiviert", fw_all_ok,
+                {"Domain": True, "Private": True, "Public": True},
+                [{"Name": x.get("Name"), "Enabled": x.get("Enabled")} for x in profiles if isinstance(x, dict)],
+                "Firewall_SMB_Patch_Valid.Firewall.Profiles",
+                "Aufgabenliste"
+            )
+
+            # IPC0247 - Defender Manipulationsschutz aus.
+            defender_status = as_dict(as_dict(defender).get("ComputerStatus"))
+            tamper = defender_status.get("IsTamperProtected")
+            checks["IPC0247"] = make_check(
+                "IPC0247", "Defender Einstellungen korrigieren - Manipulationsschutz", bool_value(tamper) is False,
+                "IsTamperProtected = false",
+                {"IsTamperProtected": tamper},
+                "Initial_Valid.MicrosoftDefender.ComputerStatus.IsTamperProtected",
+                "Aufgabenliste"
+            )
+
+            # IPC0250/0251 - Defender-Daten zur manuellen Kontrolle ausgeben.
+            info["IPC0250"] = make_information(
+                "IPC0250", "Defender Zuverlässigkeitsbasierter Schutz / Downloads", defender,
+                "Initial_Valid.MicrosoftDefender",
+                "Der aktuelle Defender-Status und die verfuegbaren Preferences/Policies werden ausgegeben; die konkrete UI-Option 'Downloads blockieren' ist nicht als eigenes Feld normalisiert."
+            )
+            info["IPC0251"] = make_information(
+                "IPC0251", "Defender Sicherheitsstatus i.O.", defender,
+                "Initial_Valid.MicrosoftDefender",
+                "Vollstaendiger vorhandener Defender-Status fuer die manuelle Gesamtbewertung."
+            )
+
+            # IPC0252 - UltraVNC Viewer nachinstallieren: gleiche Viewer-Evidenz wie IPC0070.
+            info["IPC0252"] = make_information(
+                "IPC0252", "UltraVNC-Viewer nachinstallieren",
+                {"UltraVNCProducts": vnc_products, "ViewerBinaryEvidence": vnc_binary_evidence},
+                "Software_PCS7_Components_Valid.InstalledSoftware/RepresentativeBinaries",
+                "Viewer-Evidenz wird ausgegeben; die MSI-Komponentenauswahl/.vnc-Dateizuordnung ist nicht separat erfasst."
+            )
+
+            return (
+                {key: checks[key] for key in sorted(checks, key=id_sort_key)},
+                {key: info[key] for key in sorted(info, key=id_sort_key)},
+            )
+
+        explicitly_ignored_ids = [
+            "IPC0001", "IPC0002", "IPC0004", "IPC0010", "IPC0012", "IPC0014",
+            "IPC0016", "IPC0018", "IPC0020", "IPC0021", "IPC0030", "IPC0031",
+            "IPC0033", "IPC0040", "IPC0057", "IPC0061", "IPC0062", "IPC0116",
+            "IPC0147", "IPC0029", "IPC0042", "IPC0060", "IPC0101", "IPC0125",
+            "IPC0126", "IPC0162",
+        ]
+
+        role_excluded_ids = [
+            "IPC0054", "IPC0136", "IPC0140", "IPC0141", "IPC0142", "IPC0143",
+            "IPC0144", "IPC0145", "IPC0146", "IPC0158", "IPC0186",
+            "IPC0213", "IPC0214", "IPC0215", "IPC0216", "IPC0217", "IPC0218",
+            "IPC0219", "IPC0220", "IPC0224", "IPC0225", "IPC0231", "IPC0232",
+            "IPC0233", "IPC0235", "IPC0236", "IPC0237", "IPC0238", "IPC0239",
+            "IPC0240", "IPC0241", "IPC0242", "IPC0243", "IPC0244", "IPC0248",
+            "IPC0249",
+        ]
+
+        requested_but_not_directly_available = {
+            "IPC0047": "Exakte Keyboard-Layout-Toggle/Hotkey-Registrywerte werden nicht erfasst; Informationsausgabe vorhanden.",
+            "IPC0071": ".vnc-Dateizuordnung/UltraVNC-Adressbuchregistrierung wird nicht erfasst.",
+            "IPC0073": "Allgemeiner Dateisystemtest fuer D:\\Images ist in den aktuellen JSON-Snapshots nicht enthalten.",
+            "IPC0076": "Common-Desktop/Desktop-Symbolbestand wird nicht erfasst.",
+            "IPC0089": "Boot-/Recovery-Registry bzw. BCD-Werte werden nicht erfasst.",
+            "IPC0106": "HW-Katalog-Funktionstest in einem geoeffneten Projekt wird nicht erfasst.",
+            "IPC0107": "HW-Katalog-Funktionstest in einem geoeffneten Projekt wird nicht erfasst.",
+            "IPC0110": "HW-Katalog-Funktionstest in einem geoeffneten Projekt wird nicht erfasst.",
+            "IPC0137": "Welche konkrete Autostart-Funktion deaktiviert werden soll, ist in der Aufgabenbeschreibung nicht eindeutig und nicht als Snapshot normalisiert.",
+            "IPC0164": "Die Anwendung eines CIS-Benchmarks ist aus dem Endzustand ohne Baseline-Katalog nicht belastbar beweisbar.",
+            "IPC0169": "Allgemeiner Dateisystemtest fuer D:\\Backup_AlarmLogging wird nicht erfasst.",
+            "IPC0170": "Allgemeiner Dateisystemtest fuer D:\\Backup_TagLogging wird nicht erfasst.",
+            "IPC0184": "Ausfuehrung von BGSiVaaS/Hintergrundbildzustand wird nicht erfasst.",
+            "IPC0185": "Manuelle Kontrolle mit WinCC_RT wird nicht erfasst.",
+            "IPC0186": "4:3-Hintergrundbildversion wird nicht erfasst.",
+            "IPC0200": "Allgemeiner Dateisystemtest fuer C:\\Programme\\WSUSClientManager wird nicht erfasst.",
+            "IPC0207": "PM-Logon Detailkonfiguration wird nicht durch die vorhandenen JSON-Snapshots erfasst.",
+            "IPC0208": "Verteilung der PM-Logon-Konfiguration ist ein historischer Vorgang ohne Snapshotnachweis.",
+            "IPC0209": "PM-Logon Credentials werden absichtlich nicht exportiert.",
+            "IPC0210": "WinCC-Explorer UI-Sprache wird nicht erfasst.",
+            "IPC0211": "WinCC-Explorer UI-Sprache fuer WinCC_RT wird nicht erfasst.",
+            "IPC0212": "SIMATIC-NET UI-Sprache wird nicht erfasst.",
+            "IPC0221": "Solidcore-Aktualisierungsmodus wird nicht in den vorhandenen Snapshots erfasst.",
+            "IPC0236": "Windows-Autologin Credentials/AutoAdminLogon werden aus Sicherheitsgruenden nicht vollstaendig exportiert.",
+            "IPC0241": "Automatische Runtime-Anmeldung ist ein Laufzeit-/Funktionstest und wird nicht erfasst.",
+            "IPC0242": "Inhalt/Datum der autoload.pas-Datei wird nicht erfasst.",
+            "IPC0244": "Bildwechsel-Funktionskontrolle ist ein manueller Laufzeittest.",
+            "IPC0253": "Verteilung des UltraVNC-Adressbuchs wird nicht als Dateisnapshot erfasst.",
+        }
+
+        # ------------------------------------------------------------------
         # Bibliothek laden und Grundschema pruefen
         # ------------------------------------------------------------------
         with library_path.open("r", encoding="utf-8-sig") as handle:
@@ -1336,6 +2333,17 @@
             if classification == "ES":
                 es_total += 1
                 checks = evaluate_es(host)
+                additional_checks, indirect_information = evaluate_es_additions(host)
+                # Bestehende Sollwertpruefungen haben Vorrang und werden nicht ueberschrieben.
+                for task_id, item in additional_checks.items():
+                    if task_id not in checks:
+                        checks[task_id] = item
+                checks = {key: checks[key] for key in sorted(checks, key=id_sort_key)}
+                indirect_information = {
+                    key: indirect_information[key]
+                    for key in sorted(indirect_information, key=id_sort_key)
+                    if key not in checks
+                }
                 ok_count = sum(
                     1 for item in checks.values()
                     if item.get("status") == "OK"
@@ -1352,8 +2360,10 @@
                     "evaluated": len(checks),
                     "ok": ok_count,
                     "nok": nok_count,
+                    "information": len(indirect_information),
                 }
                 entry["pruefungen"] = checks
+                entry["informationen"] = indirect_information
             else:
                 # OS Server, OS Client und Teilnehmer ohne Zugriff bleiben in
                 # der IP-Liste sichtbar, erhalten in dieser ersten Ausbaustufe
@@ -1363,16 +2373,26 @@
                     "evaluated": 0,
                     "ok": 0,
                     "nok": 0,
+                    "information": 0,
                 }
                 entry["pruefungen"] = {}
+                entry["informationen"] = {}
 
             output_hosts[ip] = entry
 
         evaluated_ids = []
+        indirect_information_ids = []
         for host in output_hosts.values():
             if host.get("validation_scope") == "ES_SOLLSWERTPRUEFUNG":
                 evaluated_ids = list(host.get("pruefungen", {}).keys())
+                indirect_information_ids = list(host.get("informationen", {}).keys())
                 break
+
+        total_information = sum(
+            len(as_dict(host.get("informationen")))
+            for host in output_hosts.values()
+            if host.get("validation_scope") == "ES_SOLLSWERTPRUEFUNG"
+        )
 
         output = {
             "schema_version": "1.0",
@@ -1381,8 +2401,11 @@
             "scope": {
                 "evaluated_computer_type": "ES",
                 "os_server_and_os_client_checks": "IGNORED",
-                "non_checkable_ids": "IGNORED",
-                "status_values": ["OK", "NOK"],
+                "non_checkable_ids": "IGNORED_OR_INFORMATION",
+                "status_values": ["OK", "NOK", "INFORMATION", "KEINE_INFORMATION"],
+                "explicitly_ignored_ids": explicitly_ignored_ids,
+                "role_excluded_ids": role_excluded_ids,
+                "requested_but_not_directly_available": requested_but_not_directly_available,
                 "rule": (
                     "OK wird nur vergeben, wenn der aktuelle JSON-Datenbestand "
                     "den fuer die ID definierten Sollzustand bestaetigt. "
@@ -1401,11 +2424,13 @@
                 ],
             },
             "evaluated_ids": evaluated_ids,
+            "indirect_information_ids": indirect_information_ids,
             "summary": {
                 "ip_addresses_total": len(output_hosts),
                 "es_total": es_total,
                 "checks_ok_total": total_ok,
                 "checks_nok_total": total_nok,
+                "information_total": total_information,
             },
             # Python >= 3.7 behaelt Einfuegereihenfolge; die IPs wurden oben
             # numerisch sortiert in dieses Objekt eingefuegt.
@@ -1424,10 +2449,57 @@
 
         os.replace(str(tmp_path), str(output_path))
 
+        # --------------------------------------------------------------
+        # CSV-Matrix: eine Zeile pro IP, direkte Pruefungen als OK/NOK,
+        # indirekte Pruefungen als kompakte JSON-Information in einer Zelle.
+        # --------------------------------------------------------------
+        matrix_ids = sorted(
+            set(output.get("evaluated_ids", []))
+            | set(output.get("indirect_information_ids", [])),
+            key=id_sort_key,
+        )
+        csv_output_path.parent.mkdir(parents=True, exist_ok=True)
+        csv_tmp_path = csv_output_path.with_name(csv_output_path.name + ".tmp")
+        with csv_tmp_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            writer.writerow([
+                "IP-Adresse", "Rechnername", "Computerart", "Ansible-Zugriff", *matrix_ids
+            ])
+            for ip in sorted(output_hosts, key=ip_sort_key):
+                host_entry = output_hosts[ip]
+                row = [
+                    ip,
+                    host_entry.get("computer_name") or "",
+                    host_entry.get("computer_type") or "",
+                    "JA" if bool(host_entry.get("ansible_access")) else "NEIN",
+                ]
+                is_es = host_entry.get("validation_scope") == "ES_SOLLSWERTPRUEFUNG"
+                direct = as_dict(host_entry.get("pruefungen"))
+                indirect = as_dict(host_entry.get("informationen"))
+                for task_id in matrix_ids:
+                    if not is_es:
+                        row.append("")
+                        continue
+                    direct_item = as_dict(direct.get(task_id))
+                    if direct_item:
+                        row.append(direct_item.get("status") or "NOK")
+                        continue
+                    indirect_item = as_dict(indirect.get(task_id))
+                    if indirect_item:
+                        row.append(matrix_information_value(indirect_item))
+                    else:
+                        row.append("")
+                writer.writerow(row)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(csv_tmp_path), str(csv_output_path))
+
         print(json.dumps({
             "output_file": str(output_path),
+            "csv_file": str(csv_output_path),
             "summary": output["summary"],
             "evaluated_ids": output["evaluated_ids"],
+            "indirect_information_ids": output["indirect_information_ids"],
         }, ensure_ascii=False))
         PY
       args:
@@ -1447,6 +2519,19 @@
           Generator-Ausgabe:
           {{ id_validation_build.stdout | default('') }}
       when: not (id_validation_output_stat.stat.exists | default(false))
+
+    - name: CSV-Matrix pruefen
+      ansible.builtin.stat:
+        path: "{{ id_validation_csv_file }}"
+      register: id_validation_csv_stat
+
+    - name: Abbrechen wenn CSV-Matrix nicht erzeugt wurde
+      ansible.builtin.fail:
+        msg: >-
+          {{ id_validation_csv_file }} wurde nicht erzeugt.
+          Generator-Ausgabe:
+          {{ id_validation_build.stdout | default('') }}
+      when: not (id_validation_csv_stat.stat.exists | default(false))
 
     - name: Ergebnisdatei einlesen
       ansible.builtin.slurp:
@@ -1471,9 +2556,470 @@
     - name: Zusammenfassung anzeigen
       ansible.builtin.debug:
         msg:
-          - "Ausgabedatei: {{ id_validation_output_file }}"
+          - "JSON-Ausgabedatei: {{ id_validation_output_file }}"
+          - "CSV-Matrix: {{ id_validation_csv_file }}"
           - "IP-Adressen gesamt: {{ id_validation_output_data.summary.ip_addresses_total }}"
           - "ES gesamt: {{ id_validation_output_data.summary.es_total }}"
           - "OK gesamt: {{ id_validation_output_data.summary.checks_ok_total }}"
           - "NOK gesamt: {{ id_validation_output_data.summary.checks_nok_total }}"
           - "Bewertete IDs: {{ id_validation_output_data.evaluated_ids }}"
+
+
+- name: "0160 IPC ES - Direkte PowerShell-Pruefungen fuer fehlende Endzustaende"
+  hosts: ipc_es_0160_live_targets
+  gather_facts: false
+  become: false
+  any_errors_fatal: false
+
+  tasks:
+    - name: WinRM-Verbindung fuer direkte 0160-Pruefungen testen
+      ansible.windows.win_ping:
+      register: id_validation_live_ping
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: IPC0047 IPC0073 IPC0076 IPC0089 direkt mit PowerShell pruefen
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+
+        function New-Check {
+            param(
+                [Parameter(Mandatory=$true)][string]$Id,
+                [Parameter(Mandatory=$true)][string]$Name,
+                [Parameter(Mandatory=$true)][bool]$Ok,
+                [Parameter(Mandatory=$true)]$Soll,
+                [Parameter(Mandatory=$false)]$Ist,
+                [Parameter(Mandatory=$true)][string]$Quelle,
+                [Parameter(Mandatory=$true)][string]$Sollwertquelle
+            )
+            [pscustomobject][ordered]@{
+                status          = if ($Ok) { 'OK' } else { 'NOK' }
+                aufgabe         = $Name
+                soll            = $Soll
+                ist             = $Ist
+                quelle          = $Quelle
+                sollwertquelle  = $Sollwertquelle
+            }
+        }
+
+        $checks = [ordered]@{}
+
+        # --------------------------------------------------------------
+        # IPC0047 - Tastenkombinationen fuer Eingabesprachen deaktiviert.
+        # Windows speichert die klassische Einstellung unter HKCU:\Keyboard
+        # Layout\Toggle. Der Wert 3 entspricht "Nicht zugewiesen".
+        # Die Pruefung gilt fuer den Benutzer, unter dem WinRM ausgefuehrt wird.
+        # --------------------------------------------------------------
+        $togglePath = 'HKCU:\Keyboard Layout\Toggle'
+        $toggleExists = Test-Path -LiteralPath $togglePath
+        $toggle = $null
+        if ($toggleExists) {
+            $toggle = Get-ItemProperty -LiteralPath $togglePath -ErrorAction Stop
+        }
+
+        $toggleState = [ordered]@{
+            RegistryPath   = $togglePath
+            RegistryExists = $toggleExists
+            RunAsUser      = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            Hotkey         = if ($toggle) { [string]$toggle.Hotkey } else { $null }
+            LanguageHotkey = if ($toggle) { [string]$toggle.'Language Hotkey' } else { $null }
+            LayoutHotkey   = if ($toggle) { [string]$toggle.'Layout Hotkey' } else { $null }
+        }
+        $ipc0047Ok = (
+            $toggleExists -and
+            $toggleState.Hotkey -eq '3' -and
+            $toggleState.LanguageHotkey -eq '3' -and
+            $toggleState.LayoutHotkey -eq '3'
+        )
+        $checks['IPC0047'] = New-Check `
+            -Id 'IPC0047' `
+            -Name 'Tastenkombination für Eingabesprachen deaktivieren' `
+            -Ok $ipc0047Ok `
+            -Soll @{
+                Hotkey='3'
+                LanguageHotkey='3'
+                LayoutHotkey='3'
+                Bedeutung='Nicht zugewiesen'
+            } `
+            -Ist $toggleState `
+            -Quelle 'Direkt/PowerShell/HKCU:\Keyboard Layout\Toggle' `
+            -Sollwertquelle 'Aufgabenliste'
+
+        # --------------------------------------------------------------
+        # IPC0073 - Restore-Image-Ordner muss geloescht sein.
+        # --------------------------------------------------------------
+        $imagesPath = 'D:\Images'
+        $imagesExists = Test-Path -LiteralPath $imagesPath
+        $checks['IPC0073'] = New-Check `
+            -Id 'IPC0073' `
+            -Name 'Restore Image löschen' `
+            -Ok (-not $imagesExists) `
+            -Soll @{ Path=$imagesPath; Exists=$false } `
+            -Ist @{ Path=$imagesPath; Exists=$imagesExists } `
+            -Quelle 'Direkt/PowerShell/Test-Path' `
+            -Sollwertquelle 'Aufgabenliste'
+
+        # --------------------------------------------------------------
+        # IPC0076 - die explizit zu loeschenden Desktop-Verknuepfungen
+        # duerfen weder auf dem Public/Common Desktop noch auf dem Desktop
+        # des WinRM-Benutzers vorhanden sein.
+        # --------------------------------------------------------------
+        $desktopDirs = @(
+            [Environment]::GetFolderPath('CommonDesktopDirectory'),
+            [Environment]::GetFolderPath('DesktopDirectory')
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+        $forbiddenNames = @('Create Restore USB','File Explorer','Internet Explorer')
+        $foundForbidden = New-Object System.Collections.Generic.List[object]
+        foreach ($desktopDir in $desktopDirs) {
+            if (-not (Test-Path -LiteralPath $desktopDir -PathType Container)) { continue }
+            foreach ($file in @(Get-ChildItem -LiteralPath $desktopDir -File -Force -ErrorAction SilentlyContinue)) {
+                if ($forbiddenNames -contains [string]$file.BaseName) {
+                    $foundForbidden.Add([pscustomobject][ordered]@{
+                        Name     = $file.Name
+                        BaseName = $file.BaseName
+                        FullName = $file.FullName
+                    })
+                }
+            }
+        }
+        $ipc0076Ok = ($foundForbidden.Count -eq 0)
+        $checks['IPC0076'] = New-Check `
+            -Id 'IPC0076' `
+            -Name 'Desktop-Verknüpfungen bereinigen' `
+            -Ok $ipc0076Ok `
+            -Soll @{ AbsentShortcuts=$forbiddenNames } `
+            -Ist @{
+                CheckedDesktopDirectories=@($desktopDirs)
+                FoundForbiddenShortcuts=@($foundForbidden)
+            } `
+            -Quelle 'Direkt/PowerShell/Get-ChildItem Desktop/CommonDesktop' `
+            -Sollwertquelle 'Aufgabenliste'
+
+        # --------------------------------------------------------------
+        # IPC0089 - Starten und Wiederherstellen.
+        # Belastbar direkt abfragbar sind:
+        #   1) OS-Auswahlliste nicht anzeigen -> Bootmanager-Timeout 0 bzw.
+        #      displaybootmenu No/Nein.
+        #   2) Automatischer Neustart -> Win32_OSRecoveryConfiguration.AutoReboot.
+        # Die GUI-Zeit "Wiederherstellungsoptionen 5 s" besitzt auf modernen
+        # Windows-Versionen keinen fuer diese Automatisierung belastbar
+        # dokumentierten stabilen Registry-Wert. Deshalb wird der BCD-Rohstand
+        # mit ausgegeben, aber nicht mit einem erfundenen Registrywert verglichen.
+        # --------------------------------------------------------------
+        $recovery = Get-CimInstance -ClassName Win32_OSRecoveryConfiguration -ErrorAction Stop
+        $autoReboot = [bool]$recovery.AutoReboot
+
+        $bcdRaw = (& bcdedit.exe /enum '{bootmgr}' 2>&1 | Out-String).Trim()
+        $bootTimeout = $null
+        $timeoutMatch = [regex]::Match(
+            $bcdRaw,
+            '(?im)^\s*(?:timeout|zeitlimit)\s+(\d+)\s*$'
+        )
+        if ($timeoutMatch.Success) {
+            $bootTimeout = [int]$timeoutMatch.Groups[1].Value
+        }
+
+        $displayBootMenu = $null
+        $displayMatch = [regex]::Match(
+            $bcdRaw,
+            '(?im)^\s*displaybootmenu\s+(Yes|No|Ja|Nein)\s*$'
+        )
+        if ($displayMatch.Success) {
+            $displayBootMenu = $displayMatch.Groups[1].Value
+        }
+
+        $bootListDisabled = (
+            $bootTimeout -eq 0 -or
+            $displayBootMenu -in @('No','Nein')
+        )
+        $ipc0089Ok = ($bootListDisabled -and $autoReboot)
+
+        $checks['IPC0089'] = New-Check `
+            -Id 'IPC0089' `
+            -Name 'Starten und Wiederherstellen anpassen' `
+            -Ok $ipc0089Ok `
+            -Soll @{
+                OperatingSystemListDisplayed=$false
+                AutoReboot=$true
+                RecoveryOptionsDisplaySeconds=5
+                RecoveryOptionsDisplaySecondsEvaluation='INFORMATION_ONLY'
+            } `
+            -Ist @{
+                BootManagerTimeoutSeconds=$bootTimeout
+                DisplayBootMenu=$displayBootMenu
+                OperatingSystemListDisabled=$bootListDisabled
+                AutoReboot=$autoReboot
+                BcdBootManagerRaw=$bcdRaw
+                RecoveryOptionsDisplaySeconds='Nicht als belastbar dokumentierter stabiler Wert automatisch bewertet'
+            } `
+            -Quelle 'Direkt/PowerShell/bcdedit + Win32_OSRecoveryConfiguration' `
+            -Sollwertquelle 'Aufgabenliste'
+
+        [pscustomobject]$checks | ConvertTo-Json -Depth 12 -Compress
+      register: id_validation_live_raw
+      when: id_validation_live_ping.ping | default('') == 'pong'
+      changed_when: false
+      failed_when: false
+
+    - name: Direkte PowerShell-Ergebnisse uebernehmen
+      ansible.builtin.set_fact:
+        id_validation_live_checks: >-
+          {{ id_validation_live_raw.stdout | trim | from_json }}
+      when:
+        - id_validation_live_ping.ping | default('') == 'pong'
+        - id_validation_live_raw.rc | default(1) == 0
+        - id_validation_live_raw.stdout | default('') | trim | length > 0
+
+    - name: Nicht ausfuehrbare direkte Pruefungen als NOK dokumentieren
+      ansible.builtin.set_fact:
+        id_validation_live_checks:
+          IPC0047:
+            status: NOK
+            aufgabe: "Tastenkombination für Eingabesprachen deaktivieren"
+            soll: "Direkte PowerShell-Pruefung erfolgreich"
+            ist: "Direkte PowerShell-Pruefung konnte ueber WinRM nicht erfolgreich ausgefuehrt werden."
+            quelle: "0160 Live-WinRM"
+            sollwertquelle: "Aufgabenliste"
+          IPC0073:
+            status: NOK
+            aufgabe: "Restore Image löschen"
+            soll: "D:\\Images existiert nicht"
+            ist: "Direkte PowerShell-Pruefung konnte ueber WinRM nicht erfolgreich ausgefuehrt werden."
+            quelle: "0160 Live-WinRM"
+            sollwertquelle: "Aufgabenliste"
+          IPC0076:
+            status: NOK
+            aufgabe: "Desktop-Verknüpfungen bereinigen"
+            soll: "Vorgegebene Verknuepfungen sind geloescht"
+            ist: "Direkte PowerShell-Pruefung konnte ueber WinRM nicht erfolgreich ausgefuehrt werden."
+            quelle: "0160 Live-WinRM"
+            sollwertquelle: "Aufgabenliste"
+          IPC0089:
+            status: NOK
+            aufgabe: "Starten und Wiederherstellen anpassen"
+            soll: "Direkte PowerShell-Pruefung erfolgreich"
+            ist: "Direkte PowerShell-Pruefung konnte ueber WinRM nicht erfolgreich ausgefuehrt werden."
+            quelle: "0160 Live-WinRM"
+            sollwertquelle: "Aufgabenliste"
+      when: id_validation_live_checks is not defined
+
+
+- name: "0160 IPC ES - Direkte PowerShell-Ergebnisse in JSON und CSV integrieren"
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    id_validation_output_file: >-
+      {{
+        ipc_es_id_validation_file
+        | default(result_dir ~ '/ipc_es_id_validation_latest.json')
+      }}
+    id_validation_csv_file: >-
+      {{
+        ipc_es_id_validation_csv_file
+        | default(result_dir ~ '/ipc_es_id_validation_matrix_latest.csv')
+      }}
+
+  tasks:
+    - name: Direkte Ergebnisse aller ES-Ziele sammeln
+      ansible.builtin.set_fact:
+        id_validation_live_results: >-
+          {{
+            id_validation_live_results | default({})
+            | combine({ item: hostvars[item].id_validation_live_checks | default({}) })
+          }}
+      loop: "{{ groups['ipc_es_0160_live_targets'] | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Direkte PowerShell-Ergebnisse in 0160-Ausgaben zusammenfuehren
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import csv
+        import ipaddress
+        import json
+        import os
+        import re
+        from pathlib import Path
+
+        output_path = Path({{ id_validation_output_file | to_json }})
+        csv_path = Path({{ id_validation_csv_file | to_json }})
+        live_results = {{ id_validation_live_results | default({}) | to_json }}
+
+        def as_dict(value):
+            return value if isinstance(value, dict) else {}
+
+        def ip_sort_key(value):
+            try:
+                return (0, int(ipaddress.ip_address(str(value))))
+            except ValueError:
+                return (1, str(value))
+
+        def id_sort_key(value):
+            match = re.fullmatch(r"IPC(\d+)", str(value).strip(), re.IGNORECASE)
+            if match:
+                return (0, int(match.group(1)), str(value))
+            return (1, str(value))
+
+        def matrix_information_value(item):
+            item = as_dict(item)
+            if item.get("status") == "KEINE_INFORMATION":
+                return "KEINE_INFORMATION"
+            value = item.get("information")
+            if value is None:
+                return "KEINE_INFORMATION"
+            if isinstance(value, str):
+                return value
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+        with output_path.open("r", encoding="utf-8-sig") as handle:
+            output = json.load(handle)
+
+        hosts = as_dict(output.get("hosts"))
+        for ip, checks in as_dict(live_results).items():
+            host = as_dict(hosts.get(ip))
+            if host.get("validation_scope") != "ES_SOLLSWERTPRUEFUNG":
+                continue
+            direct = as_dict(host.get("pruefungen"))
+            indirect = as_dict(host.get("informationen"))
+            for task_id, check in as_dict(checks).items():
+                direct[task_id] = check
+                indirect.pop(task_id, None)
+            host["pruefungen"] = {
+                key: direct[key] for key in sorted(direct, key=id_sort_key)
+            }
+            host["informationen"] = {
+                key: indirect[key] for key in sorted(indirect, key=id_sort_key)
+            }
+            ok_count = sum(
+                1 for item in host["pruefungen"].values()
+                if as_dict(item).get("status") == "OK"
+            )
+            nok_count = sum(
+                1 for item in host["pruefungen"].values()
+                if as_dict(item).get("status") == "NOK"
+            )
+            host["summary"] = {
+                "evaluated": len(host["pruefungen"]),
+                "ok": ok_count,
+                "nok": nok_count,
+                "information": len(host["informationen"]),
+            }
+
+        unavailable = as_dict(
+            as_dict(output.get("scope")).get("requested_but_not_directly_available")
+        )
+        for task_id in ("IPC0047", "IPC0073", "IPC0076", "IPC0089"):
+            unavailable.pop(task_id, None)
+        as_dict(output.get("scope"))["requested_but_not_directly_available"] = unavailable
+        as_dict(output.get("scope"))["live_powershell_ids"] = [
+            "IPC0047", "IPC0073", "IPC0076", "IPC0089"
+        ]
+
+        evaluated_ids = set()
+        information_ids = set()
+        total_ok = 0
+        total_nok = 0
+        total_information = 0
+        for host in hosts.values():
+            host = as_dict(host)
+            if host.get("validation_scope") != "ES_SOLLSWERTPRUEFUNG":
+                continue
+            direct = as_dict(host.get("pruefungen"))
+            indirect = as_dict(host.get("informationen"))
+            evaluated_ids.update(direct.keys())
+            information_ids.update(indirect.keys())
+            total_ok += sum(1 for x in direct.values() if as_dict(x).get("status") == "OK")
+            total_nok += sum(1 for x in direct.values() if as_dict(x).get("status") == "NOK")
+            total_information += len(indirect)
+
+        output["evaluated_ids"] = sorted(evaluated_ids, key=id_sort_key)
+        output["indirect_information_ids"] = sorted(information_ids, key=id_sort_key)
+        summary = as_dict(output.get("summary"))
+        summary["checks_ok_total"] = total_ok
+        summary["checks_nok_total"] = total_nok
+        summary["information_total"] = total_information
+        output["summary"] = summary
+        sources = as_dict(output.get("sources"))
+        upstream = sources.get("upstream")
+        if isinstance(upstream, list) and "0160_Direct_PowerShell_Live_Checks" not in upstream:
+            upstream.append("0160_Direct_PowerShell_Live_Checks")
+        sources["upstream"] = upstream
+        output["sources"] = sources
+
+        tmp_path = output_path.with_name(output_path.name + ".tmp")
+        with tmp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(output, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(tmp_path), str(output_path))
+
+        matrix_ids = sorted(
+            set(output.get("evaluated_ids", []))
+            | set(output.get("indirect_information_ids", [])),
+            key=id_sort_key,
+        )
+        csv_tmp = csv_path.with_name(csv_path.name + ".tmp")
+        with csv_tmp.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            writer.writerow([
+                "IP-Adresse", "Rechnername", "Computerart", "Ansible-Zugriff", *matrix_ids
+            ])
+            for ip in sorted(hosts, key=ip_sort_key):
+                host = as_dict(hosts[ip])
+                row = [
+                    ip,
+                    host.get("computer_name") or "",
+                    host.get("computer_type") or "",
+                    "JA" if bool(host.get("ansible_access")) else "NEIN",
+                ]
+                is_es = host.get("validation_scope") == "ES_SOLLSWERTPRUEFUNG"
+                direct = as_dict(host.get("pruefungen"))
+                indirect = as_dict(host.get("informationen"))
+                for task_id in matrix_ids:
+                    if not is_es:
+                        row.append("")
+                        continue
+                    direct_item = as_dict(direct.get(task_id))
+                    if direct_item:
+                        row.append(direct_item.get("status") or "NOK")
+                        continue
+                    indirect_item = as_dict(indirect.get(task_id))
+                    row.append(matrix_information_value(indirect_item) if indirect_item else "")
+                writer.writerow(row)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(csv_tmp), str(csv_path))
+
+        print(json.dumps({
+            "merged_live_hosts": sorted(as_dict(live_results).keys(), key=ip_sort_key),
+            "live_ids": ["IPC0047", "IPC0073", "IPC0076", "IPC0089"],
+            "summary": output.get("summary", {}),
+        }, ensure_ascii=False))
+        PY
+      args:
+        executable: /bin/bash
+      register: id_validation_live_merge
+      changed_when: true
+
+    - name: Finale 0160-Ergebnisdatei nach Live-Pruefungen einlesen
+      ansible.builtin.slurp:
+        src: "{{ id_validation_output_file }}"
+      register: id_validation_final_raw
+
+    - name: Finale 0160-Zusammenfassung anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Direkte PowerShell-IDs: IPC0047, IPC0073, IPC0076, IPC0089"
+          - "JSON-Ausgabedatei: {{ id_validation_output_file }}"
+          - "CSV-Matrix: {{ id_validation_csv_file }}"
+          - >-
+            Finale Zusammenfassung:
+            {{ (id_validation_final_raw.content | b64decode | from_json).summary }}
