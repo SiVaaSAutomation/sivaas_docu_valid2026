@@ -358,7 +358,13 @@ $firewall = Invoke-SafeCollection -Name 'Firewall' -ScriptBlock {
             }
         })
 
-    $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop | Sort-Object DisplayGroup, DisplayName, Name)
+    $rules = @(  
+        Get-NetFirewallRule `
+        -PolicyStore ActiveStore `
+        -TracePolicyStore `
+        -ErrorAction Stop |
+        Sort-Object DisplayGroup, DisplayName, Name
+    )
 
     $portMap = @{}
     $appMap = @{}
@@ -487,7 +493,7 @@ $firewall = Invoke-SafeCollection -Name 'Firewall' -ScriptBlock {
             AllowRules      = @($allRules | Where-Object Action -eq 'Allow').Count
             BlockRules      = @($allRules | Where-Object Action -eq 'Block').Count
             GroupPolicyRules = @($allRules | Where-Object PolicyStoreSourceType -eq 'GroupPolicy').Count
-            LocalRules      = @($allRules | Where-Object { $_.PolicyStoreSourceType -and $_.PolicyStoreSourceType -ne 'GroupPolicy' }).Count
+            LocalRules      = @($allRules | Where-Object PolicyStoreSourceType -eq 'Local' ).Count
             ByPolicyStoreSourceType = @($allRules | Group-Object PolicyStoreSourceType | Sort-Object Name | ForEach-Object {
                 [pscustomobject]@{ SourceType=$_.Name; Count=$_.Count }
             })

@@ -17,9 +17,9 @@
       - "Initial_Valid.ps1"
       - "GPOs_Valid.ps1"
       - "Certificates_Services_Drivers_Valid.ps1"
-      - "4.ps1"
-      - "5.ps1"
-      - "6.ps1"
+      - "Firewall_SMB_Patch_Valid.ps1"
+      - "Software_PCS7_Components_Valid.ps1"
+     
 
   tasks:
     - name: Benoetigte Semaphore-Variablen pruefen
