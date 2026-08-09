@@ -210,6 +210,11 @@
             "project_share": {{ expected_project_share | default('Projekt') | to_json }},
         }
 
+        # Ein Backslash als chr(92) vermeidet eine bekannte split_args-Falle
+        # bei Ansible 2.13: Stringliterale, deren schliessendes Anfuehrungszeichen
+        # direkt auf einen Backslash folgt, koennen beim Laden falsch geparst werden.
+        BACKSLASH = chr(92)
+
         # ------------------------------------------------------------------
         # Hilfsfunktionen
         # ------------------------------------------------------------------
@@ -319,12 +324,12 @@
         def registry_matches(records, name=None, path_contains=None):
             matches = []
             wanted_name = None if name is None else str(name).lower()
-            wanted_path = None if path_contains is None else str(path_contains).replace("/", "\\").lower()
+            wanted_path = None if path_contains is None else str(path_contains).replace("/", BACKSLASH).lower()
             for row in as_list(records):
                 if not isinstance(row, dict):
                     continue
                 row_name = text(row.get("Name")).lower()
-                row_path = text(row.get("Path")).replace("/", "\\").lower()
+                row_path = text(row.get("Path")).replace("/", BACKSLASH).lower()
                 if wanted_name is not None and row_name != wanted_name:
                     continue
                 if wanted_path is not None and wanted_path not in row_path:
@@ -428,8 +433,8 @@
 
         def schannel_state(records, protocol, side):
             path_fragment = (
-                "\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\"
-                + protocol + "\\" + side
+                "\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols"
+                + BACKSLASH + protocol + BACKSLASH + side
             )
             enabled, enabled_rows = first_registry_value(
                 records, name="Enabled", path_contains=path_fragment
@@ -704,7 +709,7 @@
                     continue
                 if text(row.get("Name")).lower() != "functions":
                     continue
-                path = text(row.get("Path")).replace("/", "\\").lower()
+                path = text(row.get("Path")).replace("/", BACKSLASH).lower()
                 if "cryptography\\configuration\\ssl\\00010002" not in path:
                     continue
                 value = row.get("Value")
