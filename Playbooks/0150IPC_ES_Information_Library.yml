@@ -1,5 +1,5 @@
 ---
-- name: "0150 IPC ES - IP-zentrierte Informationsbibliothek erzeugen"
+- name: "0150 IPC - IP-zentrierte Informationsbibliothek erzeugen"
   hosts: localhost
   connection: local
   become: false
@@ -13,7 +13,7 @@
         | default(result_dir ~ '/ipc_discovery_groups_latest.json')
       }}
 
-    # 0110 legt die PowerShell-Ergebnisse unter
+    # 0110, 0120 und 0130 legen die PowerShell-Ergebnisse unter
     #   {{ result_dir }}/<IP>/*.json
     # ab. Es wird bewusst derselbe result_dir verwendet.
     library_validation_root: "{{ result_dir }}"
@@ -21,11 +21,14 @@
     # Eine stabile "latest"-Datei fuer nachfolgende Playbooks/Protokolle.
     library_output_file: >-
       {{
-        ipc_es_library_file
-        | default(result_dir ~ '/ipc_es_information_library_latest.json')
+        ipc_information_library_file
+        | default(
+            ipc_es_library_file
+            | default(result_dir ~ '/ipc_information_library_latest.json')
+          )
       }}
 
-    # Exakt die PowerShell-Ergebnistypen, die 0110 aktuell erzeugt.
+    # Exakt die PowerShell-Ergebnistypen, die 0110, 0120 und 0130 aktuell erzeugen.
     library_expected_validation_types:
       - "Initial_Valid"
       - "GPOs_Valid"
@@ -41,7 +44,7 @@
           - result_dir | string | length > 0
         fail_msg: >-
           Fuer 0150 wird mindestens result_dir benoetigt. Der Pfad muss derselbe
-          Ergebnisordner sein, den 0000 und 0110 verwenden.
+          Ergebnisordner sein, den 0000, 0110, 0120 und 0130 verwenden.
 
     - name: Discovery-Datei von 0000 pruefen
       ansible.builtin.stat:
@@ -55,7 +58,7 @@
           Fuehre zuerst 0000IPC_Discovery_Classification.yml aus.
       when: not (library_discovery_stat.stat.exists | default(false))
 
-    - name: Ergebnisordner von 0110 pruefen
+    - name: Ergebnisordner der IPC-Validierungsplaybooks pruefen
       ansible.builtin.stat:
         path: "{{ library_validation_root }}"
       register: library_validation_root_stat
@@ -64,11 +67,11 @@
       ansible.builtin.fail:
         msg: >-
           {{ library_validation_root }} wurde nicht gefunden.
-          0150 erwartet dort die von 0110 eingesammelten JSON-Dateien
-          in Unterordnern nach dem Schema <IP>/*.json.
+          0150 erwartet dort die von 0110, 0120 und 0130 eingesammelten
+          JSON-Dateien in Unterordnern nach dem Schema <IP>/*.json.
       when: not (library_validation_root_stat.stat.isdir | default(false))
 
-    - name: IP-zentrierte ES-Informationsbibliothek erzeugen
+    - name: IP-zentrierte IPC-Informationsbibliothek erzeugen
       ansible.builtin.shell: |
         set -euo pipefail
         "{{ ansible_playbook_python }}" - <<'PY'
@@ -287,20 +290,33 @@
             raise RuntimeError("Discovery-JSON enthaelt kein gueltiges 'groups'-Objekt.")
 
         es_hosts = groups.get("ipc_es") or []
+        os_server_hosts = groups.get("ipc_os") or []
+        os_client_hosts = groups.get("ipc_os_client") or []
         no_access_hosts = groups.get("kein_zugriff") or []
 
-        if not isinstance(es_hosts, list) or not isinstance(no_access_hosts, list):
-            raise RuntimeError(
-                "Discovery-Gruppen 'ipc_es' und 'kein_zugriff' muessen Listen sein."
-            )
+        discovery_groups = {
+            "ipc_es": es_hosts,
+            "ipc_os": os_server_hosts,
+            "ipc_os_client": os_client_hosts,
+            "kein_zugriff": no_access_hosts,
+        }
+        for group_name, hosts in discovery_groups.items():
+            if not isinstance(hosts, list):
+                raise RuntimeError(
+                    f"Discovery-Gruppe {group_name!r} muss eine Liste sein."
+                )
 
-        # Deduplizierung nach IP. Falls dieselbe IP wider Erwarten in beiden
-        # Gruppen vorkommt, gewinnt der Datensatz mit fehlendem Zugriff, weil
+        validated_classifications = {"ES", "OS_Server", "OS_Client"}
+
+        # Deduplizierung nach IP. Falls dieselbe IP wider Erwarten in mehreren
+        # Rollen-Gruppen vorkommt, wird der zuletzt gelesene Rollen-Datensatz
+        # verwendet. Ein Datensatz aus "kein_zugriff" gewinnt immer, weil
         # dieser Zustand fuer die Nutzbarkeit der Bibliothek kritischer ist.
         selected_hosts = {}
-        for host in es_hosts:
-            if isinstance(host, dict) and str(host.get("ip") or "").strip():
-                selected_hosts[str(host["ip"]).strip()] = deepcopy(host)
+        for role_hosts in (es_hosts, os_server_hosts, os_client_hosts):
+            for host in role_hosts:
+                if isinstance(host, dict) and str(host.get("ip") or "").strip():
+                    selected_hosts[str(host["ip"]).strip()] = deepcopy(host)
 
         for host in no_access_hosts:
             if isinstance(host, dict) and str(host.get("ip") or "").strip():
@@ -327,10 +343,10 @@
 
             host_dir = validation_root / ip
 
-            # PowerShell-Daten sind nur fuer ES-Ziele vorgesehen. Bei
-            # "Kein_Zugriff" wird nicht versucht, alte zufaellige Dateien als
-            # aktuellen Zustand zu interpretieren.
-            if classification == "ES" and ansible_access:
+            # PowerShell-Daten werden fuer ES-, OS-Server- und OS-Client-Ziele
+            # verarbeitet. Bei "Kein_Zugriff" wird nicht versucht, alte
+            # zufaellige Dateien als aktuellen Zustand zu interpretieren.
+            if classification in validated_classifications and ansible_access:
                 if host_dir.is_dir():
                     for json_path in sorted(host_dir.glob("*.json")):
                         try:
@@ -364,7 +380,7 @@
                                 "file": str(json_path),
                                 "reason": (
                                     "ValidationType ist nicht Teil des aktuellen "
-                                    "0110-Skriptsatzes: " + (validation_type or "<leer>")
+                                    "Validierungsskriptsatzes: " + (validation_type or "<leer>")
                                 ),
                             })
                             continue
@@ -389,7 +405,7 @@
 
                 else:
                     warnings.append(
-                        "Kein 0110-Ergebnisordner fuer diese ES-IP vorhanden: "
+                        "Kein Validierungsergebnisordner fuer diese IPC-IP vorhanden: "
                         + str(host_dir)
                     )
 
@@ -430,7 +446,7 @@
                 if validation_type in selected_sources
             ]
 
-            if classification == "ES" and ansible_access:
+            if classification in validated_classifications and ansible_access:
                 missing_types = [
                     validation_type
                     for validation_type in expected_types
@@ -469,7 +485,7 @@
                 "validation_data_status": validation_data_status,
                 "expected_validation_types": (
                     expected_types
-                    if classification == "ES" and ansible_access
+                    if classification in validated_classifications and ansible_access
                     else []
                 ),
                 "found_validation_types": found_types,
@@ -499,45 +515,53 @@
             for host in library_hosts.values()
             if not bool(host["zugriff"]["ansible_access"])
         )
+        def role_status_count(classification, status):
+            return sum(
+                1
+                for host in library_hosts.values()
+                if (
+                    host.get("classification") == classification
+                    and host["datenqualitaet"]["validation_data_status"] == status
+                )
+            )
+
         es_count = sum(
             1
             for host in library_hosts.values()
             if host.get("classification") == "ES"
         )
-        complete_es_count = sum(
+        os_server_count = sum(
             1
             for host in library_hosts.values()
-            if (
-                host.get("classification") == "ES"
-                and host["datenqualitaet"]["validation_data_status"] == "COMPLETE"
-            )
+            if host.get("classification") == "OS_Server"
         )
-        partial_es_count = sum(
+        os_client_count = sum(
             1
             for host in library_hosts.values()
-            if (
-                host.get("classification") == "ES"
-                and host["datenqualitaet"]["validation_data_status"] == "PARTIAL"
-            )
+            if host.get("classification") == "OS_Client"
         )
-        missing_es_count = sum(
-            1
-            for host in library_hosts.values()
-            if (
-                host.get("classification") == "ES"
-                and host["datenqualitaet"]["validation_data_status"] == "NOT_AVAILABLE"
-            )
-        )
+
+        complete_es_count = role_status_count("ES", "COMPLETE")
+        partial_es_count = role_status_count("ES", "PARTIAL")
+        missing_es_count = role_status_count("ES", "NOT_AVAILABLE")
+
+        complete_os_server_count = role_status_count("OS_Server", "COMPLETE")
+        partial_os_server_count = role_status_count("OS_Server", "PARTIAL")
+        missing_os_server_count = role_status_count("OS_Server", "NOT_AVAILABLE")
+
+        complete_os_client_count = role_status_count("OS_Client", "COMPLETE")
+        partial_os_client_count = role_status_count("OS_Client", "PARTIAL")
+        missing_os_client_count = role_status_count("OS_Client", "NOT_AVAILABLE")
 
         output = {
             "schema_version": "1.0",
-            "library_type": "IPC_ES_Information_Library",
+            "library_type": "IPC_Information_Library",
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "scope": {
-                "included_classifications": ["ES", "Kein_Zugriff"],
+                "included_classifications": ["ES", "OS_Server", "OS_Client", "Kein_Zugriff"],
                 "description": (
-                    "Enthaelt aktuell nur als ES klassifizierte IPCs sowie "
-                    "Teilnehmer ohne Ansible-Zugriff."
+                    "Enthaelt als ES, OS Server oder OS Client klassifizierte "
+                    "IPCs sowie Teilnehmer ohne Ansible-Zugriff."
                 ),
             },
             "sources": {
@@ -553,10 +577,18 @@
             "summary": {
                 "ip_addresses_total": len(library_hosts),
                 "es_total": es_count,
+                "os_server_total": os_server_count,
+                "os_client_total": os_client_count,
                 "no_ansible_access_total": no_access_count,
                 "es_validation_complete": complete_es_count,
                 "es_validation_partial": partial_es_count,
                 "es_validation_missing": missing_es_count,
+                "os_server_validation_complete": complete_os_server_count,
+                "os_server_validation_partial": partial_os_server_count,
+                "os_server_validation_missing": missing_os_server_count,
+                "os_client_validation_complete": complete_os_client_count,
+                "os_client_validation_partial": partial_os_client_count,
+                "os_client_validation_missing": missing_os_client_count,
                 "selected_validation_json_files": total_selected_json,
                 "invalid_validation_json_files": total_invalid_json,
             },
@@ -613,7 +645,7 @@
       ansible.builtin.assert:
         that:
           - library_output_data.schema_version is defined
-          - library_output_data.library_type == 'IPC_ES_Information_Library'
+          - library_output_data.library_type == 'IPC_Information_Library'
           - library_output_data.summary is defined
           - library_output_data.hosts is defined
         fail_msg: >-
@@ -625,7 +657,15 @@
           - "JSON: {{ library_output_file }}"
           - "IPs gesamt: {{ library_output_data.summary.ip_addresses_total | default(0) }}"
           - "ES gesamt: {{ library_output_data.summary.es_total | default(0) }}"
+          - "OS Server gesamt: {{ library_output_data.summary.os_server_total | default(0) }}"
+          - "OS Client gesamt: {{ library_output_data.summary.os_client_total | default(0) }}"
           - "Kein Ansible-Zugriff: {{ library_output_data.summary.no_ansible_access_total | default(0) }}"
           - "ES vollstaendig: {{ library_output_data.summary.es_validation_complete | default(0) }}"
           - "ES teilweise: {{ library_output_data.summary.es_validation_partial | default(0) }}"
-          - "ES ohne 0110-Daten: {{ library_output_data.summary.es_validation_missing | default(0) }}"
+          - "ES ohne Validierungsdaten: {{ library_output_data.summary.es_validation_missing | default(0) }}"
+          - "OS Server vollstaendig: {{ library_output_data.summary.os_server_validation_complete | default(0) }}"
+          - "OS Server teilweise: {{ library_output_data.summary.os_server_validation_partial | default(0) }}"
+          - "OS Server ohne Validierungsdaten: {{ library_output_data.summary.os_server_validation_missing | default(0) }}"
+          - "OS Client vollstaendig: {{ library_output_data.summary.os_client_validation_complete | default(0) }}"
+          - "OS Client teilweise: {{ library_output_data.summary.os_client_validation_partial | default(0) }}"
+          - "OS Client ohne Validierungsdaten: {{ library_output_data.summary.os_client_validation_missing | default(0) }}"
