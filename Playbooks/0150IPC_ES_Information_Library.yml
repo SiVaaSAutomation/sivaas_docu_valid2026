@@ -1,0 +1,631 @@
+---
+- name: "0150 IPC ES - IP-zentrierte Informationsbibliothek erzeugen"
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    # 0000 erzeugt standardmaessig diese Datei.
+    library_discovery_file: >-
+      {{
+        ipc_discovery_file
+        | default(result_dir ~ '/ipc_discovery_groups_latest.json')
+      }}
+
+    # 0110 legt die PowerShell-Ergebnisse unter
+    #   {{ result_dir }}/<IP>/*.json
+    # ab. Es wird bewusst derselbe result_dir verwendet.
+    library_validation_root: "{{ result_dir }}"
+
+    # Eine stabile "latest"-Datei fuer nachfolgende Playbooks/Protokolle.
+    library_output_file: >-
+      {{
+        ipc_es_library_file
+        | default(result_dir ~ '/ipc_es_information_library_latest.json')
+      }}
+
+    # Exakt die PowerShell-Ergebnistypen, die 0110 aktuell erzeugt.
+    library_expected_validation_types:
+      - "Initial_Valid"
+      - "GPOs_Valid"
+      - "Certificates_Services_Drivers_Valid"
+      - "Firewall_SMB_Patch_Valid"
+      - "Software_PCS7_Components_Valid"
+
+  tasks:
+    - name: Benoetigte Semaphore-Variablen pruefen
+      ansible.builtin.assert:
+        that:
+          - result_dir is defined
+          - result_dir | string | length > 0
+        fail_msg: >-
+          Fuer 0150 wird mindestens result_dir benoetigt. Der Pfad muss derselbe
+          Ergebnisordner sein, den 0000 und 0110 verwenden.
+
+    - name: Discovery-Datei von 0000 pruefen
+      ansible.builtin.stat:
+        path: "{{ library_discovery_file }}"
+      register: library_discovery_stat
+
+    - name: Abbrechen wenn Discovery-Datei fehlt
+      ansible.builtin.fail:
+        msg: >-
+          {{ library_discovery_file }} wurde nicht gefunden.
+          Fuehre zuerst 0000IPC_Discovery_Classification.yml aus.
+      when: not (library_discovery_stat.stat.exists | default(false))
+
+    - name: Ergebnisordner von 0110 pruefen
+      ansible.builtin.stat:
+        path: "{{ library_validation_root }}"
+      register: library_validation_root_stat
+
+    - name: Abbrechen wenn Ergebnisordner fehlt
+      ansible.builtin.fail:
+        msg: >-
+          {{ library_validation_root }} wurde nicht gefunden.
+          0150 erwartet dort die von 0110 eingesammelten JSON-Dateien
+          in Unterordnern nach dem Schema <IP>/*.json.
+      when: not (library_validation_root_stat.stat.isdir | default(false))
+
+    - name: IP-zentrierte ES-Informationsbibliothek erzeugen
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "{{ ansible_playbook_python }}" - <<'PY'
+        import ipaddress
+        import json
+        import os
+        from copy import deepcopy
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        discovery_path = Path({{ library_discovery_file | to_json }})
+        validation_root = Path({{ library_validation_root | to_json }})
+        output_path = Path({{ library_output_file | to_json }})
+        expected_types = {{ library_expected_validation_types | to_json }}
+
+        # ---------------------------------------------------------------------
+        # Feste Fachbereiche.
+        #
+        # Jedes Top-Level-Feld der eingelesenen PowerShell-JSON wird genau
+        # einem Bereich zugeordnet. Gleichnamige Felder verschiedener Skripte
+        # bleiben durch den ValidationType als zweite Ebene getrennt.
+        #
+        # Nicht bekannte neue Felder werden nicht verworfen, sondern landen
+        # automatisch unter "weitere_informationen".
+        # ---------------------------------------------------------------------
+        section_routes = {
+            "Initial_Valid": {
+                "Identity": "system_und_hardware",
+                "IPAddresses": "netzwerk_und_domaene",
+                "LanguageAndRegion": "sprache_und_region",
+                "TimeConfiguration": "zeitkonfiguration",
+                "SystemInformation": "system_und_hardware",
+                "Storage": "system_und_hardware",
+                "LocalUsers": "benutzer_und_gruppen",
+                "LocalGroups": "benutzer_und_gruppen",
+                "LocalAccountSource": "benutzer_und_gruppen",
+                "NetworkAdapters": "netzwerk_und_domaene",
+                "DomainInformation": "netzwerk_und_domaene",
+                "BIOS": "system_und_hardware",
+                "WindowsDefenderFirewall": "sicherheit",
+                "MicrosoftDefender": "sicherheit",
+                "InstalledPrograms": "windows_software_und_features",
+                "WindowsComponents": "windows_software_und_features",
+                "AppXPackages": "windows_software_und_features",
+                "Certificates": "sicherheit",
+                "Services": "dienste_treiber_und_geraete",
+                "InstallationBestPractice": "hinweise_und_beobachtungen",
+            },
+            "GPOs_Valid": {
+                "Summary": "gruppenrichtlinien",
+                "IdentityAndContext": "gruppenrichtlinien",
+                "ExplicitlyConfiguredPolicyRegistry": "gruppenrichtlinien",
+                "OtherLoadedUserPolicyRegistry": "gruppenrichtlinien",
+                "ResultantSetOfPolicy": "gruppenrichtlinien",
+                "GPResult": "gruppenrichtlinien",
+                "SecurityPolicy": "gruppenrichtlinien",
+                "AdvancedAuditPolicy": "gruppenrichtlinien",
+                "GroupPolicyStateAndHistory": "gruppenrichtlinien",
+                "LocalGroupPolicyFiles": "gruppenrichtlinien",
+                "FirewallGroupPolicy": "gruppenrichtlinien",
+                "PolicyAreaSnapshots": "gruppenrichtlinien",
+                "InstallationRelevantEffectiveSettings": "gruppenrichtlinien",
+                "GroupPolicyProcessingHealth": "gruppenrichtlinien",
+            },
+            "Certificates_Services_Drivers_Valid": {
+                "Identity": "system_und_hardware",
+                "Certificates": "zertifikate_und_bindings",
+                "CertificateBindings": "zertifikate_und_bindings",
+                "Services": "dienste_treiber_und_geraete",
+                "PCS7HardeningServiceFocus": "dienste_treiber_und_geraete",
+                "PnPDrivers": "dienste_treiber_und_geraete",
+                "SystemDrivers": "dienste_treiber_und_geraete",
+                "DriverStore": "dienste_treiber_und_geraete",
+                "DeviceHealth": "dienste_treiber_und_geraete",
+                "RecentServiceDriverEvents": "dienste_treiber_und_geraete",
+                "AttentionSummary": "hinweise_und_beobachtungen",
+            },
+            "Firewall_SMB_Patch_Valid": {
+                "Identity": "system_und_hardware",
+                "Firewall": "firewall_smb_und_endpunkte",
+                "ListeningEndpoints": "firewall_smb_und_endpunkte",
+                "SMB": "firewall_smb_und_endpunkte",
+                "ScheduledTasks": "autostart_und_tasks",
+                "Autoruns": "autostart_und_tasks",
+                "WmiPermanentSubscriptions": "autostart_und_tasks",
+                "PatchStatus": "patchstand",
+                "AttentionSummary": "hinweise_und_beobachtungen",
+            },
+            "Software_PCS7_Components_Valid": {
+                "Identity": "system_und_hardware",
+                "InstalledSoftware": "software_und_pcs7",
+                "PCS7ComponentCatalogDetection": "software_und_pcs7",
+                "SoftwareCategories": "software_und_pcs7",
+                "DotNetAndRuntimePrerequisites": "software_und_pcs7",
+                "PCS7CertificatePrerequisites": "software_und_pcs7",
+                "SQLServerComponents": "software_und_pcs7",
+                "SiemensRegistryEvidence": "software_und_pcs7",
+                "SimaticShellEvidence": "software_und_pcs7",
+                "AutomationLicenseManagerEvidence": "software_und_pcs7",
+                "PCS7SetupLogEvidence": "software_und_pcs7",
+                "InstallationDirectories": "software_und_pcs7",
+                "RepresentativeBinaries": "software_und_pcs7",
+                "InstallationObservations": "hinweise_und_beobachtungen",
+            },
+        }
+
+        area_order = [
+            "discovery_und_klassifizierung",
+            "system_und_hardware",
+            "sprache_und_region",
+            "zeitkonfiguration",
+            "netzwerk_und_domaene",
+            "benutzer_und_gruppen",
+            "sicherheit",
+            "zertifikate_und_bindings",
+            "gruppenrichtlinien",
+            "dienste_treiber_und_geraete",
+            "firewall_smb_und_endpunkte",
+            "patchstand",
+            "autostart_und_tasks",
+            "windows_software_und_features",
+            "software_und_pcs7",
+            "hinweise_und_beobachtungen",
+            "datenerfassung",
+            "weitere_informationen",
+        ]
+
+        def ip_sort_key(value):
+            try:
+                return (0, int(ipaddress.ip_address(str(value))))
+            except ValueError:
+                return (1, str(value))
+
+        def parse_timestamp(value):
+            if value is None:
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            try:
+                # PowerShell ISO-8601 may end in Z or contain an explicit offset.
+                if text.endswith("Z"):
+                    text = text[:-1] + "+00:00"
+                dt = datetime.fromisoformat(text)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc).timestamp()
+            except Exception:
+                return None
+
+        def file_recency(candidate):
+            data = candidate["data"]
+            metadata = data.get("Metadata") if isinstance(data, dict) else {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            for key in ("CompletedTimestampUtc", "TimestampUtc", "TimestampLocal"):
+                parsed = parse_timestamp(metadata.get(key))
+                if parsed is not None:
+                    return (parsed, candidate["mtime"])
+
+            return (candidate["mtime"], candidate["mtime"])
+
+        def empty_areas():
+            return {name: {} for name in area_order}
+
+        def put_section(areas, area, validation_type, section_name, value):
+            source_bucket = areas[area].setdefault(validation_type, {})
+            source_bucket[section_name] = deepcopy(value)
+
+        def copy_validation_document(areas, validation_type, data, source_file):
+            # Metadaten und Erfassungsstatus sind ebenfalls vollwertige
+            # Informationen und werden deshalb explizit uebernommen.
+            collection_bucket = areas["datenerfassung"].setdefault(validation_type, {})
+            collection_bucket["source_file"] = str(source_file)
+            if "SchemaVersion" in data:
+                collection_bucket["SchemaVersion"] = deepcopy(data["SchemaVersion"])
+            if "Metadata" in data:
+                collection_bucket["Metadata"] = deepcopy(data["Metadata"])
+            if "CollectionStatus" in data:
+                collection_bucket["CollectionStatus"] = deepcopy(data["CollectionStatus"])
+
+            routed = {"SchemaVersion", "Metadata", "CollectionStatus"}
+            routes = section_routes.get(validation_type, {})
+
+            for section_name, value in data.items():
+                if section_name in routed:
+                    continue
+
+                area = routes.get(section_name)
+                if area is None:
+                    put_section(
+                        areas,
+                        "weitere_informationen",
+                        validation_type,
+                        section_name,
+                        value,
+                    )
+                else:
+                    put_section(
+                        areas,
+                        area,
+                        validation_type,
+                        section_name,
+                        value,
+                    )
+
+        with discovery_path.open("r", encoding="utf-8-sig") as handle:
+            discovery = json.load(handle)
+
+        if not isinstance(discovery, dict):
+            raise RuntimeError("Discovery-JSON muss ein JSON-Objekt enthalten.")
+
+        groups = discovery.get("groups")
+        if not isinstance(groups, dict):
+            raise RuntimeError("Discovery-JSON enthaelt kein gueltiges 'groups'-Objekt.")
+
+        es_hosts = groups.get("ipc_es") or []
+        no_access_hosts = groups.get("kein_zugriff") or []
+
+        if not isinstance(es_hosts, list) or not isinstance(no_access_hosts, list):
+            raise RuntimeError(
+                "Discovery-Gruppen 'ipc_es' und 'kein_zugriff' muessen Listen sein."
+            )
+
+        # Deduplizierung nach IP. Falls dieselbe IP wider Erwarten in beiden
+        # Gruppen vorkommt, gewinnt der Datensatz mit fehlendem Zugriff, weil
+        # dieser Zustand fuer die Nutzbarkeit der Bibliothek kritischer ist.
+        selected_hosts = {}
+        for host in es_hosts:
+            if isinstance(host, dict) and str(host.get("ip") or "").strip():
+                selected_hosts[str(host["ip"]).strip()] = deepcopy(host)
+
+        for host in no_access_hosts:
+            if isinstance(host, dict) and str(host.get("ip") or "").strip():
+                selected_hosts[str(host["ip"]).strip()] = deepcopy(host)
+
+        library_hosts = {}
+        total_selected_json = 0
+        total_invalid_json = 0
+
+        for ip in sorted(selected_hosts, key=ip_sort_key):
+            discovery_host = selected_hosts[ip]
+            classification = str(discovery_host.get("classification") or "")
+            ansible_access = bool(discovery_host.get("ansible_access", False))
+
+            areas = empty_areas()
+            # Vollstaendiger 0000-Datensatz der IP, nicht nur eine Auswahl.
+            areas["discovery_und_klassifizierung"] = deepcopy(discovery_host)
+
+            warnings = []
+            invalid_files = []
+            ignored_files = []
+            older_files = []
+            candidates_by_type = {}
+
+            host_dir = validation_root / ip
+
+            # PowerShell-Daten sind nur fuer ES-Ziele vorgesehen. Bei
+            # "Kein_Zugriff" wird nicht versucht, alte zufaellige Dateien als
+            # aktuellen Zustand zu interpretieren.
+            if classification == "ES" and ansible_access:
+                if host_dir.is_dir():
+                    for json_path in sorted(host_dir.glob("*.json")):
+                        try:
+                            with json_path.open("r", encoding="utf-8-sig") as handle:
+                                data = json.load(handle)
+                        except Exception as exc:
+                            invalid_files.append({
+                                "file": str(json_path),
+                                "error": str(exc),
+                            })
+                            continue
+
+                        if not isinstance(data, dict):
+                            invalid_files.append({
+                                "file": str(json_path),
+                                "error": "JSON-Wurzel ist kein Objekt.",
+                            })
+                            continue
+
+                        metadata = data.get("Metadata")
+                        if not isinstance(metadata, dict):
+                            ignored_files.append({
+                                "file": str(json_path),
+                                "reason": "Metadata fehlt oder ist kein Objekt.",
+                            })
+                            continue
+
+                        validation_type = str(metadata.get("ValidationType") or "").strip()
+                        if validation_type not in expected_types:
+                            ignored_files.append({
+                                "file": str(json_path),
+                                "reason": (
+                                    "ValidationType ist nicht Teil des aktuellen "
+                                    "0110-Skriptsatzes: " + (validation_type or "<leer>")
+                                ),
+                            })
+                            continue
+
+                        target_ip = str(metadata.get("TargetIPAddress") or "").strip()
+                        if target_ip and target_ip != ip:
+                            ignored_files.append({
+                                "file": str(json_path),
+                                "reason": (
+                                    f"TargetIPAddress {target_ip!r} stimmt nicht "
+                                    f"mit dem IP-Ordner {ip!r} ueberein."
+                                ),
+                            })
+                            continue
+
+                        candidate = {
+                            "path": json_path,
+                            "data": data,
+                            "mtime": json_path.stat().st_mtime,
+                        }
+                        candidates_by_type.setdefault(validation_type, []).append(candidate)
+
+                else:
+                    warnings.append(
+                        "Kein 0110-Ergebnisordner fuer diese ES-IP vorhanden: "
+                        + str(host_dir)
+                    )
+
+            selected_sources = {}
+            source_health = {}
+
+            for validation_type in expected_types:
+                candidates = candidates_by_type.get(validation_type, [])
+                if not candidates:
+                    continue
+
+                candidates = sorted(candidates, key=file_recency, reverse=True)
+                selected = candidates[0]
+                selected_sources[validation_type] = str(selected["path"])
+
+                for old in candidates[1:]:
+                    older_files.append({
+                        "validation_type": validation_type,
+                        "file": str(old["path"]),
+                        "reason": "Aelterer Ergebnisstand; neuester Datensatz wurde verwendet.",
+                    })
+
+                metadata = selected["data"].get("Metadata") or {}
+                source_health[validation_type] = metadata.get("OverallStatus")
+                copy_validation_document(
+                    areas,
+                    validation_type,
+                    selected["data"],
+                    selected["path"],
+                )
+                total_selected_json += 1
+
+            total_invalid_json += len(invalid_files)
+
+            found_types = [
+                validation_type
+                for validation_type in expected_types
+                if validation_type in selected_sources
+            ]
+
+            if classification == "ES" and ansible_access:
+                missing_types = [
+                    validation_type
+                    for validation_type in expected_types
+                    if validation_type not in selected_sources
+                ]
+                if not found_types:
+                    validation_data_status = "NOT_AVAILABLE"
+                elif missing_types:
+                    validation_data_status = "PARTIAL"
+                else:
+                    validation_data_status = "COMPLETE"
+            else:
+                missing_types = []
+                validation_data_status = "NOT_EXPECTED_NO_ACCESS"
+
+            if not ansible_access:
+                access_status = "NO_ANSIBLE_ACCESS"
+            else:
+                access_status = "ANSIBLE_ACCESS_OK_AT_DISCOVERY"
+
+            access = {
+                "ansible_access": ansible_access,
+                "status": access_status,
+                "error_code": discovery_host.get("access_error_code"),
+                "error_reason": discovery_host.get("access_error_reason")
+                    or discovery_host.get("error"),
+                "error_detail": discovery_host.get("access_error_detail"),
+                "source": "0000IPC_Discovery_Classification",
+                "note": (
+                    "Der Zugriffsstatus stammt aus der Discovery-JSON von 0000. "
+                    "0150 fuehrt selbst keinen erneuten WinRM-Test durch."
+                ),
+            }
+
+            data_quality = {
+                "validation_data_status": validation_data_status,
+                "expected_validation_types": (
+                    expected_types
+                    if classification == "ES" and ansible_access
+                    else []
+                ),
+                "found_validation_types": found_types,
+                "missing_validation_types": missing_types,
+                "selected_source_files": selected_sources,
+                "source_overall_status": source_health,
+                "invalid_json_files": invalid_files,
+                "ignored_json_files": ignored_files,
+                "older_json_files_not_selected": older_files,
+                "warnings": warnings,
+            }
+
+            library_hosts[ip] = {
+                "ip_address": ip,
+                "computer_name": discovery_host.get("computername") or None,
+                "classification": classification or None,
+                "classification_confidence": discovery_host.get(
+                    "classification_confidence"
+                ),
+                "zugriff": access,
+                "datenqualitaet": data_quality,
+                "bereiche": areas,
+            }
+
+        no_access_count = sum(
+            1
+            for host in library_hosts.values()
+            if not bool(host["zugriff"]["ansible_access"])
+        )
+        es_count = sum(
+            1
+            for host in library_hosts.values()
+            if host.get("classification") == "ES"
+        )
+        complete_es_count = sum(
+            1
+            for host in library_hosts.values()
+            if (
+                host.get("classification") == "ES"
+                and host["datenqualitaet"]["validation_data_status"] == "COMPLETE"
+            )
+        )
+        partial_es_count = sum(
+            1
+            for host in library_hosts.values()
+            if (
+                host.get("classification") == "ES"
+                and host["datenqualitaet"]["validation_data_status"] == "PARTIAL"
+            )
+        )
+        missing_es_count = sum(
+            1
+            for host in library_hosts.values()
+            if (
+                host.get("classification") == "ES"
+                and host["datenqualitaet"]["validation_data_status"] == "NOT_AVAILABLE"
+            )
+        )
+
+        output = {
+            "schema_version": "1.0",
+            "library_type": "IPC_ES_Information_Library",
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "scope": {
+                "included_classifications": ["ES", "Kein_Zugriff"],
+                "description": (
+                    "Enthaelt aktuell nur als ES klassifizierte IPCs sowie "
+                    "Teilnehmer ohne Ansible-Zugriff."
+                ),
+            },
+            "sources": {
+                "discovery_json": str(discovery_path),
+                "validation_root": str(validation_root),
+                "expected_validation_types": expected_types,
+                "selection_rule": (
+                    "Pro IP und ValidationType wird der zeitlich neueste gueltige "
+                    "JSON-Datensatz verwendet. Aeltere Datensaetze bleiben unberuehrt "
+                    "und werden nur in der Datenqualitaet dokumentiert."
+                ),
+            },
+            "summary": {
+                "ip_addresses_total": len(library_hosts),
+                "es_total": es_count,
+                "no_ansible_access_total": no_access_count,
+                "es_validation_complete": complete_es_count,
+                "es_validation_partial": partial_es_count,
+                "es_validation_missing": missing_es_count,
+                "selected_validation_json_files": total_selected_json,
+                "invalid_validation_json_files": total_invalid_json,
+            },
+            # Reihenfolge ist numerisch nach IP sortiert.
+            "hosts": library_hosts,
+        }
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Atomisches Schreiben: Ein Leser sieht entweder die alte vollstaendige
+        # oder die neue vollstaendige Datei, niemals eine halb geschriebene JSON.
+        tmp_path = output_path.with_name(output_path.name + ".tmp")
+        with tmp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(output, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        os.replace(str(tmp_path), str(output_path))
+
+        print(json.dumps({
+            "output_file": str(output_path),
+            "summary": output["summary"],
+        }, ensure_ascii=False))
+        PY
+      args:
+        executable: /bin/bash
+      register: library_build
+      changed_when: true
+
+    - name: Bibliotheksdatei auf dem Controller pruefen
+      ansible.builtin.stat:
+        path: "{{ library_output_file }}"
+      register: library_output_stat
+
+    - name: Abbrechen wenn Bibliotheksdatei nicht erzeugt wurde
+      ansible.builtin.fail:
+        msg: >-
+          {{ library_output_file }} wurde nicht erzeugt.
+          Ausgabe des Generators: {{ library_build.stdout | default('') }}
+      when: not (library_output_stat.stat.exists | default(false))
+
+    - name: Bibliotheksdatei einlesen und JSON-Struktur validieren
+      ansible.builtin.slurp:
+        src: "{{ library_output_file }}"
+      register: library_output_raw
+
+    - name: Bibliotheksdaten fuer Abschlusspruefung speichern
+      ansible.builtin.set_fact:
+        library_output_data: >-
+          {{ library_output_raw.content | b64decode | from_json }}
+
+    - name: Grundstruktur der Bibliothek pruefen
+      ansible.builtin.assert:
+        that:
+          - library_output_data.schema_version is defined
+          - library_output_data.library_type == 'IPC_ES_Information_Library'
+          - library_output_data.summary is defined
+          - library_output_data.hosts is defined
+        fail_msg: >-
+          Die erzeugte Bibliotheksdatei besitzt nicht die erwartete Grundstruktur.
+
+    - name: Ergebnis der Bibliothek anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "JSON: {{ library_output_file }}"
+          - "IPs gesamt: {{ library_output_data.summary.ip_addresses_total | default(0) }}"
+          - "ES gesamt: {{ library_output_data.summary.es_total | default(0) }}"
+          - "Kein Ansible-Zugriff: {{ library_output_data.summary.no_ansible_access_total | default(0) }}"
+          - "ES vollstaendig: {{ library_output_data.summary.es_validation_complete | default(0) }}"
+          - "ES teilweise: {{ library_output_data.summary.es_validation_partial | default(0) }}"
+          - "ES ohne 0110-Daten: {{ library_output_data.summary.es_validation_missing | default(0) }}"
