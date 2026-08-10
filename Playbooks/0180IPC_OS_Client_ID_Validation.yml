@@ -76,9 +76,107 @@
           - expected_allowed_tls12_cipher_suites | length > 0
           - expected_disabled_cipher_suites is defined
           - expected_disabled_cipher_suites | length > 0
+          - expected_project_folder is defined
+          - expected_project_folder | string | length > 0
+          - expected_project_share is defined
+          - expected_project_share | string | length > 0
+          - expected_edge_version is defined
+          - expected_edge_version | string | length > 0
+          - ipc_os_client_expected is defined
+          - ipc_os_client_expected is mapping
+          - ipc_os_client_expected.language_regex is defined
+          - ipc_os_client_expected.region_code is defined
+          - ipc_os_client_expected.keyboard_layout_allowed_values is defined
+          - ipc_os_client_expected.keyboard_layout_count is defined
+          - ipc_os_client_expected.ultravnc_version_regex is defined
+          - ipc_os_client_expected.builtin_admin_password_expires is defined
+          - ipc_os_client_expected.builtin_admin_enabled is defined
+          - ipc_os_client_expected.terminalbus_gateway is defined
+          - ipc_os_client_expected.disabled_adapter_patterns is defined
+          - ipc_os_client_expected.speed_duplex_value_regex is defined
+          - ipc_os_client_expected.adapter_allow_power_off is defined
+          - ipc_os_client_expected.bitlocker is mapping
+          - ipc_os_client_expected.telemetry_value is defined
+          - ipc_os_client_expected.smb_signing is mapping
+          - ipc_os_client_expected.smb_encrypt_data is defined
+          - ipc_os_client_expected.rdp_deny_connections is defined
+          - ipc_os_client_expected.firewall_profiles_enabled is defined
+          - ipc_os_client_expected.active_network_category is defined
+          - ipc_os_client_expected.bginfo_run_regex is defined
+          - ipc_os_client_expected.defender is mapping
+          - ipc_os_client_expected.patches_by_id is mapping
+          - ipc_os_client_expected.software_checks is mapping
+          - ipc_os_client_expected.local_account_token_filter_policy is defined
+          - ipc_os_client_expected.keyboard_hotkey_disabled_value is defined
+          - ipc_os_client_expected.restore_images_path is defined
+          - ipc_os_client_expected.desktop_absent_shortcuts is defined
+          - ipc_os_client_expected.boot is mapping
+          - ipc_os_client_expected.wsus_client_manager_path is defined
+          - ipc_os_client_expected.autologon_user is defined
+          - ipc_os_client_expected.autologon_enabled is defined
+          - ipc_os_client_expected.vnc_viewer_paths is defined
         fail_msg: >-
           Fuer 0180 fehlen benoetigte Semaphore-Variablen. Projektabhaengige
           Sollwerte werden nicht still durch erfundene Defaults ersetzt.
+
+    - name: Rollenbezogene OS-Client-Sollwerte auf Vollstaendigkeit pruefen
+      ansible.builtin.assert:
+        that:
+          - ipc_os_client_expected.bitlocker.enabled is defined
+          - ipc_os_client_expected.bitlocker.min_encryption_percentage is defined
+          - ipc_os_client_expected.smb_signing.server_require_security_signature is defined
+          - ipc_os_client_expected.smb_signing.server_enable_security_signature is defined
+          - ipc_os_client_expected.smb_signing.client_require_security_signature is defined
+          - ipc_os_client_expected.defender.tamper_protected is defined
+          - ipc_os_client_expected.defender.maps_reporting is defined
+          - ipc_os_client_expected.defender.submit_samples_consent is defined
+          - ipc_os_client_expected.boot.boot_manager_timeout_seconds is defined
+          - ipc_os_client_expected.boot.auto_reboot is defined
+          - ipc_os_client_expected.boot.recovery_options_display_seconds is defined
+          - ipc_os_client_expected.patches_by_id.IPC0222 is defined
+          - ipc_os_client_expected.patches_by_id.IPC0223 is defined
+          - ipc_os_client_expected.patches_by_id.IPC0226 is defined
+          - ipc_os_client_expected.patches_by_id.IPC0227 is defined
+          - ipc_os_client_expected.software_checks.IPC0111 is defined
+          - ipc_os_client_expected.software_checks.IPC0112 is defined
+          - ipc_os_client_expected.software_checks.IPC0113 is defined
+          - ipc_os_client_expected.software_checks.IPC0114 is defined
+          - ipc_os_client_expected.software_checks.IPC0115 is defined
+          - ipc_os_client_expected.software_checks.IPC0117 is defined
+          - ipc_os_client_expected.software_checks.IPC0119 is defined
+          - ipc_os_client_expected.software_checks.IPC0120 is defined
+          - ipc_os_client_expected.software_checks.IPC0121 is defined
+          - ipc_os_client_expected.software_checks.IPC0122 is defined
+          - ipc_os_client_expected.software_checks.IPC0123 is defined
+          - ipc_os_client_expected.software_checks.IPC0124 is defined
+          - ipc_os_client_expected.software_checks.IPC0127 is defined
+          - ipc_os_client_expected.software_checks.IPC0128 is defined
+          - ipc_os_client_expected.software_checks.IPC0129 is defined
+          - ipc_os_client_expected.software_checks.IPC0130 is defined
+          - ipc_os_client_expected.software_checks.IPC0131 is defined
+          - ipc_os_client_expected.software_checks.IPC0132 is defined
+          - ipc_os_client_expected.software_checks.IPC0140 is defined
+          - ipc_os_client_expected.software_checks.IPC0202 is defined
+          - ipc_os_client_expected.software_checks.IPC0203 is defined
+          - ipc_os_client_expected.software_checks.IPC0205 is defined
+        fail_msg: >-
+          ipc_os_client_expected ist unvollstaendig. 0180 verwendet fuer
+          kundenspezifische Sollwerte bewusst keine stillen Ersatzwerte.
+
+    - name: Software-Sollwertdefinitionen fuer OS Client pruefen
+      ansible.builtin.assert:
+        that:
+          - item.value is mapping
+          - >-
+            (item.value.name_regex is defined and item.value.name_regex | string | length > 0)
+            or
+            (item.value.combined_regex is defined and item.value.combined_regex | string | length > 0)
+        fail_msg: >-
+          {{ item.key }} in ipc_os_client_expected.software_checks benoetigt
+          mindestens name_regex oder combined_regex.
+      loop: "{{ ipc_os_client_expected.software_checks | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
 
     - name: Informationsbibliothek von 0150 pruefen
       ansible.builtin.stat:
@@ -174,8 +272,10 @@
           disabled_windows_features: "{{ expected_disabled_windows_features }}"
           allowed_tls12_cipher_suites: "{{ expected_allowed_tls12_cipher_suites }}"
           disabled_cipher_suites: "{{ expected_disabled_cipher_suites }}"
-          project_folder: "{{ expected_project_folder | default('D:\\Projekt') }}"
-          project_share: "{{ expected_project_share | default('Projekt') }}"
+          project_folder: "{{ expected_project_folder }}"
+          project_share: "{{ expected_project_share }}"
+          edge_version: "{{ expected_edge_version }}"
+          os_client: "{{ ipc_os_client_expected }}"
 
     - name: Erwartete Sollwerte temporaer als JSON schreiben
       ansible.builtin.copy:
@@ -186,7 +286,7 @@
     - name: Lokalen 0180-Auswerter schreiben
       ansible.builtin.copy:
         dest: "{{ id_validation_python_file }}"
-        
+       
         content: |
           #!/usr/bin/env python3
           import argparse
@@ -376,6 +476,50 @@
                   task_id, task_name, bool(matches), soll, matches,
                   "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
                   "Aufgabenliste",
+              )
+
+          def software_expectation_check(task_id, task_name, installed_software, spec):
+              spec = as_dict(spec)
+              products = software_products(installed_software)
+              soll_parts = ["Software vorhanden"]
+              if text(spec.get("name_regex")).strip():
+                  soll_parts.append("NameRegex=" + text(spec.get("name_regex")))
+              if text(spec.get("version_regex")).strip():
+                  soll_parts.append("VersionRegex=" + text(spec.get("version_regex")))
+              if text(spec.get("combined_regex")).strip():
+                  soll_parts.append("CombinedRegex=" + text(spec.get("combined_regex")))
+              soll = "; ".join(soll_parts)
+              if not products:
+                  return missing_check(
+                      task_id, task_name, soll,
+                      "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                      "Semaphore: ipc_os_client_expected.software_checks." + task_id,
+                  )
+
+              combined_rx = text(spec.get("combined_regex")).strip()
+              if combined_rx:
+                  matches = []
+                  for product in products:
+                      if not isinstance(product, dict):
+                          continue
+                      haystack = text(product.get("DisplayName")) + " " + text(product.get("DisplayVersion"))
+                      if regex_search(combined_rx, haystack):
+                          matches.append({
+                              "DisplayName": product.get("DisplayName"),
+                              "DisplayVersion": product.get("DisplayVersion"),
+                              "Publisher": product.get("Publisher"),
+                          })
+              else:
+                  matches = product_matches(
+                      products,
+                      spec.get("name_regex"),
+                      spec.get("version_regex") or None,
+                  )
+
+              return make_check(
+                  task_id, task_name, bool(matches), soll, matches,
+                  "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+                  "Semaphore: ipc_os_client_expected.software_checks." + task_id,
               )
 
           def service_rows(service_inventory):
@@ -584,6 +728,8 @@
           def evaluate_os_client(host, expected):
               checks = {}
               info = {}
+              client_expected = as_dict(expected.get("os_client"))
+              software_expected = as_dict(client_expected.get("software_checks"))
 
               identity = library_section(host, "system_und_hardware", "Initial_Valid", "Identity")
               language = library_section(host, "sprache_und_region", "Initial_Valid", "LanguageAndRegion")
@@ -621,46 +767,54 @@
 
               products = software_products(installed_software)
 
-              # IPC0003 / IPC0007 / IPC0008 - deutsche Grundkonfiguration.
+              # IPC0003 / IPC0007 / IPC0008 - Sprache/Region ueber Semaphore.
               lang_snapshot = german_language_snapshot(language)
               current_ui = lang_snapshot.get("CurrentUICulture")
               system_locale = lang_snapshot.get("WindowsSystemLocale")
               region = as_dict(as_dict(language).get("Region"))
               region_code = text(region.get("TwoLetterISORegionName")).upper()
+              language_regex = client_expected.get("language_regex")
+              expected_region_code = text(client_expected.get("region_code")).upper()
               checks["IPC0003"] = make_check(
                   "IPC0003", "Ersteinrichtung (Deutsch)",
-                  is_german(current_ui) and is_german(system_locale),
-                  "WindowsSystemLocale und CurrentUICulture deutsch", lang_snapshot,
-                  "Initial_Valid.LanguageAndRegion", "Aufgabenliste",
+                  regex_search(language_regex, current_ui) and regex_search(language_regex, system_locale),
+                  "LanguageRegex=" + text(language_regex), lang_snapshot,
+                  "Initial_Valid.LanguageAndRegion", "Semaphore: ipc_os_client_expected.language_regex",
               )
               checks["IPC0007"] = make_check(
                   "IPC0007", "Sprache auswählen (Deutsch)",
-                  is_german(current_ui), "CurrentUICulture deutsch", lang_snapshot,
-                  "Initial_Valid.LanguageAndRegion", "Aufgabenliste",
+                  regex_search(language_regex, current_ui),
+                  "CurrentUICultureRegex=" + text(language_regex), lang_snapshot,
+                  "Initial_Valid.LanguageAndRegion", "Semaphore: ipc_os_client_expected.language_regex",
               )
               checks["IPC0008"] = make_check(
                   "IPC0008", "Region auswählen (Deutschland)",
-                  region_code == "DE", "Region = DE", region,
-                  "Initial_Valid.LanguageAndRegion.Region", "Aufgabenliste",
+                  region_code == expected_region_code,
+                  "Region = " + expected_region_code, region,
+                  "Initial_Valid.LanguageAndRegion.Region", "Semaphore: ipc_os_client_expected.region_code",
               )
 
-              # IPC0009 - genau eine deutsche Tastaturbelegung.
+              # IPC0009 - erwartete Tastaturbelegung(en) ueber Semaphore.
               current_user_language = as_dict(as_dict(language).get("CurrentUser"))
               preload_snapshot = as_dict(current_user_language.get("KeyboardPreload"))
               preload_values = as_dict(preload_snapshot.get("Values"))
               keyboard_layouts = [text(value).lower() for value in preload_values.values() if value is not None]
+              allowed_keyboard_layouts = {
+                  text(value).lower() for value in as_list(client_expected.get("keyboard_layout_allowed_values"))
+              }
+              expected_keyboard_count = int_value(client_expected.get("keyboard_layout_count"))
               keyboard_ok = (
                   bool(preload_snapshot.get("Exists"))
-                  and len(keyboard_layouts) == 1
-                  and keyboard_layouts[0] in {"00000407", "407", "0407"}
+                  and len(keyboard_layouts) == expected_keyboard_count
+                  and all(layout in allowed_keyboard_layouts for layout in keyboard_layouts)
               )
               checks["IPC0009"] = make_check(
                   "IPC0009", "Tastatur (Deutsch), keine zweite",
                   keyboard_ok,
-                  {"KeyboardLayouts": ["00000407"], "Count": 1},
+                  {"AllowedKeyboardLayoutValues": sorted(allowed_keyboard_layouts), "Count": expected_keyboard_count},
                   {"KeyboardPreload": preload_snapshot, "DetectedLayouts": keyboard_layouts},
                   "Initial_Valid.LanguageAndRegion.CurrentUser.KeyboardPreload",
-                  "Aufgabenliste",
+                  "Semaphore: ipc_os_client_expected.keyboard_layout_allowed_values/keyboard_layout_count",
               )
 
               # IPC0013 - Benutzerkonto kann nachgewiesen werden; Passwort/Hint bewusst nicht.
@@ -713,16 +867,17 @@
               # IPC0026 - UltraVNC 1.4.3.6.
               vnc_products = product_matches(products, r"UltraVNC|uvnc")
               vnc_services = matching_services(services, r"UltraVNC|uvnc|winvnc")
+              vnc_version_regex = client_expected.get("ultravnc_version_regex")
               vnc_version_ok = any(
-                  regex_search(r"^1\.4\.3\.6(?:\D|$)", item.get("DisplayVersion"))
+                  regex_search(vnc_version_regex, item.get("DisplayVersion"))
                   for item in vnc_products
               )
               checks["IPC0026"] = make_check(
                   "IPC0026", "UltraVNC 1.4.3.6 installieren",
                   bool(vnc_products or vnc_services) and vnc_version_ok,
-                  "UltraVNC 1.4.3.6 installiert",
+                  "UltraVNC VersionRegex=" + text(vnc_version_regex),
                   {"InstalledSoftware": vnc_products, "Services": vnc_services},
-                  "InstalledSoftware + Services", "Aufgabenliste",
+                  "InstalledSoftware + Services", "Semaphore: ipc_os_client_expected.ultravnc_version_regex",
               )
 
               # IPC0027 - VNC Firewall fuer alle Profile.
@@ -787,17 +942,19 @@
                       break
               checks["IPC0036"] = make_check(
                   "IPC0036", "Bestehendes Administrator-Konto umkonfigurieren",
-                  isinstance(builtin_admin, dict) and bool_value(builtin_admin.get("PasswordExpires")) is False,
-                  "RID-500-Administratorkonto: PasswordExpires=false",
+                  isinstance(builtin_admin, dict)
+                  and bool_value(builtin_admin.get("PasswordExpires")) == bool_value(client_expected.get("builtin_admin_password_expires")),
+                  "RID-500-Administratorkonto: PasswordExpires=" + text(bool_value(client_expected.get("builtin_admin_password_expires"))).lower(),
                   builtin_admin if builtin_admin else "RID-500-Konto nicht gefunden",
-                  "Initial_Valid.LocalUsers", "Aufgabenliste",
+                  "Initial_Valid.LocalUsers", "Semaphore: ipc_os_client_expected.builtin_admin_password_expires",
               )
               checks["IPC0037"] = make_check(
                   "IPC0037", "Bestehendes Administrator-Konto aktivieren",
-                  isinstance(builtin_admin, dict) and bool_value(builtin_admin.get("Enabled")) is True,
-                  "RID-500-Administratorkonto: Enabled=true",
+                  isinstance(builtin_admin, dict)
+                  and bool_value(builtin_admin.get("Enabled")) == bool_value(client_expected.get("builtin_admin_enabled")),
+                  "RID-500-Administratorkonto: Enabled=" + text(bool_value(client_expected.get("builtin_admin_enabled"))).lower(),
                   builtin_admin if builtin_admin else "RID-500-Konto nicht gefunden",
-                  "Initial_Valid.LocalUsers", "Aufgabenliste",
+                  "Initial_Valid.LocalUsers", "Semaphore: ipc_os_client_expected.builtin_admin_enabled",
               )
               checks["IPC0038"] = make_check(
                   "IPC0038", "lokalen Benutzer Administrator umbenennen",
@@ -855,13 +1012,15 @@
                   text(adapter.get("Name")) for adapter in as_list(network_adapters)
                   if isinstance(adapter, dict)
               ]
-              terminalbus_named = any(regex_search(r"^Terminalbus$", name) for name in adapter_names)
+              terminalbus_named = any(
+                  regex_search(expected.get("terminalbus_adapter_regex"), name) for name in adapter_names
+              )
               checks["IPC0049"] = make_check(
                   "IPC0049", "Netzwerkadapter umbenennen",
                   terminalbus_named,
-                  "Mindestens ein Adaptername ist exakt 'Terminalbus'",
+                  "Adaptername passt auf " + text(expected.get("terminalbus_adapter_regex")),
                   {"AdapterNames": adapter_names},
-                  "Initial_Valid.NetworkAdapters[].Name", "Aufgabenliste",
+                  "Initial_Valid.NetworkAdapters[].Name", "Semaphore: expected_terminalbus_adapter_regex",
               )
 
               # IPC0050 / IPC0055 - komplette Adapterinformationen.
@@ -885,21 +1044,19 @@
                   {"Name": adapter.get("Name"), "Gateway": as_list(adapter.get("Gateway"))}
                   for adapter in terminalbus
               ]
+              expected_terminalbus_gateway = text(client_expected.get("terminalbus_gateway"))
               gateway_ok = bool(terminalbus) and any(
-                  "192.168.210.254" in [text(x) for x in as_list(adapter.get("Gateway"))]
+                  expected_terminalbus_gateway in [text(x) for x in as_list(adapter.get("Gateway"))]
                   for adapter in terminalbus
               )
               checks["IPC0051"] = make_check(
                   "IPC0051", "Terminalbus Gateway korrigieren", gateway_ok,
-                  "192.168.210.254", gateway_details,
-                  "Initial_Valid.NetworkAdapters", "Aufgabenliste",
+                  expected_terminalbus_gateway, gateway_details,
+                  "Initial_Valid.NetworkAdapters", "Semaphore: ipc_os_client_expected.terminalbus_gateway",
               )
 
               # IPC0054 - OS-Client-spezifische unnoetige Adapter deaktiviert.
-              client_unused_patterns = [
-                  r"LAN.*#?\s*0?2.*Terminal.*IF\s*2.*X\s*0?2",
-                  r"LAN.*#?\s*0?3.*Plant.*IF\s*1.*X\s*0?3|Plant\s*Bus|Plantbus",
-              ]
+              client_unused_patterns = as_list(client_expected.get("disabled_adapter_patterns"))
               unused_results = []
               unused_ok = bool(as_list(network_adapters))
               for pattern in client_unused_patterns:
@@ -919,9 +1076,9 @@
               checks["IPC0054"] = make_check(
                   "IPC0054", "Nicht benötigte Netzwerkadapter deaktivieren",
                   unused_ok,
-                  "OS Client: LAN #02 Terminalbus IF2 X02 und LAN #03 Plant Bus IF1 X03 deaktiviert/abwesend",
+                  "Deaktiviert/abwesend: " + "; ".join(text(x) for x in client_unused_patterns),
                   unused_results,
-                  "Initial_Valid.NetworkAdapters", "Aufgabenliste",
+                  "Initial_Valid.NetworkAdapters", "Semaphore: ipc_os_client_expected.disabled_adapter_patterns",
               )
 
               # IPC0056 - LMHOSTS deaktiviert.
@@ -1011,15 +1168,15 @@
                       )
                   ]
                   adapter_ok = bool(candidates) and all(
-                      regex_search(r"Auto|Automatisch|Auto Negotiation|0", text(prop.get("DisplayValue")) + " " + " ".join(text(x) for x in as_list(prop.get("RegistryValue"))))
+                      regex_search(client_expected.get("speed_duplex_value_regex"), text(prop.get("DisplayValue")) + " " + " ".join(text(x) for x in as_list(prop.get("RegistryValue"))))
                       for prop in candidates
                   )
                   speed_ok = speed_ok and adapter_ok
                   speed_details.append({"Name": adapter.get("Name"), "Candidates": candidates, "OK": adapter_ok})
               checks["IPC0079"] = make_check(
                   "IPC0079", "Einstellungen Netzwerkkarte überprüfen (1000MBit/s, Automatisch)",
-                  speed_ok, "Speed & Duplex = Auto Negotiation", speed_details,
-                  "Initial_Valid.NetworkAdapters[].AdvancedProperties", "Aufgabenliste",
+                  speed_ok, "Speed & Duplex Regex=" + text(client_expected.get("speed_duplex_value_regex")), speed_details,
+                  "Initial_Valid.NetworkAdapters[].AdvancedProperties", "Semaphore: ipc_os_client_expected.speed_duplex_value_regex",
               )
 
               # IPC0080 - Adapter-Energiesparen deaktiviert.
@@ -1028,13 +1185,13 @@
               for adapter in target_adapters:
                   pm = as_dict(adapter.get("PowerManagement"))
                   allow_off = pm.get("AllowComputerToTurnOffDevice")
-                  adapter_ok = bool_value(allow_off) is False
+                  adapter_ok = bool_value(allow_off) == bool_value(client_expected.get("adapter_allow_power_off"))
                   power_ok = power_ok and adapter_ok
                   power_details.append({"Name": adapter.get("Name"), "AllowComputerToTurnOffDevice": allow_off, "OK": adapter_ok})
               checks["IPC0080"] = make_check(
                   "IPC0080", "Energiesparoptionen für Netzwerkkarten deaktivieren",
-                  power_ok, {"AllowComputerToTurnOffDevice": False}, power_details,
-                  "Initial_Valid.NetworkAdapters[].PowerManagement", "Aufgabenliste",
+                  power_ok, {"AllowComputerToTurnOffDevice": bool_value(client_expected.get("adapter_allow_power_off"))}, power_details,
+                  "Initial_Valid.NetworkAdapters[].PowerManagement", "Semaphore: ipc_os_client_expected.adapter_allow_power_off",
               )
 
               # IPC0084 - ScreenSaver-Policy-Evidenz.
@@ -1083,23 +1240,23 @@
               )
 
               # PCS-7-/Library-Komponenten fuer OS Runtime/Client.
-              component_specs = [
-                  ("IPC0111", "PTE400 V10.0", r"PTE\s*400.*V?10", None, "PTE400 V10.0 installiert"),
-                  ("IPC0112", "SENTRON 3WL/3VL V10", r"SENTRON.*(3WL.*3VL|3WLVL).*V?10", None, "SENTRON 3WL/3VL V10.0 OS-Komponente vorhanden"),
-                  ("IPC0113", "SENTRON PAC V10", r"SENTRON.*PAC.*V?10", None, "SENTRON PAC V10.0 OS-Komponente vorhanden"),
-                  ("IPC0114", "SIMOCODE pro PCS7 V10.0", r"SIMOCODE\s*pro.*V?10", None, "SIMOCODE pro V10.0 OS-Komponente vorhanden"),
-                  ("IPC0115", "SIMOCODE Migration Legacy V10.0", r"SIMOCODE.*Migration.*Legacy.*V?10", None, "SIMOCODE Migration Legacy V10.0 OS-Komponente vorhanden"),
-                  ("IPC0117", "S7 F Systems V6.4 SP1", r"S7[\s-]*F[\s-]*Systems.*V?6[\._ ]?4.*SP1", None, "S7 F Systems V6.4 SP1 Runtime/HMI vorhanden"),
-                  ("IPC0119", "Industry Library V10.0", r"Industry\s*Library.*V?10", None, "Industry Library V10.0 OS-Komponente vorhanden"),
-                  ("IPC0120", "PowerControl V9.1", r"PowerControl.*V?9[\._ ]?1", None, "PowerControl V9.1 OS-Komponente vorhanden"),
-                  ("IPC0121", "PowerControl V9.1 Update 1", r"PowerControl.*V?9[\._ ]?1.*(Upd|Update)\s*1", None, "PowerControl V9.1 Update 1 vorhanden"),
-                  ("IPC0122", "DriveES PCS 7 APL V10.0", r"Drive\s*ES.*PCS\s*7.*APL.*V?10", None, "Drive ES PCS7 APL V10 OS-Komponente vorhanden"),
-                  ("IPC0123", "SITOP PCS 7 APL V4.0", r"SITOP.*PCS\s*7.*APL.*V?4[\._ ]?0", None, "SITOP PCS7 APL V4.0 OS-Komponente vorhanden"),
-                  ("IPC0124", "SIMATIC Safety Matrix V6.3 SP1", r"Safety\s*Matrix.*V?6[\._ ]?3.*SP1", None, "Safety Matrix V6.3 SP1 Runtime/Viewer vorhanden"),
-              ]
-              for task_id, task_name, name_rx, version_rx, soll in component_specs:
-                  checks[task_id] = software_presence_check(
-                      task_id, task_name, installed_software, name_rx, version_rx, soll
+              component_task_names = {
+                  "IPC0111": "PTE400 V10.0",
+                  "IPC0112": "SENTRON 3WL/3VL V10",
+                  "IPC0113": "SENTRON PAC V10",
+                  "IPC0114": "SIMOCODE pro PCS7 V10.0",
+                  "IPC0115": "SIMOCODE Migration Legacy V10.0",
+                  "IPC0117": "S7 F Systems V6.4 SP1",
+                  "IPC0119": "Industry Library V10.0",
+                  "IPC0120": "PowerControl V9.1",
+                  "IPC0121": "PowerControl V9.1 Update 1",
+                  "IPC0122": "DriveES PCS 7 APL V10.0",
+                  "IPC0123": "SITOP PCS 7 APL V4.0",
+                  "IPC0124": "SIMATIC Safety Matrix V6.3 SP1",
+              }
+              for task_id, task_name in component_task_names.items():
+                  checks[task_id] = software_expectation_check(
+                      task_id, task_name, installed_software, software_expected.get(task_id)
                   )
 
               # IPC0125 / IPC0126 - Lizenz-/UC02-Evidenz.
@@ -1117,17 +1274,17 @@
               )
 
               # SP1/Add-ons fuer OS-Komponenten.
-              sp1_specs = [
-                  ("IPC0127", "PCS7 V10 SP1 installieren", r"(SIMATIC\s*PCS\s*7|PCS\s*7).*V?10(?:\.0)?.*SP\s*1", None, "PCS 7 V10.0 SP1 installiert"),
-                  ("IPC0128", "Industry Library 10.0 Upd1 aktualisieren", r"Industry\s*Library.*V?10(?:\.0)?.*(Upd|Update)\s*1", None, "Industry Library V10.0 Update 1 installiert"),
-                  ("IPC0129", "SENTRON 3WL/3VL V10.0 SP1", r"SENTRON.*(3WL.*3VL|3WLVL).*V?10(?:\.0)?.*SP\s*1", None, "SENTRON 3WL/3VL V10.0 SP1 OS-Komponente installiert"),
-                  ("IPC0130", "SENTRON PAC V10.0 SP1", r"SENTRON.*PAC.*V?10(?:\.0)?.*SP\s*1", None, "SENTRON PAC V10.0 SP1 OS-Komponente installiert"),
-                  ("IPC0131", "SIMOCODE pro PCS7 V10.0 SP1", r"SIMOCODE\s*pro.*V?10(?:\.0)?.*SP\s*1", None, "SIMOCODE pro V10.0 SP1 OS-Komponente installiert"),
-                  ("IPC0132", "SIMOCODE Migration Legacy V10.0 SP1", r"SIMOCODE.*Migration.*Legacy.*V?10(?:\.0)?.*SP\s*1", None, "SIMOCODE Migration Legacy V10.0 SP1 OS-Komponente installiert"),
-              ]
-              for task_id, task_name, name_rx, version_rx, soll in sp1_specs:
-                  checks[task_id] = software_presence_check(
-                      task_id, task_name, installed_software, name_rx, version_rx, soll
+              sp1_task_names = {
+                  "IPC0127": "PCS7 V10 SP1 installieren",
+                  "IPC0128": "Industry Library 10.0 Upd1 aktualisieren",
+                  "IPC0129": "SENTRON 3WL/3VL V10.0 SP1",
+                  "IPC0130": "SENTRON PAC V10.0 SP1",
+                  "IPC0131": "SIMOCODE pro PCS7 V10.0 SP1",
+                  "IPC0132": "SIMOCODE Migration Legacy V10.0 SP1",
+              }
+              for task_id, task_name in sp1_task_names.items():
+                  checks[task_id] = software_expectation_check(
+                      task_id, task_name, installed_software, software_expected.get(task_id)
                   )
 
               # IPC0136 / IPC0254 - SIMATIC Shell Proxy Evidenz.
@@ -1150,9 +1307,8 @@
               )
 
               # IPC0140 / IPC0141 / IPC0142.
-              checks["IPC0140"] = software_presence_check(
-                  "IPC0140", "ORCLA installieren", installed_software,
-                  r"ORCLA", None, "ORCLA installiert",
+              checks["IPC0140"] = software_expectation_check(
+                  "IPC0140", "ORCLA installieren", installed_software, software_expected.get("IPC0140")
               )
               maintenance_products = product_matches(products, r"(PCS\s*7|SIMATIC).*Maintenance|Maintenance.*(PCS\s*7|SIMATIC)")
               info["IPC0141"] = make_information(
@@ -1227,16 +1383,25 @@
                   row for row in bitlocker_rows
                   if isinstance(row, dict) and text(row.get("MountPoint")).upper().startswith("C:")
               ]
-              bitlocker_ok = bool(system_bitlocker) and any(
-                  text(row.get("ProtectionStatus")).lower() in {"on", "1", "enabled"}
-                  and (int_value(row.get("EncryptionPercentage")) or 0) >= 100
-                  for row in system_bitlocker
-              )
+              bitlocker_expected = as_dict(client_expected.get("bitlocker"))
+              bitlocker_enabled_expected = bool_value(bitlocker_expected.get("enabled"))
+              min_encryption = int_value(bitlocker_expected.get("min_encryption_percentage"))
+              if bitlocker_enabled_expected is True:
+                  bitlocker_ok = bool(system_bitlocker) and any(
+                      text(row.get("ProtectionStatus")).lower() in {"on", "1", "enabled"}
+                      and (int_value(row.get("EncryptionPercentage")) or 0) >= min_encryption
+                      for row in system_bitlocker
+                  )
+              else:
+                  bitlocker_ok = bool(system_bitlocker) and all(
+                      text(row.get("ProtectionStatus")).lower() not in {"on", "1", "enabled"}
+                      for row in system_bitlocker
+                  )
               checks["IPC0150"] = make_check(
                   "IPC0150", "BitLocker Aktivierung", bitlocker_ok,
-                  "C: ProtectionStatus=On und EncryptionPercentage=100",
+                  "BitLocker Enabled=" + text(bitlocker_enabled_expected).lower() + "; MinEncryptionPercentage=" + text(min_encryption),
                   system_bitlocker,
-                  "Initial_Valid.InstallationBestPractice.BitLocker", "Aufgabenliste",
+                  "Initial_Valid.InstallationBestPractice.BitLocker", "Semaphore: ipc_os_client_expected.bitlocker",
               )
 
               # IPC0151 - Hardening-Dienste.
@@ -1272,9 +1437,9 @@
                   telemetry_value, telemetry_rows = first_registry_value(telemetry, name="AllowDiagnosticData")
               checks["IPC0153"] = make_check(
                   "IPC0153", "Einstellung von Datenschutz- und Telemetriedaten in Windows 10 Teil 2",
-                  int_value(telemetry_value) == 0,
-                  "Telemetrie / Diagnosedaten = 0", telemetry_rows,
-                  "GPOs_Valid.PolicyAreaSnapshots.Telemetry", "Aufgabenliste",
+                  int_value(telemetry_value) == int_value(client_expected.get("telemetry_value")),
+                  "Telemetrie / Diagnosedaten = " + text(int_value(client_expected.get("telemetry_value"))), telemetry_rows,
+                  "GPOs_Valid.PolicyAreaSnapshots.Telemetry", "Semaphore: ipc_os_client_expected.telemetry_value",
               )
 
               # IPC0154 / IPC0155 - SMB.
@@ -1289,28 +1454,28 @@
               client_require = smb_config_value(client_cfg, client_registry, "RequireSecuritySignature")
               checks["IPC0154"] = make_check(
                   "IPC0154", "SMB Signierung",
-                  bool_value(server_require) is True
-                  and bool_value(server_enable) is True
-                  and bool_value(client_require) is True,
+                  bool_value(server_require) == bool_value(as_dict(client_expected.get("smb_signing")).get("server_require_security_signature"))
+                  and bool_value(server_enable) == bool_value(as_dict(client_expected.get("smb_signing")).get("server_enable_security_signature"))
+                  and bool_value(client_require) == bool_value(as_dict(client_expected.get("smb_signing")).get("client_require_security_signature")),
                   {
-                      "Server.RequireSecuritySignature": True,
-                      "Server.EnableSecuritySignature": True,
-                      "Client.RequireSecuritySignature": True,
+                      "Server.RequireSecuritySignature": bool_value(as_dict(client_expected.get("smb_signing")).get("server_require_security_signature")),
+                      "Server.EnableSecuritySignature": bool_value(as_dict(client_expected.get("smb_signing")).get("server_enable_security_signature")),
+                      "Client.RequireSecuritySignature": bool_value(as_dict(client_expected.get("smb_signing")).get("client_require_security_signature")),
                   },
                   {
                       "Server.RequireSecuritySignature": server_require,
                       "Server.EnableSecuritySignature": server_enable,
                       "Client.RequireSecuritySignature": client_require,
                   },
-                  "Firewall_SMB_Patch_Valid.SMB", "Aufgabenliste",
+                  "Firewall_SMB_Patch_Valid.SMB", "Semaphore: ipc_os_client_expected.smb_signing",
               )
               encrypt_data = smb_config_value(server_cfg, server_registry, "EncryptData")
               checks["IPC0155"] = make_check(
                   "IPC0155", "SMBv3-Verschlüsselung",
-                  bool_value(encrypt_data) is True,
-                  {"SmbServerConfiguration.EncryptData": True},
+                  bool_value(encrypt_data) == bool_value(client_expected.get("smb_encrypt_data")),
+                  {"SmbServerConfiguration.EncryptData": bool_value(client_expected.get("smb_encrypt_data"))},
                   {"EncryptData": encrypt_data},
-                  "Firewall_SMB_Patch_Valid.SMB.ServerConfiguration", "Aufgabenliste",
+                  "Firewall_SMB_Patch_Valid.SMB.ServerConfiguration", "Semaphore: ipc_os_client_expected.smb_encrypt_data",
               )
 
               # IPC0156 - RDP deaktiviert.
@@ -1325,10 +1490,10 @@
                   )
               checks["IPC0156"] = make_check(
                   "IPC0156", "Remote Desktop Security Einstellung",
-                  int_value(rdp_value) == 1,
-                  {"fDenyTSConnections": 1}, rdp_rows,
+                  int_value(rdp_value) == int_value(client_expected.get("rdp_deny_connections")),
+                  {"fDenyTSConnections": int_value(client_expected.get("rdp_deny_connections"))}, rdp_rows,
                   "GPOs_Valid.InstallationRelevantEffectiveSettings / PolicyAreaSnapshots.TerminalServices",
-                  "Aufgabenliste",
+                  "Semaphore: ipc_os_client_expected.rdp_deny_connections",
               )
 
               # IPC0159 - SCHANNEL.
@@ -1364,22 +1529,25 @@
               # IPC0166 - Firewallprofile aktiv + aktive Netzwerke privat.
               fw_profiles = as_list(as_dict(firewall).get("Profiles"))
               active_profiles = as_list(as_dict(firewall).get("ActiveNetworkProfiles"))
-              required_names = {"domain", "private", "public"}
+              required_names = {
+                  text(name).lower() for name in as_list(client_expected.get("firewall_profiles_enabled"))
+              }
               seen = {text(x.get("Name")).lower() for x in fw_profiles if isinstance(x, dict)}
               profiles_ok = required_names.issubset(seen) and all(
                   bool_value(x.get("Enabled")) is True
                   for x in fw_profiles
                   if isinstance(x, dict) and text(x.get("Name")).lower() in required_names
               )
+              expected_network_category = text(client_expected.get("active_network_category")).lower()
               private_ok = bool(active_profiles) and all(
-                  text(x.get("NetworkCategory")).lower() == "private"
+                  text(x.get("NetworkCategory")).lower() == expected_network_category
                   for x in active_profiles if isinstance(x, dict)
               )
               checks["IPC0166"] = make_check(
                   "IPC0166", "Windows-Firewall", profiles_ok and private_ok,
-                  {"FirewallProfiles": {"Domain": True, "Private": True, "Public": True}, "ActiveNetworkCategory": "Private"},
+                  {"FirewallProfilesEnabled": sorted(required_names), "ActiveNetworkCategory": client_expected.get("active_network_category")},
                   {"Profiles": fw_profiles, "ActiveNetworkProfiles": active_profiles},
-                  "Firewall_SMB_Patch_Valid.Firewall", "Aufgabenliste",
+                  "Firewall_SMB_Patch_Valid.Firewall", "Semaphore: ipc_os_client_expected.firewall_profiles_enabled/active_network_category",
               )
 
               # IPC0168 - Projektordner + Freigabe.
@@ -1401,12 +1569,12 @@
               )
 
               # IPC0182 / 0183 / 0184 / 0186 - BGSiVaaS.
-              bg_matches = startup_matches(autoruns, r"BGSiVaaS|BGInfo")
+              bg_matches = startup_matches(autoruns, client_expected.get("bginfo_run_regex"))
               checks["IPC0182"] = make_check(
                   "IPC0182", "BGInfo/BGSiVaaS", bool(bg_matches),
-                  "BGSiVaaS/BGInfo in Common Startup oder Autorun vorhanden",
+                  "Startup/Autorun passt auf " + text(client_expected.get("bginfo_run_regex")),
                   bg_matches,
-                  "Firewall_SMB_Patch_Valid.Autoruns", "Aufgabenliste",
+                  "Firewall_SMB_Patch_Valid.Autoruns", "Semaphore: ipc_os_client_expected.bginfo_run_regex",
               )
               info["IPC0183"] = make_information(
                   "IPC0183", "BGInfo/BGSiVaaS - Als Administrator ausführen",
@@ -1437,19 +1605,11 @@
               )
 
               # IPC0202 / IPC0203 / IPC0204.
-              checks["IPC0202"] = software_presence_check(
-                  "IPC0202", "SIMATIC Logon installieren", installed_software,
-                  r"SIMATIC\s*Logon", r"^2\.0", "SIMATIC Logon V2.0 installiert",
+              checks["IPC0202"] = software_expectation_check(
+                  "IPC0202", "SIMATIC Logon installieren", installed_software, software_expected.get("IPC0202")
               )
-              simatic_upd = product_matches(products, r"SIMATIC\s*Logon.*(Upd|Update)\s*1")
-              if not simatic_upd:
-                  simatic_upd = product_matches(products, r"SIMATIC\s*Logon", r"^2\.0(?:\.\d+)*\.1(?:\D|$)")
-              checks["IPC0203"] = make_check(
-                  "IPC0203", "SIMATIC Logon aktualisieren",
-                  bool(simatic_upd),
-                  "SIMATIC Logon V2.0 Update 1 installiert",
-                  simatic_upd,
-                  "InstalledSoftware.AllProducts", "Aufgabenliste",
+              checks["IPC0203"] = software_expectation_check(
+                  "IPC0203", "SIMATIC Logon aktualisieren", installed_software, software_expected.get("IPC0203")
               )
               simatic_logon_registry = registry_evidence_matches(
                   siemens_registry,
@@ -1464,19 +1624,8 @@
 
               # IPC0205 - PM-Logon V2.6 Update 4.
               pm_logon_matches = product_matches(products, r"PM[- ]?Logon")
-              pm_logon_ok = any(
-                  regex_search(
-                      r"2[\._ ]?6.*(Upd|Update)[\s._-]*4|2\.6(?:\.\d+)*\.4",
-                      text(item.get("DisplayName")) + " " + text(item.get("DisplayVersion")),
-                  )
-                  for item in pm_logon_matches
-              )
-              checks["IPC0205"] = make_check(
-                  "IPC0205", "PM-Logon V2.6 Update 4 installieren",
-                  pm_logon_ok,
-                  "PM-Logon V2.6 Update 4 installiert",
-                  pm_logon_matches,
-                  "InstalledSoftware.AllProducts", "Aufgabenliste",
+              checks["IPC0205"] = software_expectation_check(
+                  "IPC0205", "PM-Logon V2.6 Update 4 installieren", installed_software, software_expected.get("IPC0205")
               )
               info["IPC0208"] = make_information(
                   "IPC0208", "PM-Logon Konfiguration verteilen", pm_logon_matches,
@@ -1505,27 +1654,27 @@
                   )
 
               # IPC0222 / 0223 / 0226 / 0227 - in der OS-Client-Aufgabenliste geforderte Updates.
-              for task_id, kb in (
-                  ("IPC0222", "KB5055518"),
-                  ("IPC0223", "KB5050416"),
-                  ("IPC0226", "KB5046860"),
-                  ("IPC0227", "KB5054833"),
-              ):
+              patches_by_id = as_dict(client_expected.get("patches_by_id"))
+              for task_id in ("IPC0222", "IPC0223", "IPC0226", "IPC0227"):
+                  kb = text(patches_by_id.get(task_id))
                   present, evidence = current_kb_evidence(patch_status, installed_software, kb)
                   checks[task_id] = make_check(
                       task_id, kb, present,
                       kb + " aktuell installiert",
                       evidence,
                       "Firewall_SMB_Patch_Valid.PatchStatus + InstalledSoftware",
-                      "Aufgabenliste",
+                      "Semaphore: ipc_os_client_expected.patches_by_id." + task_id,
                   )
+              edge_version = text(expected.get("edge_version"))
+              edge_version_regex = r"^" + re.escape(edge_version) + r"(?:\D|$)"
               checks["IPC0228"] = software_presence_check(
-                  "IPC0228", "Microsoft Edge Stable 137.0.3296.83",
+                  "IPC0228", "Microsoft Edge Stable",
                   installed_software,
                   r"^Microsoft\s*Edge(?:\s|$)",
-                  r"^137\.0\.3296\.83(?:\D|$)",
-                  "Microsoft Edge 137.0.3296.83 installiert",
+                  edge_version_regex,
+                  "Microsoft Edge " + edge_version + " installiert",
               )
+              checks["IPC0228"]["sollwertquelle"] = "Semaphore: expected_edge_version"
 
               # IPC0234 / IPC0235.
               info["IPC0234"] = make_information(
@@ -1569,7 +1718,9 @@
                   "Firewall_SMB_Patch_Valid.Firewall.Rules",
                   "Semaphore: expected_firewall_rule_name_patterns + Aufgabenliste",
               )
-              required = {"domain", "private", "public"}
+              required = {
+                  text(name).lower() for name in as_list(client_expected.get("firewall_profiles_enabled"))
+              }
               profile_map = {
                   text(item.get("Name")).lower(): item
                   for item in fw_profiles if isinstance(item, dict)
@@ -1581,9 +1732,9 @@
               checks["IPC0246"] = make_check(
                   "IPC0246", "Firewall für alle Profile aktiviert",
                   fw_all_ok,
-                  {"Domain": True, "Private": True, "Public": True},
+                  {"EnabledProfiles": sorted(required)},
                   fw_profiles,
-                  "Firewall_SMB_Patch_Valid.Firewall.Profiles", "Aufgabenliste",
+                  "Firewall_SMB_Patch_Valid.Firewall.Profiles", "Semaphore: ipc_os_client_expected.firewall_profiles_enabled",
               )
 
               # IPC0247 / IPC0248 / IPC0249 - Defender OS-Client-spezifisch.
@@ -1594,27 +1745,27 @@
               submit_samples = defender_preferences.get("SubmitSamplesConsent")
               checks["IPC0247"] = make_check(
                   "IPC0247", "Defender Einstellungen korrigieren - Manipulationsschutz",
-                  bool_value(tamper) is False,
-                  "IsTamperProtected = false",
+                  bool_value(tamper) == bool_value(as_dict(client_expected.get("defender")).get("tamper_protected")),
+                  "IsTamperProtected = " + text(bool_value(as_dict(client_expected.get("defender")).get("tamper_protected"))).lower(),
                   {"IsTamperProtected": tamper},
                   "Initial_Valid.MicrosoftDefender.ComputerStatus.IsTamperProtected",
-                  "Aufgabenliste",
+                  "Semaphore: ipc_os_client_expected.defender.tamper_protected",
               )
               checks["IPC0248"] = make_check(
                   "IPC0248", "Defender Einstellungen korrigieren - Cloudbasierter Schutz",
-                  int_value(maps_reporting) == 0 or text(maps_reporting).lower() == "disabled",
-                  "MAPSReporting = Disabled (0)",
+                  int_value(maps_reporting) == int_value(as_dict(client_expected.get("defender")).get("maps_reporting")),
+                  "MAPSReporting = " + text(int_value(as_dict(client_expected.get("defender")).get("maps_reporting"))),
                   {"MAPSReporting": maps_reporting},
                   "Initial_Valid.MicrosoftDefender.Preferences.MAPSReporting",
-                  "Aufgabenliste / Microsoft Defender Preference",
+                  "Semaphore: ipc_os_client_expected.defender.maps_reporting",
               )
               checks["IPC0249"] = make_check(
                   "IPC0249", "Defender Einstellungen korrigieren - Automatische Übermittlung von Beispielen",
-                  int_value(submit_samples) == 2 or text(submit_samples).lower() in {"neversend", "never send"},
-                  "SubmitSamplesConsent = NeverSend (2)",
+                  int_value(submit_samples) == int_value(as_dict(client_expected.get("defender")).get("submit_samples_consent")),
+                  "SubmitSamplesConsent = " + text(int_value(as_dict(client_expected.get("defender")).get("submit_samples_consent"))),
                   {"SubmitSamplesConsent": submit_samples},
                   "Initial_Valid.MicrosoftDefender.Preferences.SubmitSamplesConsent",
-                  "Aufgabenliste / Microsoft Defender Preference",
+                  "Semaphore: ipc_os_client_expected.defender.submit_samples_consent",
               )
 
               info["IPC0250"] = make_information(
@@ -1941,7 +2092,18 @@
   vars:
     live_expected_allowed_ciphers: "{{ expected_allowed_tls12_cipher_suites }}"
     live_expected_disabled_ciphers: "{{ expected_disabled_cipher_suites }}"
-    live_expected_project_folder: "{{ expected_project_folder | default('D:\\Projekt') }}"
+    live_expected_project_folder: "{{ expected_project_folder }}"
+    live_expected_local_account_token_filter_policy: "{{ ipc_os_client_expected.local_account_token_filter_policy }}"
+    live_expected_keyboard_hotkey_disabled_value: "{{ ipc_os_client_expected.keyboard_hotkey_disabled_value }}"
+    live_expected_restore_images_path: "{{ ipc_os_client_expected.restore_images_path }}"
+    live_expected_desktop_absent_shortcuts: "{{ ipc_os_client_expected.desktop_absent_shortcuts }}"
+    live_expected_boot_manager_timeout_seconds: "{{ ipc_os_client_expected.boot.boot_manager_timeout_seconds }}"
+    live_expected_auto_reboot: "{{ ipc_os_client_expected.boot.auto_reboot }}"
+    live_expected_recovery_options_display_seconds: "{{ ipc_os_client_expected.boot.recovery_options_display_seconds }}"
+    live_expected_wsus_client_manager_path: "{{ ipc_os_client_expected.wsus_client_manager_path }}"
+    live_expected_autologon_user: "{{ ipc_os_client_expected.autologon_user }}"
+    live_expected_autologon_enabled: "{{ ipc_os_client_expected.autologon_enabled }}"
+    live_expected_vnc_viewer_paths: "{{ ipc_os_client_expected.vnc_viewer_paths }}"
 
   tasks:
     - name: WinRM-Verbindung fuer direkte 0180-Pruefungen testen
@@ -2003,13 +2165,14 @@
         if (Test-Path -LiteralPath $tokenFilterPath) {
             $tokenFilterValue = (Get-ItemProperty -LiteralPath $tokenFilterPath -Name 'LocalAccountTokenFilterPolicy' -ErrorAction SilentlyContinue).LocalAccountTokenFilterPolicy
         }
+        $expectedTokenFilterValue = [int]'{{ live_expected_local_account_token_filter_policy }}'
         $checks['IPC0028'] = New-Check `
             -Name 'Registry Eintrag für VEEAM setzen' `
-            -Ok ([int]$tokenFilterValue -eq 1) `
-            -Soll @{ LocalAccountTokenFilterPolicy=1 } `
+            -Ok ([int]$tokenFilterValue -eq $expectedTokenFilterValue) `
+            -Soll @{ LocalAccountTokenFilterPolicy=$expectedTokenFilterValue } `
             -Ist @{ Path=$tokenFilterPath; LocalAccountTokenFilterPolicy=$tokenFilterValue } `
             -Quelle 'Direkt/PowerShell/HKLM Policies System' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.local_account_token_filter_policy'
 
         # IPC0047 - klassische Eingabesprachen-Hotkeys auf "Nicht zugewiesen".
         $togglePath = 'HKCU:\Keyboard Layout\Toggle'
@@ -2023,16 +2186,17 @@
             LanguageHotkey = if ($toggle) { [string]$toggle.'Language Hotkey' } else { $null }
             LayoutHotkey = if ($toggle) { [string]$toggle.'Layout Hotkey' } else { $null }
         }
+        $expectedHotkeyValue = '{{ live_expected_keyboard_hotkey_disabled_value }}'
         $checks['IPC0047'] = New-Check `
             -Name 'Tastenkombination für Eingabesprachen deaktivieren' `
-            -Ok ($toggleExists -and $toggleState.Hotkey -eq '3' -and $toggleState.LanguageHotkey -eq '3' -and $toggleState.LayoutHotkey -eq '3') `
-            -Soll @{ Hotkey='3'; LanguageHotkey='3'; LayoutHotkey='3'; Bedeutung='Nicht zugewiesen' } `
+            -Ok ($toggleExists -and $toggleState.Hotkey -eq $expectedHotkeyValue -and $toggleState.LanguageHotkey -eq $expectedHotkeyValue -and $toggleState.LayoutHotkey -eq $expectedHotkeyValue) `
+            -Soll @{ Hotkey=$expectedHotkeyValue; LanguageHotkey=$expectedHotkeyValue; LayoutHotkey=$expectedHotkeyValue; Bedeutung='Nicht zugewiesen' } `
             -Ist $toggleState `
             -Quelle 'Direkt/PowerShell/HKCU Keyboard Layout Toggle' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.keyboard_hotkey_disabled_value'
 
         # IPC0073 - D:\Images muss geloescht sein.
-        $imagesPath = 'D:\Images'
+        $imagesPath = '{{ live_expected_restore_images_path }}'
         $imagesExists = Test-Path -LiteralPath $imagesPath
         $checks['IPC0073'] = New-Check `
             -Name 'Restore Image löschen' `
@@ -2040,14 +2204,14 @@
             -Soll @{ Path=$imagesPath; Exists=$false } `
             -Ist @{ Path=$imagesPath; Exists=$imagesExists } `
             -Quelle 'Direkt/PowerShell/Test-Path' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.restore_images_path'
 
         # IPC0076 - explizit zu loeschende Verknuepfungen duerfen nicht existieren.
         $desktopDirs = @(
             [Environment]::GetFolderPath('CommonDesktopDirectory'),
             [Environment]::GetFolderPath('DesktopDirectory')
         ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-        $forbiddenNames = @('Create Restore USB','File Explorer','Internet Explorer')
+        $forbiddenNames = @('{{ live_expected_desktop_absent_shortcuts | to_json }}' | ConvertFrom-Json)
         $foundForbidden = @()
         foreach ($desktopDir in $desktopDirs) {
             if (-not (Test-Path -LiteralPath $desktopDir -PathType Container)) { continue }
@@ -2059,7 +2223,7 @@
             -Soll @{ AbsentShortcuts=$forbiddenNames } `
             -Ist @{ CheckedDesktopDirectories=@($desktopDirs); FoundForbiddenShortcuts=@($foundForbidden) } `
             -Quelle 'Direkt/PowerShell/Desktop und CommonDesktop' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.desktop_absent_shortcuts'
 
         # IPC0077 - Edge-Verknuepfung: Dateizustand ist direkt lesbar, die
         # konkrete REG-Datei/Policy wird ohne bekanntes Schema nur als Evidenz ausgegeben.
@@ -2084,15 +2248,18 @@
         $displayBootMenu = $null
         $displayMatch = [regex]::Match($bcdRaw, '(?im)^\s*displaybootmenu\s+(Yes|No|Ja|Nein)\s*$')
         if ($displayMatch.Success) { $displayBootMenu = $displayMatch.Groups[1].Value }
-        $bootListDisabled = ($bootTimeout -eq 0 -or $displayBootMenu -in @('No','Nein'))
+        $expectedBootTimeout = [int]'{{ live_expected_boot_manager_timeout_seconds }}'
+        $expectedAutoReboot = [System.Convert]::ToBoolean('{{ live_expected_auto_reboot }}')
+        $expectedRecoverySeconds = [int]'{{ live_expected_recovery_options_display_seconds }}'
+        $bootListDisabled = ($bootTimeout -eq $expectedBootTimeout -or ($expectedBootTimeout -eq 0 -and $displayBootMenu -in @('No','Nein')))
         $autoReboot = [bool]$recovery.AutoReboot
         $checks['IPC0089'] = New-Check `
             -Name 'Starten und Wiederherstellen anpassen' `
-            -Ok ($bootListDisabled -and $autoReboot) `
-            -Soll @{ OperatingSystemListDisplayed=$false; AutoReboot=$true; RecoveryOptionsDisplaySeconds=5; RecoveryOptionsDisplaySecondsEvaluation='INFORMATION_ONLY' } `
+            -Ok ($bootListDisabled -and $autoReboot -eq $expectedAutoReboot) `
+            -Soll @{ BootManagerTimeoutSeconds=$expectedBootTimeout; AutoReboot=$expectedAutoReboot; RecoveryOptionsDisplaySeconds=$expectedRecoverySeconds; RecoveryOptionsDisplaySecondsEvaluation='INFORMATION_ONLY' } `
             -Ist @{ BootManagerTimeoutSeconds=$bootTimeout; DisplayBootMenu=$displayBootMenu; OperatingSystemListDisabled=$bootListDisabled; AutoReboot=$autoReboot; BcdBootManagerRaw=$bcdRaw } `
             -Quelle 'Direkt/PowerShell/bcdedit + Win32_OSRecoveryConfiguration' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.boot'
 
         # IPC0160 / IPC0161 - tatsaechlich aktive Cipher Suites direkt lesen.
         $activeCipherNames = @()
@@ -2130,7 +2297,7 @@
             -Sollwertquelle 'Semaphore: expected_project_folder'
 
         # IPC0200 - WSUSClientManager-Verzeichnis.
-        $wsusClientPath = 'C:\Programme\WSUSClientManager'
+        $wsusClientPath = '{{ live_expected_wsus_client_manager_path }}'
         $wsusClientExists = Test-Path -LiteralPath $wsusClientPath -PathType Container
         $checks['IPC0200'] = New-Check `
             -Name 'WSUSClientManager ablegen' `
@@ -2138,7 +2305,7 @@
             -Soll @{ Path=$wsusClientPath; Exists=$true } `
             -Ist @{ Path=$wsusClientPath; Exists=$wsusClientExists } `
             -Quelle 'Direkt/PowerShell/Test-Path' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.wsus_client_manager_path'
 
         # IPC0236 - Windows Autologin fuer WinCC_RT.
         # Das Passwort wird bewusst weder gelesen noch ausgegeben.
@@ -2155,17 +2322,22 @@
             DefaultDomainName = if ($winlogon) { [string]$winlogon.DefaultDomainName } else { $null }
             PasswordRead = $false
         }
+        $expectedAutoLogonEnabled = [System.Convert]::ToBoolean('{{ live_expected_autologon_enabled }}')
+        $expectedAutoAdminLogon = if ($expectedAutoLogonEnabled) { '1' } else { '0' }
         $autoLogonOk = (
-            $autoLogonState.AutoAdminLogon -eq '1' -and
-            $autoLogonState.DefaultUserName -eq 'WinCC_RT'
+            $autoLogonState.AutoAdminLogon -eq $expectedAutoAdminLogon -and
+            (
+                (-not $expectedAutoLogonEnabled) -or
+                $autoLogonState.DefaultUserName -eq '{{ live_expected_autologon_user }}'
+            )
         )
         $checks['IPC0236'] = New-Check `
             -Name 'Windows Autologin konfigurieren' `
             -Ok $autoLogonOk `
-            -Soll @{ AutoAdminLogon='1'; DefaultUserName='WinCC_RT' } `
+            -Soll @{ AutoAdminLogon=$expectedAutoAdminLogon; DefaultUserName='{{ live_expected_autologon_user }}' } `
             -Ist $autoLogonState `
             -Quelle 'Direkt/PowerShell/HKLM Winlogon' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.autologon_enabled/autologon_user'
 
         # IPC0241 - derselbe sichere Autologon-Zustand als Information fuer
         # die spaetere Runtime-Kontrolle; ein echter GUI-Logontest wird nicht simuliert.
@@ -2176,12 +2348,7 @@
             -Hinweis 'Autologon-Konfiguration wird ausgegeben; erfolgreicher SIMATIC-Logon-/Runtime-Funktionstest ist damit nicht bewiesen.'
 
         # IPC0252 - UltraVNC Viewer muss als Binary vorhanden sein.
-        $viewerCandidates = @(
-            'C:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe',
-            'C:\Program Files\UltraVNC\vncviewer.exe',
-            'C:\Program Files (x86)\uvnc bvba\UltraVNC\vncviewer.exe',
-            'C:\Program Files (x86)\UltraVNC\vncviewer.exe'
-        )
+        $viewerCandidates = @('{{ live_expected_vnc_viewer_paths | to_json }}' | ConvertFrom-Json)
         $viewerFound = @(
             $viewerCandidates |
                 Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
@@ -2200,7 +2367,7 @@
             -Soll @{ VncViewerBinaryPresent=$true } `
             -Ist @{ Candidates=$viewerCandidates; Found=@($viewerFound) } `
             -Quelle 'Direkt/PowerShell/Test-Path vncviewer.exe' `
-            -Sollwertquelle 'Aufgabenliste'
+            -Sollwertquelle 'Semaphore: ipc_os_client_expected.vnc_viewer_paths'
 
         [pscustomobject][ordered]@{
             checks = [pscustomobject]$checks
@@ -2373,7 +2540,7 @@
     - name: 0180-Merge-Auswerter schreiben
       ansible.builtin.copy:
         dest: "{{ id_validation_merge_python_file }}"
-       
+        
         content: |
           #!/usr/bin/env python3
           import argparse
