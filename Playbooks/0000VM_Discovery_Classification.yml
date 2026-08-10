@@ -335,13 +335,13 @@
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        mode: "0755"
+        
 
     - name: Rohdaten der VM-Discovery als JSON erzeugen
       ansible.builtin.copy:
         dest: >-
           {{ result_dir }}/vm_discovery_raw_{{ hostvars['localhost'].discovery_timestamp }}.json
-        mode: "0644"
+        
         content: |
           [
           {% for h in groups[discovery_group] | default([]) %}

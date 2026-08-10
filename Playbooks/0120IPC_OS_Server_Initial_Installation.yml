@@ -80,7 +80,7 @@
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        mode: "0755"
+        
 
     - name: PowerShell-Pruefskripte auf dem Controller pruefen
       ansible.builtin.stat:
@@ -162,7 +162,7 @@
       ansible.builtin.file:
         path: "{{ validation_local_host_result_dir }}"
         state: directory
-        mode: "0755"
+       
       delegate_to: localhost
       become: false
 
