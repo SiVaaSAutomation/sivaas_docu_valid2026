@@ -94,7 +94,7 @@
       ansible.builtin.file:
         path: "{{ id_validation_output_file | dirname }}"
         state: directory
-        mode: "0755"
+        
 
     # ------------------------------------------------------------------
     # Fuer wenige IDs reicht der gespeicherte Snapshot nicht aus.

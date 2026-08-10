@@ -426,12 +426,12 @@
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        mode: "0755"
+       
 
     - name: JSON-Report erzeugen
       ansible.builtin.copy:
         dest: "{{ result_dir }}/ipc_windows_basis_validation_{{ report_timestamp }}.json"
-        mode: "0644"
+     
         content: |
           [
           {% for h in groups['ipc_windows_basis_targets'] | default([]) %}

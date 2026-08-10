@@ -109,7 +109,7 @@
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        mode: "0755"
+        
 
     - name: IPC-Discovery-Datei einlesen
       ansible.builtin.slurp:
@@ -180,13 +180,13 @@
     - name: Erwartete Sollwerte temporaer als JSON schreiben
       ansible.builtin.copy:
         dest: "{{ id_validation_config_file }}"
-        mode: "0600"
+        
         content: "{{ id_validation_expected | to_nice_json }}"
 
     - name: Lokalen 0180-Auswerter schreiben
       ansible.builtin.copy:
         dest: "{{ id_validation_python_file }}"
-        mode: "0700"
+        
         content: |
           #!/usr/bin/env python3
           import argparse
@@ -2373,7 +2373,7 @@
     - name: 0180-Merge-Auswerter schreiben
       ansible.builtin.copy:
         dest: "{{ id_validation_merge_python_file }}"
-        mode: "0700"
+       
         content: |
           #!/usr/bin/env python3
           import argparse
