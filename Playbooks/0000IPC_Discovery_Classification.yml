@@ -405,7 +405,7 @@
     - name: Discovery-Rohdaten temporaer als JSON bereitstellen
       ansible.builtin.copy:
         dest: "{{ result_dir }}/.ipc_discovery_raw_{{ hostvars['localhost'].discovery_timestamp }}.json"
-        mode: "0600"
+       
         content: |
           [
           {% for h in groups[discovery_group] | default([]) %}
