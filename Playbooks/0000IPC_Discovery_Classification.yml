@@ -399,8 +399,7 @@
       ansible.builtin.file:
         path: "{{ result_dir }}"
         state: directory
-        mode: "0755"
-
+        
     # Diese Datei dient nur als interne Uebergabe an den lokalen Python-Block
     # und wird nach der Klassifizierung wieder entfernt.
     - name: Discovery-Rohdaten temporaer als JSON bereitstellen
