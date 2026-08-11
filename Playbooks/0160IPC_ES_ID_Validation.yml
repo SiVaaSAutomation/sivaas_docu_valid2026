@@ -202,7 +202,6 @@
           - ipc_es_validation_expected.tools.bgsivaas.startup_required is defined
           - ipc_es_validation_expected.tools.bgsivaas.startup_target_regex is defined
           - ipc_es_validation_expected.tools.bgsivaas.run_as_administrator is defined
-          - ipc_es_validation_expected.tools.bgsivaas.wincc_rt_username_regex is defined
           - ipc_es_validation_expected.tools.wsus_client_manager is defined
           - ipc_es_validation_expected.tools.wsus_client_manager.path is defined
           - ipc_es_validation_expected.tools.wsus_client_manager.expected_exists is defined
@@ -229,6 +228,57 @@
           - ipc_es_validation_expected.firmware is defined
           - ipc_es_validation_expected.firmware.bios_checks is defined
           - ipc_es_validation_expected.firmware.bios_checks is mapping
+          - ipc_es_validation_expected.filesystem.project_share.share_permissions | length > 0
+          - ipc_es_validation_expected.filesystem.project_share.ntfs_permissions | length > 0
+          - ipc_es_validation_expected.software.pdf_xchange_editor.expected_installed is defined
+          - ipc_es_validation_expected.software.pdf_xchange_editor.name_regex is defined
+          - ipc_es_validation_expected.software.pdf_xchange_editor.version_regex is defined
+          - ipc_es_validation_expected.software.pdf_xchange_editor.forbidden_name_regexes is defined
+          - ipc_es_validation_expected.software.greenshot.expected_installed is defined
+          - ipc_es_validation_expected.software.greenshot.name_regex is defined
+          - ipc_es_validation_expected.software.greenshot.version_regex is defined
+          - ipc_es_validation_expected.software.office_2019.expected_installed is defined
+          - ipc_es_validation_expected.software.office_2019.product_name_regex is defined
+          - ipc_es_validation_expected.software.office_2019.required_executables is defined
+          - ipc_es_validation_expected.software.office_2019.required_executables | length > 0
+          - ipc_es_validation_expected.software.winscp.expected_installed is defined
+          - ipc_es_validation_expected.software.winscp.name_regex is defined
+          - ipc_es_validation_expected.software.winscp.version_regex is defined
+          - ipc_es_validation_expected.software.ssms.expected_installed is defined
+          - ipc_es_validation_expected.software.ssms.name_regex is defined
+          - ipc_es_validation_expected.software.ssms.version_regex is defined
+          - ipc_es_validation_expected.software.simatic_logon.expected_installed is defined
+          - ipc_es_validation_expected.software.simatic_logon.name_regex is defined
+          - ipc_es_validation_expected.software.simatic_logon.base_version_regex is defined
+          - ipc_es_validation_expected.software.simatic_logon.update1_name_regex is defined
+          - ipc_es_validation_expected.software.simatic_logon.update1_version_regex is defined
+          - ipc_es_validation_expected.software.pm_logon.expected_installed is defined
+          - ipc_es_validation_expected.software.pm_logon.name_regex is defined
+          - ipc_es_validation_expected.software.pm_logon.version_regex is defined
+          - ipc_es_validation_expected.software.pm_logon.configurator_required_hostname_regexes is defined
+          - ipc_es_validation_expected.software.pm_logon.configurator_name_regex is defined
+          - ipc_es_validation_expected.software.edge.expected_installed is defined
+          - ipc_es_validation_expected.software.edge.name_regex is defined
+          - ipc_es_validation_expected.software.edge.version_regex is defined
+          - ipc_es_validation_expected.software.simatic_shell.expected_proxy_stations is iterable
+          - ipc_es_validation_expected.software.simatic_shell.expected_proxy_stations | length > 0
+          - ipc_es_validation_expected.system.pagefile.required_drives is iterable
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0222 is defined
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0223 is defined
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0224 is defined
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0225 is defined
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0226 is defined
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0227 is defined
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0232 is defined
+          - ipc_es_validation_expected.updates.required_kbs_by_id.IPC0233 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0263 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0264 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0265 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0267 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0268 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0269 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0270 is defined
+          - ipc_es_validation_expected.firmware.bios_checks.IPC0271 is defined
         fail_msg: >-
           Fuer 0160 fehlt der strukturierte Semaphore-Block
           ipc_es_validation_expected oder darin benoetigte Sollwerte.
@@ -610,15 +660,20 @@
             return raw or "0"
 
         def software_products(installed_software):
+            if not isinstance(installed_software, dict):
+                return None
+            raw_products = installed_software.get("AllProducts")
+            if not isinstance(raw_products, list):
+                return None
             return [
                 item
-                for item in as_list(as_dict(installed_software).get("AllProducts"))
+                for item in raw_products
                 if isinstance(item, dict)
             ]
 
         def find_products(products, name_regex, version_regex=None):
             matches = []
-            for product in products:
+            for product in as_list(products):
                 if not regex_match(name_regex, product.get("DisplayName")):
                     continue
                 if version_regex and not regex_match(version_regex, product.get("DisplayVersion")):
@@ -651,6 +706,17 @@
             if expected_installed is None or not ids:
                 return None, []
 
+            if component_detection is None:
+                return None, [
+                    {
+                        "ComponentId": component_id,
+                        "Detected": None,
+                        "Evidence": None,
+                        "SourceAvailable": False,
+                    }
+                    for component_id in ids
+                ]
+
             details = []
             states = []
             for component_id in ids:
@@ -678,7 +744,18 @@
                     "ExpectedInstalled": expected_installed,
                     "NameRegex": name_regex,
                     "VersionRegex": version_regex,
+                    "SourceAvailable": products is not None,
                     "MatchingProducts": [],
+                }
+
+            if products is None:
+                return None, {
+                    "ExpectedInstalled": expected_installed,
+                    "NameRegex": name_regex,
+                    "VersionRegex": version_regex,
+                    "SourceAvailable": False,
+                    "MatchingProducts": [],
+                    "VersionCompliantProducts": [],
                 }
 
             matching = []
@@ -716,6 +793,7 @@
                 "ExpectedInstalled": expected_installed,
                 "NameRegex": name_regex,
                 "VersionRegex": version_regex,
+                "SourceAvailable": True,
                 "MatchingProducts": matching,
                 "VersionCompliantProducts": version_compliant,
             }
@@ -755,6 +833,8 @@
                 "VersionRegex": spec.get("version_regex"),
                 "RequiredNameRegexes": as_list(spec.get("required_name_regexes")),
                 "ForbiddenNameRegexes": as_list(spec.get("forbidden_name_regexes")),
+                "ComponentSourceAvailable": component_detection is not None,
+                "SoftwareSourceAvailable": products is not None,
             }
 
             component_id = text(spec.get("component_id")).strip()
@@ -771,17 +851,26 @@
                 evidence["ComponentEvidence"] = component_evidence
             elif required_patterns:
                 required_results = []
-                for pattern in required_patterns:
-                    found = product_regex_matches(products, pattern)
-                    required_results.append({
-                        "Regex": pattern,
-                        "MatchingProducts": found,
-                        "Found": bool(found),
-                    })
-                if expected_installed is True:
-                    state = all(item["Found"] for item in required_results)
+                if products is None:
+                    for pattern in required_patterns:
+                        required_results.append({
+                            "Regex": pattern,
+                            "MatchingProducts": [],
+                            "Found": None,
+                        })
+                    state = None
                 else:
-                    state = not any(item["Found"] for item in required_results)
+                    for pattern in required_patterns:
+                        found = product_regex_matches(products, pattern)
+                        required_results.append({
+                            "Regex": pattern,
+                            "MatchingProducts": found,
+                            "Found": bool(found),
+                        })
+                    if expected_installed is True:
+                        state = all(item["Found"] for item in required_results)
+                    else:
+                        state = not any(item["Found"] for item in required_results)
                 evidence["RequiredEvidence"] = required_results
             else:
                 state, simple_evidence = evaluate_software_requirement(products, spec)
@@ -791,16 +880,29 @@
             for pattern in [
                 text(x) for x in as_list(spec.get("forbidden_name_regexes")) if text(x)
             ]:
-                found = product_regex_matches(products, pattern)
-                forbidden_results.append({
-                    "Regex": pattern,
-                    "MatchingProducts": found,
-                    "Found": bool(found),
-                })
+                if products is None:
+                    forbidden_results.append({
+                        "Regex": pattern,
+                        "MatchingProducts": [],
+                        "Found": None,
+                    })
+                else:
+                    found = product_regex_matches(products, pattern)
+                    forbidden_results.append({
+                        "Regex": pattern,
+                        "MatchingProducts": found,
+                        "Found": bool(found),
+                    })
             evidence["ForbiddenEvidence"] = forbidden_results
 
-            if expected_installed is True and any(item["Found"] for item in forbidden_results):
-                state = False
+            if expected_installed is True:
+                if any(item["Found"] is True for item in forbidden_results):
+                    state = False
+                elif forbidden_results and products is None and state is True:
+                    # Positiver Nachweis aus dem Komponentenkatalog reicht nicht aus,
+                    # um zusätzlich geforderte "alte Version darf nicht vorhanden sein"-
+                    # Bedingungen ohne Softwareinventar sicher zu bestätigen.
+                    state = None
 
             return state, evidence
 
@@ -1166,7 +1268,7 @@
 
             products_for_kb = software_products(installed_software_snapshot)
             evidence["InstalledSoftware"] = [
-                product for product in products_for_kb
+                product for product in as_list(products_for_kb)
                 if wanted in (
                     text(product.get("DisplayName")) + " "
                     + text(product.get("DisplayVersion"))
@@ -1414,24 +1516,19 @@
             storage = section(host, "system_und_hardware", "Initial_Valid", "Storage")
             windows_components = section(host, "windows_software_und_features", "Initial_Valid", "WindowsComponents")
             initial_best_practice = section(host, "hinweise_und_beobachtungen", "Initial_Valid", "InstallationBestPractice")
-            defender_snapshot = section(host, "sicherheit", "Initial_Valid", "MicrosoftDefender")
             installed_software = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "InstalledSoftware")
             component_detection = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "PCS7ComponentCatalogDetection")
             setup_log_evidence = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "PCS7SetupLogEvidence")
             dotnet_prereq = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "DotNetAndRuntimePrerequisites")
             cert_prereq = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "PCS7CertificatePrerequisites")
             services_snapshot = section(host, "dienste_treiber_und_geraete", "Certificates_Services_Drivers_Valid", "Services")
-            certificates_snapshot = section(host, "zertifikate_und_bindings", "Certificates_Services_Drivers_Valid", "Certificates")
-            hardening_service_focus = section(host, "dienste_treiber_und_geraete", "Certificates_Services_Drivers_Valid", "PCS7HardeningServiceFocus")
             firewall = section(host, "firewall_smb_und_endpunkte", "Firewall_SMB_Patch_Valid", "Firewall")
             smb = section(host, "firewall_smb_und_endpunkte", "Firewall_SMB_Patch_Valid", "SMB")
             explicit_policy = section(host, "gruppenrichtlinien", "GPOs_Valid", "ExplicitlyConfiguredPolicyRegistry")
             policy_areas = section(host, "gruppenrichtlinien", "GPOs_Valid", "PolicyAreaSnapshots")
             effective_policy = section(host, "gruppenrichtlinien", "GPOs_Valid", "InstallationRelevantEffectiveSettings")
-            alm_evidence = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "AutomationLicenseManagerEvidence")
             siemens_registry_evidence = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "SiemensRegistryEvidence")
             simatic_shell_evidence = section(host, "software_und_pcs7", "Software_PCS7_Components_Valid", "SimaticShellEvidence")
-            autoruns = section(host, "autostart_und_tasks", "Firewall_SMB_Patch_Valid", "Autoruns")
             patch_status = section(host, "patchstand", "Firewall_SMB_Patch_Valid", "PatchStatus")
 
             # --------------------------------------------------------------
@@ -2364,8 +2461,7 @@
                     "Semaphore: ipc_es_validation_expected.software.hup",
                     "Fuer eine belastbare Softwarepruefung muss mindestens ein Produktname/Regex konfiguriert sein.",
                 )
-            elif isinstance(installed_software, dict):
-                products = software_products(installed_software)
+            elif products is not None:
                 per_pattern = []
                 all_found = True
                 any_found = False
@@ -2563,7 +2659,7 @@
             seven_zip_version_regex = text(seven_zip_expected.get("version_regex"))
             seven_zip_state = None
             seven_zip_ist = None
-            if isinstance(installed_software, dict) and seven_zip_should_exist is not None:
+            if products is not None and seven_zip_should_exist is not None:
                 seven_zip_name_matches = find_products(products, seven_zip_name_regex)
                 seven_zip_version_matches = find_products(products, seven_zip_name_regex, seven_zip_version_regex if seven_zip_version_regex else None)
                 seven_zip_ist = {"NameMatches": seven_zip_name_matches, "VersionCompliantMatches": seven_zip_version_matches}
@@ -2989,9 +3085,12 @@
                     orcla_evidence,
                     "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
                 )
-                orcla_present = bool(
-                    product_regex_matches(products, orcla_expected.get("name_regex"))
-                )
+                if products is None:
+                    orcla_present = None
+                else:
+                    orcla_present = bool(
+                        product_regex_matches(products, orcla_expected.get("name_regex"))
+                    )
 
             # --------------------------------------------------------------
             # IPC0141 - Maintenance-Funktionen fuer OS.
@@ -3002,12 +3101,22 @@
             maintenance_expected = as_dict(orcla_expected.get("maintenance_functions"))
             maintenance_required = bool_value(maintenance_expected.get("expected_installed"))
             maintenance_regex = text(maintenance_expected.get("evidence_regex"))
-            if not orcla_present:
+            if orcla_present is False:
                 checks["IPC0141"] = make_ignored(
                     "IPC0141",
                     "Maintenance Funktionen fuer OS installieren",
                     "Nur relevant, wenn ORCLA auf diesem ES installiert ist.",
                     "IPC0140",
+                )
+            elif orcla_present is None:
+                checks["IPC0141"] = make_check(
+                    "IPC0141",
+                    "Maintenance Funktionen fuer OS installieren",
+                    None,
+                    {"Prerequisite": "IPC0140 muss bestimmbar/erfüllt sein"},
+                    None,
+                    "IPC0140",
+                    "ORCLA-Installationszustand ist nicht belastbar bestimmbar.",
                 )
             elif maintenance_required is None:
                 checks["IPC0141"] = make_ignored(
@@ -3058,12 +3167,22 @@
             # Watchdog wird nur OK bewertet, wenn ein eindeutiger Dienst-
             # indikator vorhanden ist; andernfalls NICHT_PRUEFBAR.
             # --------------------------------------------------------------
-            if not orcla_present:
+            if orcla_present is False:
                 checks["IPC0142"] = make_ignored(
                     "IPC0142",
                     "Watchdog und OPC UA Server",
                     "Nur relevant, wenn ORCLA auf diesem ES installiert ist.",
                     "IPC0140",
+                )
+            elif orcla_present is None:
+                checks["IPC0142"] = make_check(
+                    "IPC0142",
+                    "Watchdog und OPC UA Server",
+                    None,
+                    {"Prerequisite": "IPC0140 muss bestimmbar/erfüllt sein"},
+                    None,
+                    "IPC0140",
+                    "ORCLA-Installationszustand ist nicht belastbar bestimmbar.",
                 )
             else:
                 all_services = service_records(services_snapshot)
@@ -3093,7 +3212,9 @@
                     text(service.get("State")).lower() == "running"
                     for service in watchdog_services
                 )
-                if not opc_running:
+                if not isinstance(services_snapshot, dict) or not all_services:
+                    ipc0142_state = None
+                elif not opc_running:
                     ipc0142_state = False
                 elif watchdog_known:
                     ipc0142_state = watchdog_running
@@ -3187,10 +3308,15 @@
                         )
                     )
                 elif expected_bitlocker_enabled is False:
-                    bitlocker_state = all(
-                        protection is False
+                    known_protection_states = [
+                        protection
                         for protection in protection_states
                         if protection is not None
+                    ]
+                    bitlocker_state = (
+                        all(protection is False for protection in known_protection_states)
+                        if known_protection_states
+                        else None
                     )
 
             checks["IPC0150"] = make_check(
@@ -3215,7 +3341,7 @@
                 as_dict(hardening_expected.get("services")).get("disabled")
             )
             all_services = service_records(services_snapshot)
-            if not isinstance(services_snapshot, dict):
+            if not isinstance(services_snapshot, dict) or not all_services:
                 service_state = None
                 service_details = None
             else:
@@ -3549,7 +3675,7 @@
                 as_dict(firewall).get("ActiveNetworkProfiles")
             )
             ipc0166_state = None
-            if isinstance(firewall, dict):
+            if isinstance(firewall, dict) and fw_profiles:
                 profile_details = []
                 profile_states = []
                 for wanted_profile in required_firewall_profiles:
@@ -3848,7 +3974,7 @@
                 checks["IPC0202"] = make_check(
                     "IPC0202",
                     "SIMATIC Logon installieren",
-                    base_state if isinstance(installed_software, dict) else None,
+                    base_state if products is not None else None,
                     {
                         "ExpectedInstalled": simatic_logon_required,
                         "VersionBranch": "2.0",
@@ -3883,8 +4009,8 @@
                     "SIMATIC Logon aktualisieren",
                     (
                         bool(update1_matches)
-                        if simatic_logon_required is True and isinstance(installed_software, dict)
-                        else (None if not isinstance(installed_software, dict) else not bool(update1_matches))
+                        if simatic_logon_required is True and products is not None
+                        else (None if products is None else not bool(update1_matches))
                     ),
                     {
                         "ExpectedInstalled": simatic_logon_required,
@@ -3918,12 +4044,12 @@
                 products,
                 simatic_logon_expected.get("name_regex"),
             )
-            if not isinstance(installed_software, dict):
-                ipc0204_state = None
+            if simatic_logon_any_matches or simatic_logon_registry_matches:
+                ipc0204_state = True
+            elif products is not None:
+                ipc0204_state = False
             else:
-                ipc0204_state = bool(
-                    simatic_logon_any_matches or simatic_logon_registry_matches
-                )
+                ipc0204_state = None
 
             checks["IPC0204"] = make_check(
                 "IPC0204",
@@ -3974,7 +4100,7 @@
             checks["IPC0205"] = make_check(
                 "IPC0205",
                 "PM-Logon V2.6 Update 4 installieren",
-                pm_state if isinstance(installed_software, dict) else None,
+                pm_state,
                 {
                     "ExpectedInstalled": pm_required,
                     "Version": "2.6 Update 4",
@@ -3993,11 +4119,12 @@
             )
 
             pm_prerequisite_ok = checks["IPC0205"].get("status") == "OK"
-            simatic_logon_for_pm = (
-                bool(simatic_logon_any_matches or simatic_logon_registry_matches)
-                if isinstance(installed_software, dict)
-                else None
-            )
+            if simatic_logon_any_matches or simatic_logon_registry_matches:
+                simatic_logon_for_pm = True
+            elif products is not None:
+                simatic_logon_for_pm = False
+            else:
+                simatic_logon_for_pm = None
 
             if not pm_prerequisite_ok:
                 for task_id, task_name in (
@@ -4105,7 +4232,7 @@
             checks["IPC0228"] = make_check(
                 "IPC0228",
                 "Microsoft Edge Stable",
-                edge_state if isinstance(installed_software, dict) else None,
+                edge_state,
                 {
                     "ExpectedInstalled": bool_value(edge_expected.get("expected_installed")),
                     "VersionRegex": edge_expected.get("version_regex"),
@@ -4153,7 +4280,7 @@
                 for item in ipc0246_profiles
                 if isinstance(item, dict)
             }
-            if not isinstance(firewall, dict):
+            if not isinstance(firewall, dict) or not ipc0246_profiles:
                 ipc0246_state = None
             else:
                 ipc0246_state = all(
@@ -4284,10 +4411,8 @@
             # Zertifikats-INFORMATION ausgegeben. IPC0145/IPC0146 bleiben
             # direkte ORCLA-PKI-Sollwertpruefungen.
 
-            # IPC0046, IPC0047, IPC0048, IPC0055, IPC0063, IPC0066,
-            # IPC0070, IPC0073, IPC0074, IPC0075, IPC0076, IPC0083,
-            # Weitere direkte read-only Pruefungen/Informationsausgaben
-            # werden im naechsten Play ergaenzt.
+            # Weitere direkte read-only Pruefungen und
+            # Informationsausgaben werden im naechsten Play ergaenzt.
 
             return checks, information
 
@@ -5907,6 +6032,7 @@
         } catch { }
 
         $globalAutomatic = if ($pagefileComputer) { [bool]$pagefileComputer.AutomaticManagedPagefile } else { $null }
+        $expectedSystemManaged = [bool]$pagefileExpected.system_managed
         $acceptGlobalAutomatic = [bool]$pagefileExpected.accept_global_automatic_management
         $requiredPagefileDrives = @($pagefileExpected.required_drives | ForEach-Object { ([string]$_).TrimEnd('\').ToUpperInvariant() })
 
@@ -5939,7 +6065,23 @@
                 $usageMatches.Count -gt 0
             )
 
-            $compliant = ($perDriveSystemManaged -or $globalManagedAndActive)
+            $fixedSizeConfigured = (
+                $settingMatches.Count -gt 0 -and
+                @($settingMatches | Where-Object {
+                    [int64]$_.InitialSize -gt 0 -or [int64]$_.MaximumSize -gt 0
+                }).Count -gt 0
+            )
+
+            if ($expectedSystemManaged) {
+                $compliant = ($perDriveSystemManaged -or $globalManagedAndActive)
+            }
+            else {
+                $compliant = (
+                    $fixedSizeConfigured -and
+                    $globalAutomatic -ne $true
+                )
+            }
+
             $pagefileDriveResults += [pscustomobject][ordered]@{
                 Drive=$drive
                 ExpectedPath=$wantedPath
@@ -5947,6 +6089,7 @@
                 UsageMatches=@($usageMatches | Select-Object Name,AllocatedBaseSize,CurrentUsage,PeakUsage,TempPageFile)
                 PerDriveSystemManaged=$perDriveSystemManaged
                 GlobalAutomaticManagedAndActive=$globalManagedAndActive
+                FixedSizeConfigured=$fixedSizeConfigured
                 Compliant=$compliant
             }
         }
@@ -5967,7 +6110,7 @@
             -Status $ipc0234Status `
             -Soll ([ordered]@{
                 RequiredDrives=$requiredPagefileDrives
-                SystemManaged=[bool]$pagefileExpected.system_managed
+                SystemManaged=$expectedSystemManaged
                 AcceptGlobalAutomaticManagement=$acceptGlobalAutomatic
             }) `
             -Ist ([ordered]@{
@@ -6240,9 +6383,9 @@
             -Evidence $biosFirmwareEvidence
 
         # --------------------------------------------------------------
-        # IPC0143-IPC0146 - ORCLA / WinCC OPC-UA Zertifikatstausch.
-        # Partnernamen fuer SIMATIC NET und OS-Server sind projektabhaengig
-        # und werden daher ueber Semaphore-Regexlisten vorgegeben.
+        # IPC0143/IPC0144: reine Zertifikats-Informationsausgabe.
+        # IPC0145/IPC0146: ORCLA-Trust-Endzustand mit dem verbleibenden
+        # WinCC-Client-Subject-Regex aus Semaphore.
         # --------------------------------------------------------------
         function Get-CertificateFiles {
             param([string[]]$Directories)
