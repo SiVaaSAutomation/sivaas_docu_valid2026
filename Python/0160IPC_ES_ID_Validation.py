@@ -305,6 +305,71 @@ def run_build(args):
             if isinstance(item, dict)
         ]
 
+    def normalize_install_date(value):
+        raw = text(value).strip()
+        if re.fullmatch(r"\\d{8}", raw):
+            return f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]}"
+        return raw
+
+    def software_inventory(installed_software, key):
+        if not isinstance(installed_software, dict) or key not in installed_software:
+            return None
+
+        result = []
+        seen = set()
+
+        for product in as_list(installed_software.get(key)):
+            if not isinstance(product, dict):
+                continue
+
+            name = text(product.get("DisplayName")).strip()
+            if not name:
+                continue
+
+            item = {
+                "name": name,
+                "version": text(product.get("DisplayVersion")).strip(),
+                "install_date": normalize_install_date(product.get("InstallDate")),
+                "publisher": text(product.get("Publisher")).strip(),
+            }
+
+            dedupe_key = (
+                item["name"].casefold(),
+                item["version"].casefold(),
+                item["install_date"].casefold(),
+                item["publisher"].casefold(),
+            )
+            if dedupe_key in seen:
+                continue
+
+            seen.add(dedupe_key)
+            result.append(item)
+
+        result.sort(
+            key=lambda item: (
+                item["name"].casefold(),
+                item["version"].casefold(),
+                item["publisher"].casefold(),
+                item["install_date"].casefold(),
+            )
+        )
+        return result
+
+    def software_inventory_csv_value(items):
+        if items is None:
+            return "NICHT_PRUEFBAR"
+        if not items:
+            return "KEINE_EINTRAEGE"
+
+        return "\\n".join(
+            "{name} | Version={version} | Installiert={install_date}".format(
+                name=item.get("name") or "-",
+                version=item.get("version") or "-",
+                install_date=item.get("install_date") or "-",
+            )
+            for item in items
+        )
+
     def find_products(products, name_regex, version_regex=None):
         matches = []
         for product in as_list(products):
@@ -4094,11 +4159,22 @@ def run_build(args):
         )
 
         access = as_dict(source_host.get("zugriff"))
+        installed_software = section(
+            source_host,
+            "software_und_pcs7",
+            "Software_PCS7_Components_Valid",
+            "InstalledSoftware",
+        )
+        siemens_components = software_inventory(installed_software, "SiemensAndPCS7")
+        all_installed_software = software_inventory(installed_software, "AllProducts")
+
         output_hosts[ip] = {
             "ip_address": ip,
             "computer_name": source_host.get("computer_name"),
             "classification": "ES",
             "ansible_access": bool(access.get("ansible_access")),
+            "siemens_components": siemens_components,
+            "installed_software": all_installed_software,
             "data_quality": source_host.get("datenqualitaet"),
             "pruefungen": {
                 task_id: checks[task_id]
@@ -4159,6 +4235,8 @@ def run_build(args):
             "Rechnername",
             "Computerart",
             "Ansible-Zugriff",
+            "Siemens-Komponenten",
+            "Installierte-Software-Gesamt",
             *TASK_IDS,
         ])
 
@@ -4169,6 +4247,8 @@ def run_build(args):
                 host.get("computer_name") or "",
                 "ES",
                 "JA" if host.get("ansible_access") else "NEIN",
+                software_inventory_csv_value(host.get("siemens_components")),
+                software_inventory_csv_value(host.get("installed_software")),
             ]
 
             checks = as_dict(host.get("pruefungen"))
