@@ -4202,6 +4202,17 @@ def run_merge(args):
     csv_path = Path(args.csv)
     live_dir = Path(args.live_dir)
 
+    direct_ids = [
+        "IPC0046", "IPC0047", "IPC0048", "IPC0055", "IPC0063", "IPC0066",
+        "IPC0070", "IPC0073", "IPC0074", "IPC0075", "IPC0076", "IPC0083",
+        "IPC0087", "IPC0089", "IPC0145", "IPC0146", "IPC0148", "IPC0160",
+        "IPC0161", "IPC0167", "IPC0178", "IPC0182", "IPC0183", "IPC0184",
+        "IPC0200", "IPC0234", "IPC0247", "IPC0250", "IPC0251", "IPC0252",
+        "IPC0263", "IPC0264", "IPC0265", "IPC0267", "IPC0268", "IPC0269",
+        "IPC0270", "IPC0271",
+    ]
+    direct_information_ids = ["IPC0143", "IPC0144", "IPC0152"]
+
     with output_path.open("r", encoding="utf-8-sig") as handle:
         output = json.load(handle)
 
