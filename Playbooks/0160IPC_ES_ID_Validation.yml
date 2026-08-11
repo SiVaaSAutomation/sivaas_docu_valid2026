@@ -5009,8 +5009,8 @@
 
         $defaultHivePath = 'C:\Users\Default\NTUSER.DAT'
         $mountName = 'ANSIBLE_0160_DEFAULT_' + $PID
-        $mountRegPath = 'HKU\' + $mountName
-        $mountProviderPath = 'Registry::HKEY_USERS\' + $mountName
+        $mountRegPath = 'HKU' + [char]92 + $mountName
+        $mountProviderPath = 'Registry::HKEY_USERS' + [char]92 + $mountName
         $defaultUserIntl = $null
         $defaultUserReadError = $null
         $hiveLoaded = $false
@@ -6034,7 +6034,11 @@
         $globalAutomatic = if ($pagefileComputer) { [bool]$pagefileComputer.AutomaticManagedPagefile } else { $null }
         $expectedSystemManaged = [bool]$pagefileExpected.system_managed
         $acceptGlobalAutomatic = [bool]$pagefileExpected.accept_global_automatic_management
-        $requiredPagefileDrives = @($pagefileExpected.required_drives | ForEach-Object { ([string]$_).TrimEnd('\').ToUpperInvariant() })
+        $requiredPagefileDrives = @(
+        $pagefileExpected.required_drives | ForEach-Object {
+                ([string]$_).TrimEnd([char]92).ToUpperInvariant()
+            }
+        )
 
         $pagefileDriveResults = @()
         foreach ($drive in $requiredPagefileDrives) {
