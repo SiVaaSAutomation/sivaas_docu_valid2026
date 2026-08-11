@@ -1,0 +1,51 @@
+| ID          | Variable                            | Bedeutung                                                          |
+| ----------- | ----------------------------------- | ------------------------------------------------------------------ |
+| **IPC0007** | `language.tag`                      | Erwartete Windows-Sprache `de-DE`                                  |
+| **IPC0008** | `region.iso`                        | Erwartete Region `DE`                                              |
+| **IPC0009** | `keyboard.allowed_layout_ids`       | Erlaubtes deutsches Tastaturlayout                                 |
+|             | `keyboard.exact_layout_count`       | Genau **eine** Tastaturbelegung                                    |
+| **IPC0013** | –                                   | Nur Informationsausgabe aller Benutzer                             |
+| **IPC0015** | –                                   | Nur Ausgabe des Rechnernamens                                      |
+| **IPC0019** | –                                   | Nur Ausgabe, ob SIMATIC Management Agent installiert ist + Version |
+| **IPC0024** | –                                   | Nur Ausgabe aller Netzwerkadapterinformationen                     |
+| **IPC0025** | `chipset.regex`                     | Erwarteter Chipset-/BIOS-Bezeichner                                |
+| **IPC0026** | `ultravnc.required`                 | UltraVNC muss installiert sein                                     |
+|             | `ultravnc.name_regex`               | Wie UltraVNC in installierter Software erkannt wird                |
+|             | `ultravnc.version_regex`            | Erwartete Version `1.4.3.6`                                        |
+| **IPC0027** | `vnc_firewall.rules`                | Erwartete Firewall-Regeln für 5800 und 5900                        |
+| **IPC0028** | `local_account_token_filter_policy` | Erwarteter Registrywert `1`                                        |
+| **IPC0036** | `builtin_admin.password_expires`    | Kennwort läuft nicht ab                                            |
+
+| ID          | Semaphore-Variable                                     | Bedeutung                                           |
+| ----------- | ------------------------------------------------------ | --------------------------------------------------- |
+| **IPC0049** | `network.adapter_policy.allowed_names`                 | Welche Namen physische Netzwerkadapter haben dürfen |
+| **IPC0050** | –                                                      | Nur Informationsausgabe des Terminalbus-Adapters    |
+| **IPC0051** | `network.terminalbus.gateway`                          | Erwarteter Gateway des Terminalbus                  |
+| **IPC0052** | `network.anlagenbus.name_regex`                        | Erkennung des Anlagenbus-Adapters                   |
+| **IPC0053** | `network.redundanzbus.name_regex`                      | Erkennung des Redundanzbus-Adapters                 |
+| **IPC0054** | `network.adapter_policy.max_enabled_physical_adapters` | Maximale Anzahl aktivierter physischer Adapter      |
+| **IPC0055** | `network.terminalbus.dns_servers`                      | Erwartete DNS-Server                                |
+| **IPC0055** | `network.terminalbus.wins_servers`                     | Erwartete WINS-Server                               |
+| **IPC0056** | –                                                      | Fester Sollwert: LMHOSTS muss deaktiviert sein      |
+| **IPC0059** | `domain.name`                                          | Erwartete Windows-Domäne                            |
+| **IPC0060** | –                                                      | Nur Informationsausgabe der OU                      |
+| ID          | Semaphore-Variable                            | Bedeutung                                   |
+| ----------- | --------------------------------------------- | ------------------------------------------- |
+| IPC0063     | –                                             | Fester Sollwert für Network Discovery       |
+| IPC0065     | –                                             | Aktuell ignoriert                           |
+| IPC0066     | –                                             | Fester UltraVNC-Sollwert                    |
+| IPC0070     | –                                             | Server + Viewer müssen vorhanden sein       |
+| **IPC0072** | `storage.system_drive.letter`                 | Laufwerksbuchstabe der Systempartition      |
+| **IPC0072** | `storage.system_drive.minimum_size_gb`        | Mindestgröße von C:                         |
+| **IPC0072** | `storage.data_drive.letter`                   | Laufwerksbuchstabe der Datenpartition       |
+| **IPC0072** | `storage.data_drive.expected_size_gb_by_type` | Erwartete D:-Größe je Rechnertyp            |
+| **IPC0072** | `storage.data_drive.tolerance_gb`             | Zulässige Größenabweichung                  |
+| IPC0073     | –                                             | Fester Sollwert `D:\Images` nicht vorhanden |
+| IPC0074     | –                                             | Fester Taskleisten-Sollwert                 |
+| IPC0075     | –                                             | Fester Suchsymbol-Sollwert                  |
+| IPC0076     | –                                             | Fester Desktop-Sollwert                     |
+| **IPC0078** | `software.hup.expected_name_regexes`          | Erwartete HUP-Pakete                        |
+| IPC0079     | –                                             | Fester Sollwert Auto Negotiation            |
+| IPC0080     | –                                             | Fester NIC-Energiespar-Sollwert             |
+| IPC0081     | –                                             | Fester .NET-Feature-Sollwert                |
+| IPC0082     | –                                             | Fester MSMQ-Sollwert                        |
