@@ -412,7 +412,7 @@
       ansible.builtin.debug:
         msg:
           - "Nur Computerart ES wurde ausgewertet."
-          - "Die direkten Sollwertpruefungen IPC0046, IPC0047, IPC0048, IPC0055, IPC0063, IPC0066, IPC0070, IPC0073, IPC0074, IPC0075, IPC0076, IPC0083, IPC0087, IPC0089, IPC0145-IPC0148, IPC0160-IPC0161, IPC0167, IPC0178, IPC0182-IPC0184 und IPC0200 sowie IPC0234, IPC0247, IPC0250-IPC0252 und IPC0263-IPC0271; die direkten Informationsausgaben IPC0143, IPC0144 und IPC0152 folgen im naechsten Play."
+          - "Die direkten Sollwertpruefungen IPC0046, IPC0047, IPC0048, IPC0055, IPC0063, IPC0066, IPC0070, IPC0073, IPC0074, IPC0075, IPC0076, IPC0083, IPC0087, IPC0089, IPC0145-IPC0148, IPC0160-IPC0161, IPC0167, IPC0178, IPC0182-IPC0184 und IPC0200 sowie IPC0234, IPC0247, IPC0250-IPC0252 und IPC0263-IPC0271; die direkten Informationsausgaben IPC0077, IPC0143, IPC0144 und IPC0152 folgen im naechsten Play."
           - "JSON: {{ ipc_es_validation_output_file }}"
           - "CSV: {{ ipc_es_validation_csv_file }}"
 
@@ -1241,6 +1241,30 @@
             }) `
             -Quelle 'Direkt/PowerShell/HKCU DesktopIcons + CommonDesktopDirectory' `
             -Hinweis 'HKCU bezieht sich auf den Benutzer, unter dem WinRM ausgefuehrt wird.'
+
+        # --------------------------------------------------------------
+        # IPC0077 - Microsoft-Edge-Verknuepfung loeschen.
+        # Der Dateizustand ist direkt lesbar; die konkrete REG-Datei/Policy
+        # wird ohne bekanntes Schema nur als Evidenz ausgegeben.
+        # --------------------------------------------------------------
+        $edgeShortcuts = @()
+        foreach ($desktopDir in $desktopDirs) {
+            if (-not (Test-Path -LiteralPath $desktopDir -PathType Container)) { continue }
+            $edgeShortcuts += @(
+                Get-ChildItem -LiteralPath $desktopDir -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.BaseName -match '(?i)Microsoft\s*Edge|^Edge$' } |
+                Select-Object Name, BaseName, FullName
+            )
+        }
+        $information['IPC0077'] = New-InformationResult `
+            -Id 'IPC0077' `
+            -Name 'Microsoft Edge Verknuepfung loeschen' `
+            -Ist ([ordered]@{
+                EdgeShortcuts=@($edgeShortcuts)
+                ShortcutAbsent=(@($edgeShortcuts).Count -eq 0)
+            }) `
+            -Quelle 'Direkt/PowerShell/Desktop und CommonDesktop' `
+            -Hinweis 'Verknuepfungszustand wird direkt ausgegeben; der genaue Registry-Wert der verwendeten REG-Datei ist nicht vorgegeben.'
 
         # IPC0083 - Bildschirmschoner fuer ES.
         $screenPolicyPath = 'HKCU:\Software\Policies\Microsoft\Windows\Control Panel\Desktop'
