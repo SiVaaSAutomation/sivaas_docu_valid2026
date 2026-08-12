@@ -4390,7 +4390,7 @@ def run_merge(args):
         "IPC0263", "IPC0264", "IPC0265", "IPC0267", "IPC0268", "IPC0269",
         "IPC0270", "IPC0271",
     ]
-    direct_information_ids = ["IPC0143", "IPC0144", "IPC0152"]
+    direct_information_ids = ["IPC0077", "IPC0143", "IPC0144", "IPC0152"]
 
     with output_path.open("r", encoding="utf-8-sig") as handle:
         output = json.load(handle)
@@ -4453,6 +4453,7 @@ def run_merge(args):
 
     def missing_direct_information(task_id):
         names = {
+            "IPC0077": "Microsoft Edge Verknuepfung loeschen",
             "IPC0143": "Zertifikate - WinCC OPC UA Client / SIMATIC NET OPC Server",
             "IPC0144": "Zertifikate - WinCC OPC UA Client / OS-Stationen",
             "IPC0152": "Datenschutz-/Privacy-Einstellungen",
