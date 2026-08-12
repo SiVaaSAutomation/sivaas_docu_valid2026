@@ -58,6 +58,7 @@ def run_build(args):
         "IPC0074",
         "IPC0075",
         "IPC0076",
+        "IPC0077",
         "IPC0078",
         "IPC0079",
         "IPC0080",
@@ -93,6 +94,7 @@ def run_build(args):
         "IPC0122",
         "IPC0123",
         "IPC0124",
+        "IPC0126",
         "IPC0127",
         "IPC0128",
         "IPC0129",
@@ -111,6 +113,7 @@ def run_build(args):
         "IPC0144",
         "IPC0145",
         "IPC0146",
+        "IPC0147",
         "IPC0148",
         "IPC0149",
         "IPC0150",
@@ -141,6 +144,7 @@ def run_build(args):
         "IPC0187",
         "IPC0188",
         "IPC0189",
+        "IPC0190",
         "IPC0191",
         "IPC0200",
         "IPC0202",
@@ -2135,6 +2139,24 @@ def run_build(args):
         )
 
         # --------------------------------------------------------------
+        # IPC0077 - Microsoft-Edge-Verknuepfung loeschen.
+        # Der 0110/0150-Snapshot enthaelt keinen vollstaendigen Desktop-
+        # Dateibestand. Die ID bleibt trotzdem in der ES-Matrix sichtbar;
+        # aus fehlender Evidenz wird bewusst kein NOK abgeleitet.
+        # --------------------------------------------------------------
+        information["IPC0077"] = make_information(
+            "IPC0077",
+            "Microsoft Edge Verknuepfung loeschen",
+            None,
+            "0110/0150: kein normalisierter Desktop-Dateibestand",
+            (
+                "Der Endzustand der Edge-Desktopverknuepfung ist aus den vorhandenen "
+                "Snapshots nicht belastbar ableitbar. Eine direkte read-only "
+                "Desktop/CommonDesktop-Pruefung kann spaeter im 0160-YAML ergaenzt werden."
+            ),
+        )
+
+        # --------------------------------------------------------------
         # IPC0078 - HUP nur pruefen, wenn in Semaphore mindestens ein
         # erwartetes Produktregex hinterlegt wurde. Leere Liste = bewusst
         # ignoriert, nicht NOK und nicht NICHT_PRUEFBAR.
@@ -2703,6 +2725,38 @@ def run_build(args):
             )
 
         # --------------------------------------------------------------
+        # IPC0126 - PCS 7 V10 UC02 installieren.
+        # Der historische SMC-Installationsvorgang ist nicht beweisbar.
+        # Vorhandene Software- und Setup-Log-Evidenz wird deshalb als
+        # INFORMATION ausgegeben.
+        # --------------------------------------------------------------
+        uc02_products = product_regex_matches(
+            products,
+            r"(?i)PCS\s*7.*(UC\s*0?2|Update.*Collection.*0?2)",
+        )
+        uc02_log_hits = [
+            text(value)
+            for value in as_list(as_dict(setup_log_evidence).get("Highlights"))
+            if regex_match(r"(?i)(UC\s*0?2|Update.*Collection.*0?2)", value)
+        ]
+        information["IPC0126"] = make_information(
+            "IPC0126",
+            "PCS 7 V10 UC02 installieren",
+            {
+                "InstalledSoftwareMatches": uc02_products,
+                "SetupLogMatches": uc02_log_hits[:100],
+            } if (products is not None or isinstance(setup_log_evidence, dict)) else None,
+            (
+                "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts + "
+                "Software_PCS7_Components_Valid.PCS7SetupLogEvidence"
+            ),
+            (
+                "UC02 wird mangels eindeutig normalisiertem Detektor als Evidenz "
+                "ausgegeben; ein fehlender Treffer wird nicht als NOK interpretiert."
+            ),
+        )
+
+        # --------------------------------------------------------------
         # IPC0137 - Autostart deaktivieren.
         # Ohne konkrete Anwendung/Run-Key/Task ist keine belastbare
         # Sollwertpruefung moeglich. Eine pauschale leere Autostartliste
@@ -2938,6 +2992,30 @@ def run_build(args):
                     "NICHT_PRUEFBAR statt den Zustand zu erraten."
                 ),
             )
+
+        # --------------------------------------------------------------
+        # IPC0147 - Enable_Ansible_Access.ps1 / erreichbarer Endzustand.
+        # Der historische Skriptaufruf selbst ist nicht beweisbar; bewertet
+        # wird der aktuelle Ansible-/WinRM-Zugriff aus der Bibliothek.
+        # --------------------------------------------------------------
+        access_state = as_dict(host.get("zugriff"))
+        ipc0147_state = (
+            bool(access_state.get("ansible_access"))
+            if access_state and "ansible_access" in access_state
+            else None
+        )
+        checks["IPC0147"] = make_check(
+            "IPC0147",
+            "Zugriffsskript Enable_Ansible_Access.ps1",
+            ipc0147_state,
+            {"AnsibleAccess": True},
+            access_state if access_state else None,
+            "0150.zugriff",
+            (
+                "Geprueft wird der aktuelle erreichbare Endzustand. Der historische "
+                "Aufruf des Skripts selbst kann nachtraeglich nicht bewiesen werden."
+            ),
+        )
 
         # --------------------------------------------------------------
         # IPC0149 - Windows-Funktionen.
@@ -3610,6 +3688,27 @@ def run_build(args):
                 None,
                 "Initial_Valid.DomainInformation",
             )
+
+        # --------------------------------------------------------------
+        # IPC0190 - VNC-Verbindung neu starten.
+        # Der Neustart ist ein historischer Vorgang. Als belastbare
+        # Endzustands-Evidenz wird der aktuelle UltraVNC-Dienstzustand
+        # dokumentiert.
+        # --------------------------------------------------------------
+        vnc_runtime_services = find_services(
+            services,
+            r"(?i)UltraVNC|uvnc|winvnc",
+        )
+        information["IPC0190"] = make_information(
+            "IPC0190",
+            "VNC Verbindung",
+            vnc_runtime_services if isinstance(services_snapshot, dict) else None,
+            "Certificates_Services_Drivers_Valid.Services",
+            (
+                "Der historische Neustart ist nicht beweisbar. Dokumentiert wird "
+                "der aktuelle UltraVNC-Dienstzustand."
+            ),
+        )
 
         # --------------------------------------------------------------
         # IPC0191 - Admin_L nur bei Workgroup-Rechnern.
