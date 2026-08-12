@@ -1078,6 +1078,19 @@ def evaluate_os_server(host, expected):
     checks = {}
     info = {}
 
+    # ------------------------------------------------------------------
+    # Konsolidierte OS-Server-Prueflogik nach Installationsliste.
+    # Dieser Block ueberschreibt bewusst aeltere Informations-/Pruefwerte
+    # dort, wo ein belastbarer Endzustand vorhanden ist.
+    # ------------------------------------------------------------------
+    network_expected = as_dict(expected.get("network"))
+    adapter_policy = as_dict(network_expected.get("adapter_policy"))
+    terminalbus_expected = as_dict(network_expected.get("terminalbus"))
+    anlagenbus_expected = as_dict(network_expected.get("anlagenbus"))
+    redundanzbus_expected = as_dict(network_expected.get("redundanzbus"))
+    software_expected = as_dict(expected.get("software"))
+    hardening_expected = as_dict(expected.get("hardening"))
+
     identity = library_section(host, "system_und_hardware", "Initial_Valid", "Identity")
     system_info = library_section(host, "system_und_hardware", "Initial_Valid", "SystemInformation")
     language = library_section(host, "sprache_und_region", "Initial_Valid", "LanguageAndRegion")
@@ -2017,18 +2030,7 @@ def evaluate_os_server(host, expected):
     checks["IPC0252"] = software_presence_check("IPC0252", TASK_NAMES["IPC0252"], installed_software, r"UltraVNC|uvnc", None, "UltraVNC Viewer installiert")
 
 
-    # ------------------------------------------------------------------
-    # Konsolidierte OS-Server-Prueflogik nach Installationsliste.
-    # Dieser Block ueberschreibt bewusst aeltere Informations-/Pruefwerte
-    # dort, wo ein belastbarer Endzustand vorhanden ist.
-    # ------------------------------------------------------------------
-    network_expected = as_dict(expected.get("network"))
-    adapter_policy = as_dict(network_expected.get("adapter_policy"))
-    terminalbus_expected = as_dict(network_expected.get("terminalbus"))
-    anlagenbus_expected = as_dict(network_expected.get("anlagenbus"))
-    redundanzbus_expected = as_dict(network_expected.get("redundanzbus"))
-    software_expected = as_dict(expected.get("software"))
-    hardening_expected = as_dict(expected.get("hardening"))
+
 
     # IPC0013 - alle lokalen Benutzer in der Matrix ausgeben.
     checks.pop("IPC0013", None)
