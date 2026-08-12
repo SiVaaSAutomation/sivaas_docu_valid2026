@@ -334,16 +334,40 @@
         ipc_os_client_validation_discovery_data: >-
           {{ ipc_os_client_validation_discovery_raw.content | b64decode | from_json }}
 
-    - name: OS-Client- und Sonstige-Gruppen in Discovery-Datei pruefen
+    - name: OS-Client-Gruppe in Discovery-Datei pruefen
       ansible.builtin.assert:
         that:
           - ipc_os_client_validation_discovery_data.groups is defined
+          - ipc_os_client_validation_discovery_data.groups is mapping
           - ipc_os_client_validation_discovery_data.groups.ipc_os_client is defined
           - ipc_os_client_validation_discovery_data.groups.ipc_os_client is iterable
-          - ipc_os_client_validation_discovery_data.groups.unclassified is defined
-          - ipc_os_client_validation_discovery_data.groups.unclassified is iterable
         fail_msg: >-
-          In {{ ipc_os_client_validation_discovery_file }} fehlen groups.ipc_os_client oder groups.unclassified.
+          In {{ ipc_os_client_validation_discovery_file }} fehlt groups.ipc_os_client.
+          Die optionale Gruppe groups.unclassified darf fehlen.
+
+    - name: Optionale Sonstige-Gruppe aus Discovery uebernehmen
+      ansible.builtin.set_fact:
+        ipc_os_client_validation_sonstige_targets: >-
+          {{
+            ipc_os_client_validation_discovery_data.groups.unclassified
+            | default([])
+            | list
+          }}
+
+    - name: Sonstige bei fehlender Gruppe aus Discovery-Hostliste ableiten
+      ansible.builtin.set_fact:
+        ipc_os_client_validation_sonstige_targets: >-
+          {{
+            ipc_os_client_validation_discovery_data.hosts
+            | default([])
+            | selectattr('classification', 'defined')
+            | selectattr('classification', 'equalto', 'Unclassified')
+            | list
+          }}
+      when:
+        - ipc_os_client_validation_sonstige_targets | default([]) | length == 0
+        - ipc_os_client_validation_discovery_data.hosts is defined
+        - ipc_os_client_validation_discovery_data.hosts is iterable
 
     - name: Erreichbare OS-Client- und Sonstige-Ziele fuer direkte Read-only-Pruefungen dynamisch anlegen
       ansible.builtin.add_host:
@@ -359,7 +383,12 @@
         ansible_winrm_server_cert_validation: ignore
         ansible_winrm_operation_timeout_sec: "{{ winrm_operation_timeout_sec | default(60) }}"
         ansible_winrm_read_timeout_sec: "{{ winrm_read_timeout_sec | default(180) }}"
-      loop: "{{ (ipc_os_client_validation_discovery_data.groups.ipc_os_client | default([])) + (ipc_os_client_validation_discovery_data.groups.unclassified | default([])) }}"
+      loop: >-
+        {{
+          (ipc_os_client_validation_discovery_data.groups.ipc_os_client | default([]) | list)
+          +
+          (ipc_os_client_validation_sonstige_targets | default([]) | list)
+        }}
       loop_control:
         label: "{{ item.ip }}"
       when: (item.ansible_access | default(item.winrm_reachable | default(false))) | bool
