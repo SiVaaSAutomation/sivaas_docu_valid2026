@@ -1594,7 +1594,7 @@
             }
         }
 
-        $sharePathOK = ($projectShare -and ([string]$projectShare.Path).TrimEnd('\') -ieq $projectFolder.TrimEnd('\'))
+        $sharePathOK = ($projectShare -and ([string]$projectShare.Path).TrimEnd([char]92) -ieq $projectFolder.TrimEnd([char]92))
         $sharePermissionsOK = ($sharePermissionEvaluation.Count -eq @($projectSpec.share_permissions).Count -and @($sharePermissionEvaluation | Where-Object { -not $_.Compliant }).Count -eq 0)
         $ntfsPermissionsOK = ($ntfsPermissionEvaluation.Count -eq @($projectSpec.ntfs_permissions).Count -and @($ntfsPermissionEvaluation | Where-Object { -not $_.Compliant }).Count -eq 0)
 
@@ -1725,7 +1725,9 @@
             $owner = $null
             try {
                 $ownerResult = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
-                if ($ownerResult.ReturnValue -eq 0) { $owner = (([string]$ownerResult.Domain) + '\' + ([string]$ownerResult.User)).Trim('\') }
+                if ($ownerResult.ReturnValue -eq 0) {
+                    $owner = (([string]$ownerResult.Domain) + [char]92 + ([string]$ownerResult.User)).Trim([char]92)
+                
             } catch { }
             $bgProcesses += [pscustomobject][ordered]@{
                 Source='RunningProcess'
@@ -1752,7 +1754,7 @@
                     Name=$simpleName
                     Enabled=$_.Enabled
                     LastLogon=$_.LastLogon
-                    IsLocalAdministrator=(@($adminNames | Where-Object { $_ -match ('\\' + [regex]::Escape($simpleName) + '$') }).Count -gt 0)
+                    IsLocalAdministrator=(@($adminNames | Where-Object { $_ -match ([regex]::Escape([string][char]92) + [regex]::Escape($simpleName) + '$') }).Count -gt 0)
                 }
             })
         } catch { }
