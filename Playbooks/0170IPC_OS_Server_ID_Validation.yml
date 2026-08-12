@@ -610,7 +610,7 @@
 
     - name: Direkte 0170-Pruefergebnisse lokal speichern
       ansible.builtin.copy:
-        content: "{{ ipc_0170_live_checks.stdout | trim }}
+        content: "{{ ipc_0170_live_checks.stdout | trim }}"
 
         dest: "{{ result_dir }}/.0170_live/{{ ansible_host | default(inventory_hostname) }}.json"
       delegate_to: localhost
