@@ -1357,37 +1357,59 @@ def evaluate_os_server(host, expected):
         "Initial_Valid.NetworkAdapters", "Aufgabenliste",
     )
 
-    # IPC0054 - OS-Server-spezifisch: unnoetige Adapter aus/abwesend.
-    absent_results = []
-    absent_ok = True
-    for wanted in as_list(expected.get("absent_adapters")):
-        matches = [
-            adapter for adapter in as_list(network_adapters)
-            if isinstance(adapter, dict) and text(wanted).lower() in text(adapter.get("Name")).lower()
-        ]
-        item_ok = not matches or all(text(adapter.get("Status")).lower() not in {"up", "connected"} for adapter in matches)
-        absent_ok = absent_ok and item_ok
-        absent_results.append({"Pattern": wanted, "OK": item_ok, "Matches": matches})
-    enabled_hardware = [
-        adapter for adapter in as_list(network_adapters)
-        if isinstance(adapter, dict)
-        and text(adapter.get("Status")).lower() in {"up", "connected"}
-        and bool_value(adapter.get("Virtual")) is not True
+    # IPC0054 - maximale Anzahl vorhandener physischer Busadapter.
+    # Gezaehlt werden Terminalbus, Anlagenbus und Redundanzbus unabhaengig
+    # davon, ob der physisch vorhandene Adapter aktiviert oder deaktiviert ist.
+    bus_adapter_names = [
+        text(name).strip()
+        for name in as_list(
+            adapter_policy.get("bus_adapter_names")
+            or ["Terminalbus", "Anlagenbus", "Redundanzbus"]
+        )
+        if text(name).strip()
     ]
-    disallowed_enabled = [
-        adapter for adapter in enabled_hardware
-        if text(adapter.get("Name")).lower() not in {text(x).lower() for x in as_list(expected.get("allowed_enabled_adapter_names"))}
+    bus_adapter_names_normalized = {name.lower() for name in bus_adapter_names}
+    max_by_type = as_dict(adapter_policy.get("max_present_bus_adapters_by_type"))
+    max_present_bus_adapters = int_value(max_by_type.get("OS_Server"))
+    if max_present_bus_adapters is None:
+        max_present_bus_adapters = int_value(adapter_policy.get("max_present_bus_adapters"))
+
+    physical = physical_network_adapters(network_adapters)
+    present_bus_adapters = [
+        adapter for adapter in physical
+        if adapter_present(adapter)
+        and text(adapter.get("Name")).strip().lower() in bus_adapter_names_normalized
     ]
+    ipc0054_state = None
+    if isinstance(network_adapters, list):
+        ipc0054_state = (
+            max_present_bus_adapters is not None
+            and len(present_bus_adapters) <= max_present_bus_adapters
+        )
+
     checks["IPC0054"] = make_check(
         "IPC0054", "Nicht benötigte Netzwerkadapter deaktivieren",
-        bool(as_list(network_adapters)) and absent_ok and not disallowed_enabled,
+        ipc0054_state,
         {
-            "AbsentOrDisabled": expected.get("absent_adapters"),
-            "AllowedEnabledAdapters": expected.get("allowed_enabled_adapter_names"),
+            "ComputerType": "OS_Server",
+            "MaxPresentBusAdapters": max_present_bus_adapters,
+            "BusAdapterNames": bus_adapter_names,
         },
-        {"AbsentChecks": absent_results, "DisallowedEnabledAdapters": disallowed_enabled},
+        {
+            "PresentBusAdapterCount": len(present_bus_adapters),
+            "PresentBusAdapters": [
+                {
+                    "Name": adapter.get("Name"),
+                    "Status": adapter.get("Status"),
+                    "HardwareInterface": adapter.get("HardwareInterface"),
+                    "Virtual": adapter.get("Virtual"),
+                }
+                for adapter in present_bus_adapters
+            ],
+        } if isinstance(network_adapters, list) else None,
         "Initial_Valid.NetworkAdapters",
-        "Semaphore: expected_absent_adapters + allowed_enabled_adapter_names",
+        "Semaphore: network.adapter_policy.max_present_bus_adapters_by_type.OS_Server",
+        "Deaktivierte physisch vorhandene Busadapter werden mitgezaehlt.",
     )
 
     # IPC0056 - LMHOSTS deaktiviert.
@@ -2204,44 +2226,56 @@ def evaluate_os_server(host, expected):
             "Initial_Valid.NetworkAdapters",
         )
 
-    # IPC0054 - maximale Anzahl aktivierter physischer Adapter ist rechnertypabhaengig.
-    max_by_type = as_dict(adapter_policy.get("max_enabled_physical_adapters_by_type"))
-    max_physical = int_value(max_by_type.get("OS_Server"))
-    if max_physical is None:
-        max_physical = int_value(adapter_policy.get("max_enabled_physical_adapters"))
-    allowed_adapter_names = [
-        text(x).strip()
-        for x in as_list(adapter_policy.get("allowed_names") or expected.get("allowed_enabled_adapter_names"))
-        if text(x).strip()
+    # IPC0054 - maximale Anzahl vorhandener physischer Busadapter ist rechnertypabhaengig.
+    bus_adapter_names = [
+        text(name).strip()
+        for name in as_list(
+            adapter_policy.get("bus_adapter_names")
+            or ["Terminalbus", "Anlagenbus", "Redundanzbus"]
+        )
+        if text(name).strip()
     ]
-    allowed_normalized = {x.lower() for x in allowed_adapter_names}
+    bus_adapter_names_normalized = {name.lower() for name in bus_adapter_names}
+    max_by_type = as_dict(adapter_policy.get("max_present_bus_adapters_by_type"))
+    max_present_bus_adapters = int_value(max_by_type.get("OS_Server"))
+    if max_present_bus_adapters is None:
+        max_present_bus_adapters = int_value(adapter_policy.get("max_present_bus_adapters"))
+
     physical = physical_network_adapters(network_adapters)
-    enabled_physical = [adapter for adapter in physical if adapter_is_enabled(adapter) is True]
+    present_bus_adapters = [
+        adapter for adapter in physical
+        if adapter_present(adapter)
+        and text(adapter.get("Name")).strip().lower() in bus_adapter_names_normalized
+    ]
     ipc0054_state = None
     if isinstance(network_adapters, list):
         ipc0054_state = (
-            max_physical is not None
-            and len(enabled_physical) <= max_physical
-            and all(text(adapter.get("Name")).strip().lower() in allowed_normalized for adapter in enabled_physical)
+            max_present_bus_adapters is not None
+            and len(present_bus_adapters) <= max_present_bus_adapters
         )
+
     checks["IPC0054"] = make_check(
         "IPC0054", TASK_NAMES["IPC0054"], ipc0054_state,
-        {"ComputerType": "OS_Server", "MaxEnabledPhysicalAdapters": max_physical, "AllowedNames": allowed_adapter_names},
         {
-            "EnabledPhysicalAdapterCount": len(enabled_physical),
-            "PhysicalAdapters": [
+            "ComputerType": "OS_Server",
+            "MaxPresentBusAdapters": max_present_bus_adapters,
+            "BusAdapterNames": bus_adapter_names,
+        },
+        {
+            "PresentBusAdapterCount": len(present_bus_adapters),
+            "PresentBusAdapters": [
                 {
-                    "Name": x.get("Name"),
-                    "Status": x.get("Status"),
-                    "EnabledByStatus": adapter_is_enabled(x),
-                    "Virtual": x.get("Virtual"),
+                    "Name": adapter.get("Name"),
+                    "Status": adapter.get("Status"),
+                    "HardwareInterface": adapter.get("HardwareInterface"),
+                    "Virtual": adapter.get("Virtual"),
                 }
-                for x in physical
+                for adapter in present_bus_adapters
             ],
         } if isinstance(network_adapters, list) else None,
         "Initial_Valid.NetworkAdapters",
-        "Semaphore: network.adapter_policy.max_enabled_physical_adapters_by_type.OS_Server",
-        "Deaktivierte bzw. nicht vorhandene Hardwareadapter werden nicht gegen die Maximalzahl gezaehlt.",
+        "Semaphore: network.adapter_policy.max_present_bus_adapters_by_type.OS_Server",
+        "Deaktivierte physisch vorhandene Busadapter werden mitgezaehlt.",
     )
 
     # IPC0055 - alle eingetragenen DNS- und WINS-Server ausgeben.

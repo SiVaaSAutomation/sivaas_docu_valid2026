@@ -1946,40 +1946,51 @@ def run_build(args):
             information.pop("IPC0053", None)
 
         # --------------------------------------------------------------
-        # IPC0054 - nicht benoetigte physische Adapter deaktivieren.
-        # Ein physisch vorhandener, aber deaktivierter Adapter ist erlaubt.
-        # Fuer ES wird die maximal erlaubte Zahl aktivierter Hardware-NICs
-        # ueber Semaphore vorgegeben.
+        # IPC0054 - maximale Anzahl vorhandener physischer Busadapter.
+        # Gezaehlt werden physisch vorhandene Adapter, deren Name exakt
+        # Terminalbus, Anlagenbus oder Redundanzbus entspricht. Der fuer
+        # ES erlaubte Maximalwert kommt rollenabhaengig aus Semaphore.
+        # Deaktivierte Adapter werden mitgezaehlt, solange sie vorhanden sind.
         # --------------------------------------------------------------
-        max_by_type = as_dict(adapter_policy.get("max_enabled_physical_adapters_by_type"))
-        max_enabled = int_value(max_by_type.get("ES"))
-        if max_enabled is None:
-            max_enabled = int_value(adapter_policy.get("max_enabled_physical_adapters"))
+        bus_adapter_names = [
+            text(name).strip()
+            for name in as_list(
+                adapter_policy.get("bus_adapter_names")
+                or ["Terminalbus", "Anlagenbus", "Redundanzbus"]
+            )
+            if text(name).strip()
+        ]
+        bus_adapter_names_normalized = {name.lower() for name in bus_adapter_names}
+        max_by_type = as_dict(adapter_policy.get("max_present_bus_adapters_by_type"))
+        max_present_bus_adapters = int_value(max_by_type.get("ES"))
+        if max_present_bus_adapters is None:
+            max_present_bus_adapters = int_value(adapter_policy.get("max_present_bus_adapters"))
+
         ipc0054_state = None
         ipc0054_ist = None
-        if isinstance(network_adapters, list) and physical_adapters:
-            enabled_physical = [
-                adapter for adapter in physical_adapters
-                if adapter_is_enabled(adapter) is True
+        if isinstance(network_adapters, list):
+            present_bus_adapters = [
+                adapter
+                for adapter in physical_adapters
+                if text(adapter.get("Name")).strip().lower() in bus_adapter_names_normalized
+                and text(adapter.get("Status")).strip().lower()
+                not in {"not present", "nicht vorhanden"}
             ]
             ipc0054_ist = {
-                "PhysicalAdapters": [
+                "PresentBusAdapterCount": len(present_bus_adapters),
+                "PresentBusAdapters": [
                     {
                         "Name": adapter.get("Name"),
                         "Status": adapter.get("Status"),
-                        "EnabledByStatus": adapter_is_enabled(adapter),
+                        "HardwareInterface": adapter.get("HardwareInterface"),
+                        "Virtual": adapter.get("Virtual"),
                     }
-                    for adapter in physical_adapters
+                    for adapter in present_bus_adapters
                 ],
-                "EnabledPhysicalAdapterCount": len(enabled_physical),
             }
             ipc0054_state = (
-                max_enabled is not None
-                and len(enabled_physical) <= max_enabled
-                and all(
-                    text(adapter.get("Name")).strip().lower() in allowed_adapter_names_normalized
-                    for adapter in enabled_physical
-                )
+                max_present_bus_adapters is not None
+                and len(present_bus_adapters) <= max_present_bus_adapters
             )
 
         checks["IPC0054"] = make_check(
@@ -1987,12 +1998,14 @@ def run_build(args):
             "Nicht benoetigte Netzwerkadapter deaktivieren",
             ipc0054_state,
             {
-                "MaxEnabledPhysicalAdapters": max_enabled,
-                "AllowedNames": allowed_adapter_names,
+                "ComputerType": "ES",
+                "MaxPresentBusAdapters": max_present_bus_adapters,
+                "BusAdapterNames": bus_adapter_names,
             },
             ipc0054_ist,
             "Initial_Valid.NetworkAdapters",
-            "Status 'Disabled' gilt als deaktiviert; ein vorhandener deaktivierter Hardwareadapter fuehrt nicht zu NOK.",
+            "Semaphore: network.adapter_policy.max_present_bus_adapters_by_type.ES; "
+            "deaktivierte physisch vorhandene Busadapter werden mitgezaehlt.",
         )
 
         # IPC0055 wird nachfolgend direkt/read-only geprueft, damit neben

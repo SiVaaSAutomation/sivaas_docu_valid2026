@@ -25,12 +25,17 @@
 | **IPC0046** | –                                                                               | Fester Sollwert: Sprach-Hotkeys „Nicht zugewiesen“                                                                                       |
 | **IPC0047** | –                                                                               | Fester Sollwert: Tastenkombinationen für Eingabesprachen deaktiviert                                                                     |
 | **IPC0048** | –                                                                               | Fester Sollwert: Welcome Screen und neue Benutzer auf Deutsch                                                                            |
-| **IPC0049** | `network.adapter_policy.allowed_names`                                          | Erlaubte Namen physischer Netzwerkadapter                                                                                                |
+| **IPC0049** | `network.adapter_policy.allowed_names`                                          | Erlaubte exakte Namen physischer Netzwerkadapter; gilt im jeweiligen Sollwertblock |
+|             | `network.adapter_policy.allowed_name_regexes` | Zusätzliche erlaubte Namensmuster; für 0180 erforderlich definiert, im Testprofil bewusst `[]` |
 | **IPC0050** | `network.terminalbus.name_regex`                                                | Identifiziert den Terminalbus für die Informationsausgabe                                                                                |
 | **IPC0051** | `network.terminalbus.gateway`                                                   | Erwarteter Gateway des Terminalbus                                                                                                       |
 | **IPC0052** | `network.anlagenbus.name_regex`                                                 | Identifiziert den Anlagenbus; Binding-Sollwerte selbst sind fest                                                                         |
 | **IPC0053** | `network.redundanzbus.name_regex`                                               | Identifiziert den Redundanzbus                                                                                                           |
-| **IPC0054** | `network.adapter_policy.max_enabled_physical_adapters`                          | Maximale Anzahl aktivierter physischer Netzwerkadapter                                                                                   |
+| **IPC0054** | `network.adapter_policy.max_enabled_physical_adapters` | Generischer Fallback für die maximal erlaubte Zahl aktivierter physischer Adapter |
+|             | `network.adapter_policy.max_enabled_physical_adapters_by_type.ES` | ES-spezifischer Grenzwert |
+|             | `network.adapter_policy.max_enabled_physical_adapters_by_type.OS_Server` | OS-Server-spezifischer Grenzwert |
+|             | `network.adapter_policy.max_enabled_physical_adapters_by_type.OS_Client` | OS-Client-spezifischer Grenzwert; im Testprofil `2` |
+|             | `network.adapter_policy.required_disabled_name_regexes` | Adaptermuster, die vorhanden und deaktiviert sein müssen; für 0180 definiert, im Testprofil bewusst `[]` |
 | **IPC0055** | `network.terminalbus.dns_servers`                                               | Erwartete DNS-Server                                                                                                                     |
 |             | `network.terminalbus.wins_servers`                                              | Erwartete WINS-Server                                                                                                                    |
 | **IPC0056** | –                                                                               | Fester Sollwert: LMHOSTS deaktiviert                                                                                                     |
@@ -44,7 +49,9 @@
 | **IPC0072** | `storage.system_drive.letter`                                                   | Laufwerksbuchstabe der Systempartition                                                                                                   |
 |             | `storage.system_drive.minimum_size_gb`                                          | Mindestgröße von C:, aktuell 100 GB                                                                                                      |
 |             | `storage.data_drive.letter`                                                     | Laufwerksbuchstabe der Datenpartition                                                                                                    |
-|             | `storage.data_drive.expected_size_gb_by_type.ES`                                | Erwartete Größe von D: für ES, aktuell 764 GB                                                                                            |
+|             | `storage.data_drive.expected_size_gb_by_type.ES` | Erwartete Größe von D: für ES, aktuell `764` GB |
+|             | `storage.data_drive.expected_size_gb_by_type.OS_Server` | Erwartete Größe von D: für OS Server, aktuell `764` GB |
+|             | `storage.data_drive.expected_size_gb_by_type.OS_Client` | Erwartete Größe von D: für OS Client; Testprofil vorläufig `764` GB, projektspezifisch zu bestätigen |
 |             | `storage.data_drive.tolerance_gb`                                               | Zulässige Abweichung der D:-Größe                                                                                                        |
 | **IPC0073** | –                                                                               | Fester Sollwert: `D:\Images` darf nicht vorhanden sein                                                                                   |
 | **IPC0074** | –                                                                               | Fester Sollwert für Aero Peek und Taskleistengruppierung                                                                                 |
@@ -56,14 +63,26 @@
 | **IPC0080** | –                                                                               | Fester Sollwert: NIC-Energiesparabschaltung deaktiviert                                                                                  |
 | **IPC0081** | –                                                                               | Fester Sollwert: .NET Framework 3.5 aktiviert, WCF Activation deaktiviert                                                                |
 | **IPC0082** | –                                                                               | Fester Sollwert: MSMQ Server aktiviert                                                                                                   |
-| **IPC0083** | `desktop.screen_saver_by_type.ES.enabled`                                       | Bildschirmschoner auf ES aktiv                                                                                                           |
-|             | `desktop.screen_saver_by_type.ES.timeout_seconds`                               | Timeout, aktuell `1800` Sekunden                                                                                                         |
-|             | `desktop.screen_saver_by_type.ES.password_protected`                            | Kennwortschutz nach Reaktivierung                                                                                                        |
-| **IPC0084** | –                                                                               | Für ES nicht relevant; aktuell `IGNORIERT`                                                                                               |
-| **IPC0085** | –                                                                               | Für ES nicht relevant; aktuell `IGNORIERT`                                                                                               |
-| **IPC0087** | `power.by_type.ES.display_timeout_ac_minutes`                                   | Display-Timeout bei Netzbetrieb; `0` = Never                                                                                             |
-|             | `power.by_type.ES.disk_timeout_ac_minutes`                                      | Festplatten-Timeout bei Netzbetrieb; `0` = Never                                                                                         |
-| **IPC0088** | `power.by_type.ES.active_plan_name_regex`                                       | Erwarteter aktiver Energieplan, aktuell `SIMATIC IPC`                                                                                    |
+| **IPC0083** | `desktop.screen_saver_by_type.ES.enabled` | Bildschirmschoner-Sollwert für ES |
+|             | `desktop.screen_saver_by_type.ES.timeout_seconds` | Timeout für ES, aktuell `1800` s |
+|             | `desktop.screen_saver_by_type.ES.password_protected` | Kennwortschutz für ES |
+|             | `desktop.screen_saver_by_type.OS_Server.enabled` | Bildschirmschoner-Sollwert für OS Server |
+|             | `desktop.screen_saver_by_type.OS_Server.timeout_seconds` | Timeout für OS Server, aktuell `1800` s |
+|             | `desktop.screen_saver_by_type.OS_Server.password_protected` | Kennwortschutz für OS Server |
+| **IPC0084** | `desktop.screen_saver_by_type.OS_Client.enabled` | OS Client: bevorzugt deaktiviert; Testprofil `false` |
+|             | `desktop.screen_saver_by_type.OS_Client.timeout_seconds` | Falls der Bildschirmschoner trotzdem aktiv ist: Fallback-Timeout; Testprofil `1800` s |
+|             | `desktop.screen_saver_by_type.OS_Client.password_protected` | Falls aktiv: Kennwortschutz; Testprofil `true` |
+| **IPC0085** | `desktop.pointer_scheme_regex` | OS Client: erwartetes Mauszeigerschema „Windows Schwarz (sehr groß)“; sprachrobustes Regex im Testprofil |
+| **IPC0087** | `power.by_type.ES.display_timeout_ac_minutes` | ES: Display-Timeout bei Netzbetrieb |
+|             | `power.by_type.ES.disk_timeout_ac_minutes` | ES: Festplatten-Timeout bei Netzbetrieb |
+|             | `power.by_type.OS_Server.display_timeout_ac_minutes` | OS Server: Display-Timeout bei Netzbetrieb |
+|             | `power.by_type.OS_Server.disk_timeout_ac_minutes` | OS Server: Festplatten-Timeout bei Netzbetrieb |
+|             | `power.by_type.OS_Client.display_timeout_ac_minutes` | OS Client: Display-Timeout bei Netzbetrieb; Testprofil `0` |
+|             | `power.by_type.OS_Client.disk_timeout_ac_minutes` | OS Client: Festplatten-Timeout bei Netzbetrieb; Testprofil `0` |
+| **IPC0088** | `power.by_type.ES.active_plan_name_regex` | ES: erwarteter aktiver Energieplan, aktuell `SIMATIC IPC` |
+|             | `power.by_type.OS_Server.active_plan_name_regex` | OS Server: erwarteter Hochleistungs-Energieplan |
+|             | `power.by_type.OS_Server.active_plan_guid` | Optionaler GUID-Sollwert für den Hochleistungsplan |
+|             | `power.by_type.OS_Client.active_plan_name_regex` | OS Client: erwarteter Hochleistungs-Energieplan; Testprofil entspricht OS Server |
 | **IPC0089** | –                                                                               | Fester Sollwert für Bootmenü/Recovery und automatischen Neustart                                                                         |
 | **IPC0090** | `software.seven_zip.expected_installed`                                         | Legt fest, ob 7-Zip installiert sein muss                                                                                                |
 |             | `software.seven_zip.name_regex`                                                 | Erkennung von 7-Zip                                                                                                                      |
@@ -251,8 +270,8 @@
 | **IPC0245** | – | Wiederholungsprüfung mit Referenz auf IPC0027; übernimmt dessen VNC-Firewall-Sollwert und Evidenz |
 | **IPC0246** | – | Wiederholungsprüfung mit Referenz auf den Firewallprofil-Anteil von IPC0166; Domain, Private und Public müssen aktiviert sein |
 | **IPC0247** | – | Fester Sollwert: Defender `IsTamperProtected = false` |
-| **IPC0248** | – | `IGNORIERT`: OS-Client-spezifische Aufgabe „Cloudbasierter Schutz aus“ |
-| **IPC0249** | – | `IGNORIERT`: OS-Client-spezifische Aufgabe „Automatische Übermittlung von Beispielen aus“ |
+| **IPC0248** | `hardening.defender.maps_reporting` | OS Client: `MAPSReporting`; Testprofil `0` = Cloud-/MAPS-Berichterstattung deaktiviert |
+| **IPC0249** | `hardening.defender.submit_samples_consent` | OS Client: `SubmitSamplesConsent`; Testprofil `2` = keine automatische Beispielübermittlung |
 | **IPC0250** | – | Fester Sollwert: expliziter `SmartScreenPuaEnabled`-Wert muss `0` sein; ohne auslesbaren Wert `NICHT_PRUEFBAR` |
 | **IPC0251** | – | Referenzprüfung auf IPC0247 und IPC0250; beide müssen `OK` sein |
 | **IPC0252** | `software.ultravnc_viewer.expected_installed` | Legt fest, ob UltraVNC Viewer installiert sein muss |
