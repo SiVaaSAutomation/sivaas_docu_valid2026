@@ -2450,6 +2450,17 @@
       failed_when: false
       when: ipc_0160_live_ping.ping | default('') == 'pong'
 
+    - name: Diagnose der direkten 0160-Pruefung anzeigen
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "RC: {{ ipc_0160_live_checks.rc | default('NICHT DEFINIERT') }}"
+          - "STDOUT: {{ ipc_0160_live_checks.stdout | default('') }}"
+          - "STDERR: {{ ipc_0160_live_checks.stderr | default('') }}"
+      when:
+        - ipc_0160_live_ping.ping | default('') == 'pong'
+        - ipc_0160_live_checks is defined
+
     - name: Direkte 0160-Pruefergebnisse lokal speichern
       ansible.builtin.copy:
         content: "{{ ipc_0160_live_checks.stdout | trim }}\n"

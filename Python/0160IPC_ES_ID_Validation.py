@@ -4340,10 +4340,11 @@ def run_merge(args):
             "IPC0160": "Verwendung von sicheren Cipher Suites - Allowlist",
             "IPC0161": "Verwendung von sicheren Cipher Suites - Sperrliste",
             "IPC0167": "D:\\Projekt erstellen",
+            "IPC0168": "D:\\Projekt Freigabe- und NTFS-Berechtigungen",
             "IPC0178": "Office 2019 - Word und Excel",
             "IPC0182": "BGInfo/BGSiVaaS",
-            "IPC0183": "BGInfo/BGSiVaaS - Als Administrator ausfuehren",
-            "IPC0184": "Hintergrundbild anpassen",
+            "IPC0187": "VNC Server Firewallregel fuer alle Profile",
+            "IPC0188": "hosts/lmhosts Dateien vorhanden",
             "IPC0200": "WSUSClientManager ablegen",
             "IPC0234": "Auslagerungsdatei konfigurieren",
             "IPC0245": "VNC-Viewer Firewallregel alle Profile",
@@ -4363,7 +4364,7 @@ def run_merge(args):
         }
         return {
             "id": task_id,
-            "aufgabe": names[task_id],
+            "aufgabe": names.get(task_id, f"Direkte Pruefung {task_id}"),
             "pruefart": "SOLLWERT",
             "status": "NICHT_PRUEFBAR",
             "soll": "Fester Sollwert gemaess Aufgabenliste",
