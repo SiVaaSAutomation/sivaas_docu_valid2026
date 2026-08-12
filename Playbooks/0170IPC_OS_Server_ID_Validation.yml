@@ -931,6 +931,25 @@
         # IPC0077 - Edge-Desktopverknuepfungen entfernt und erneute
         # Erstellung bei Installation/Updates verhindert.
         # --------------------------------------------------------------
+        $desktopDirs = @(
+                [Environment]::GetFolderPath('DesktopDirectory'),
+                [Environment]::GetFolderPath('CommonDesktopDirectory'),
+                'C:\Users\Public\Desktop'
+            ) |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique
+
+            $edgeShortcuts = @()
+            foreach ($desktopDir in $desktopDirs) {
+                if (-not (Test-Path -LiteralPath $desktopDir -PathType Container)) { continue }
+
+                $edgeShortcuts += @(
+                    Get-ChildItem -LiteralPath $desktopDir -File -Force -ErrorAction SilentlyContinue |
+                    Where-Object { $_.BaseName -match '(?i)Microsoft\s*Edge|^Edge$' } |
+                    Select-Object Name, BaseName, FullName
+                )
+            }
+            
         $edgeShortcuts = @()
         foreach ($desktopDir in $desktopDirs) {
             if (-not (Test-Path -LiteralPath $desktopDir -PathType Container)) { continue }
@@ -1656,7 +1675,7 @@
                     Name=$simpleName
                     Enabled=$_.Enabled
                     LastLogon=$_.LastLogon
-                    IsLocalAdministrator=(@($adminNames | Where-Object { $_ -match ('\\' + [regex]::Escape($simpleName) + '$') }).Count -gt 0)
+                    IsLocalAdministrator=(@($adminNames | Where-Object { $_ -match ([regex]::Escape([string][char]92) + [regex]::Escape($simpleName) + '$') }).Count -gt 0)
                 }
             })
         } catch { }
