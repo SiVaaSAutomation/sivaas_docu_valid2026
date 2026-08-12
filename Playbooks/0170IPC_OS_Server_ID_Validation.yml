@@ -203,8 +203,8 @@
       ansible.builtin.debug:
         msg:
           - "Nur Computerart OS_Server wird ausgewertet; ES, OS Client und Kein_Zugriff werden ignoriert."
-          - "Direkte OS-Server-Sollwertpruefungen: IPC0046-IPC0048, IPC0055, IPC0063, IPC0066, IPC0070, IPC0073-IPC0076, IPC0083, IPC0087, IPC0089, IPC0145-IPC0146, IPC0160-IPC0161, IPC0167, IPC0182-IPC0184, IPC0200, IPC0234, IPC0247, IPC0250-IPC0252 und IPC0263-IPC0271."
-          - "Direkte Informationsausgaben: IPC0077 und IPC0144."
+          - "Direkte OS-Server-Sollwertpruefungen umfassen u.a. IPC0046-IPC0048, IPC0063, IPC0070, IPC0073-IPC0077, IPC0083-IPC0084, IPC0087, IPC0089, IPC0148, IPC0152, IPC0160-IPC0161 sowie die vorhandenen System-/Firmwarepruefungen."
+          - "Informationsausgaben wie Benutzer, Netzwerkadapter, Domaenen-/OU-Daten und Zertifikate werden kompakt in die Matrix geschrieben."
           - "JSON: {{ ipc_os_server_validation_output_file }}"
           - "CSV: {{ ipc_os_server_validation_csv_file }}"
 
@@ -237,11 +237,14 @@
         $expectedScreenSaverSecure = "{{ ipc_es_validation_expected.desktop.screen_saver_by_type.OS_Server.password_protected | bool | ternary('true','false') }}" -eq 'true'
         $expectedDisplayTimeoutAcMinutes = {{ ipc_es_validation_expected.power.by_type.OS_Server.display_timeout_ac_minutes | int }}
         $expectedDiskTimeoutAcMinutes = {{ ipc_es_validation_expected.power.by_type.OS_Server.disk_timeout_ac_minutes | int }}
-        $expectedUltraVncServerInstalled = "{{ ipc_es_validation_expected.software.ultravnc_server.expected_installed | bool | ternary('true','false') }}" -eq 'true'
         $expectedUltraVncViewerInstalled = "{{ ipc_es_validation_expected.software.ultravnc_viewer.expected_installed | bool | ternary('true','false') }}" -eq 'true'
-        $expectedOrclaInstalled = "{{ ipc_es_validation_expected.software.orcla.expected_installed | bool | ternary('true','false') }}" -eq 'true'
-        $orclaCertExpectations = ConvertFrom-Json -InputObject @'
-        {{ ipc_es_validation_expected.software.orcla.certificate_expectations | to_json }}
+        $expectedUltraVncViewerVersionRegex = {{ (ipc_es_validation_expected.software.ultravnc_viewer.version_regex | default(ipc_es_validation_expected.software.ultravnc_server.version_regex | default(''))) | to_json }}
+        $expectedPowerPlanNameRegex = {{ ipc_es_validation_expected.power.by_type.OS_Server.active_plan_name_regex | to_json }}
+        $expectedPowerPlanGuid = {{ ipc_es_validation_expected.power.by_type.OS_Server.active_plan_guid | default('8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c') | to_json }}
+        $systemRestoreWindows10Only = "{{ ipc_es_validation_expected.hardening.system_restore.windows10_only | default(true) | bool | ternary('true','false') }}" -eq 'true'
+        $expectedSystemRestoreDisabled = "{{ ipc_es_validation_expected.hardening.system_restore.expected_disabled | default(true) | bool | ternary('true','false') }}" -eq 'true'
+        $privacyExpectations = ConvertFrom-Json -InputObject @'
+        {{ (ipc_es_validation_expected.hardening.privacy | default({})).registry_expectations | default([]) | to_json }}
         '@
         $allowedCipherSuites = ConvertFrom-Json -InputObject @'
         {{ ipc_es_validation_expected.hardening.tls.allowed_cipher_suites | to_json }}
@@ -249,9 +252,20 @@
         $disabledCipherSuites = ConvertFrom-Json -InputObject @'
         {{ ipc_es_validation_expected.hardening.tls.disabled_cipher_suites | to_json }}
         '@
+        $expectedFirewallProfiles = ConvertFrom-Json -InputObject @'
+        {{ ipc_es_validation_expected.hardening.firewall.required_profiles_enabled | to_json }}
+        '@
+        $expectedNetworkCategory = {{ ipc_es_validation_expected.hardening.firewall.active_network_category | to_json }}
         $enforceAllowedCipherSuiteOnly = "{{ ipc_es_validation_expected.hardening.tls.enforce_allowed_cipher_suite_only | bool | ternary('true','false') }}" -eq 'true'
         $filesystemExpected = ConvertFrom-Json -InputObject @'
         {{ ipc_es_validation_expected.filesystem | to_json }}
+        '@
+        $nameResolutionExpected = ConvertFrom-Json -InputObject @'
+        {{ ipc_es_validation_expected.filesystem.get('name_resolution_files', {'hosts_path':'C:\\Windows\\System32\\drivers\\etc\\hosts','lmhosts_path':'C:\\Windows\\System32\\drivers\\etc\\lmhosts','require_hosts':true,'require_lmhosts':true}) | to_json }}
+        '@
+        $expectedVncViewerFirewallRegex = {{ ipc_es_validation_expected.hardening.firewall.get('vnc_viewer_rule_name_regex', '(?i)(VNC.*Viewer|UltraVNC.*Viewer)') | to_json }}
+        $requiredDefenderStatusFieldsExpected = ConvertFrom-Json -InputObject @'
+        {{ ipc_es_validation_expected.hardening.get('defender', {}).get('required_status_true', ['AMServiceEnabled','AntivirusEnabled','AntispywareEnabled','BehaviorMonitorEnabled','IoavProtectionEnabled','NISEnabled','OnAccessProtectionEnabled','RealTimeProtectionEnabled']) | to_json }}
         '@
         $toolsExpected = ConvertFrom-Json -InputObject @'
         {{ ipc_es_validation_expected.tools | to_json }}
@@ -696,129 +710,6 @@
             -Hinweis 'Das Default-User-Hive wird nur temporaer eingebunden und ohne Aenderung von Einstellungen wieder entladen.'
 
         # --------------------------------------------------------------
-        # IPC0055 - DNS/WINS am Terminalbus. DNS wird ueber die Windows-
-        # Netzwerkschnittstelle gelesen. Fuer WINS wird zusaetzlich die
-        # NetBT-NameServerList verwendet, weil sie mehr als nur Primary/
-        # Secondary enthalten kann. Alles ist rein lesend.
-        # --------------------------------------------------------------
-        $terminalbusNameRegex = {{ ipc_es_validation_expected.network.terminalbus.name_regex | to_json }}
-        # Ansible/Jinja gibt die Listen als JSON-Array aus. ConvertFrom-Json
-        # macht daraus verlaesslich PowerShell-Arrays, auch bei nur einem Wert.
-        $expectedDnsServers = @(({{ ipc_es_validation_expected.network.terminalbus.dns_servers | to_json | quote }}) | ConvertFrom-Json)
-        $expectedWinsServers = @(({{ ipc_es_validation_expected.network.terminalbus.wins_servers | to_json | quote }}) | ConvertFrom-Json)
-
-        function Convert-ToStringArray {
-            param($Value)
-            if ($null -eq $Value) { return @() }
-            $items = @()
-            foreach ($entry in @($Value)) {
-                if ($null -eq $entry) { continue }
-                $raw = [string]$entry
-                if ([string]::IsNullOrWhiteSpace($raw)) { continue }
-                if ($raw -match ',') {
-                    $items += @($raw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-                }
-                else {
-                    $items += $raw.Trim()
-                }
-            }
-            return @($items)
-        }
-
-        function Test-OrderedStringArrayEqual {
-            param([string[]]$Actual, [string[]]$Expected)
-            $actualValues = @(Convert-ToStringArray $Actual)
-            $expectedValues = @(Convert-ToStringArray $Expected)
-            if ($actualValues.Count -ne $expectedValues.Count) { return $false }
-            for ($i = 0; $i -lt $expectedValues.Count; $i++) {
-                if (-not [string]::Equals($actualValues[$i], $expectedValues[$i], [System.StringComparison]::OrdinalIgnoreCase)) {
-                    return $false
-                }
-            }
-            return $true
-        }
-
-        $terminalAdapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match $terminalbusNameRegex })
-
-        $networkResults = @()
-        $networkOK = ($terminalAdapters.Count -gt 0)
-
-        foreach ($adapter in $terminalAdapters) {
-            $dnsEntry = @(Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1)
-            $dnsActual = if ($dnsEntry.Count -gt 0) { @($dnsEntry[0].ServerAddresses) } else { @() }
-
-            $guidText = ([string]$adapter.InterfaceGuid).Trim('{}')
-            $netbtRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
-            $candidatePaths = @(
-                (Join-Path $netbtRoot ('Tcpip_{' + $guidText + '}')),
-                (Join-Path $netbtRoot ('Tcpip_' + $guidText))
-            )
-            $netbtPath = $candidatePaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-
-            $winsActual = @()
-            $winsSource = $null
-            if ($netbtPath) {
-                $netbt = Get-ItemProperty -LiteralPath $netbtPath -ErrorAction SilentlyContinue
-                if ($null -ne $netbt -and $null -ne $netbt.NameServerList) {
-                    $winsActual = @(Convert-ToStringArray $netbt.NameServerList)
-                    $winsSource = 'NetBT NameServerList'
-                }
-            }
-
-            # Rueckfall auf WMI/CIM Primary/Secondary, falls NameServerList
-            # auf diesem Windows-Stand nicht vorhanden ist.
-            if ($winsActual.Count -eq 0) {
-                $cim = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter ("InterfaceIndex=" + $adapter.ifIndex) -ErrorAction SilentlyContinue | Select-Object -First 1)
-                if ($cim.Count -gt 0) {
-                    $winsActual = @(
-                        [string]$cim[0].WINSPrimaryServer,
-                        [string]$cim[0].WINSSecondaryServer
-                    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-                    $winsSource = 'Win32_NetworkAdapterConfiguration Primary/Secondary'
-                }
-            }
-
-            $dnsOK = Test-OrderedStringArrayEqual -Actual $dnsActual -Expected $expectedDnsServers
-            $winsOK = Test-OrderedStringArrayEqual -Actual $winsActual -Expected $expectedWinsServers
-            $adapterOK = $dnsOK -and $winsOK
-            $networkOK = $networkOK -and $adapterOK
-
-            $networkResults += [pscustomobject][ordered]@{
-                Name          = $adapter.Name
-                InterfaceIndex = $adapter.ifIndex
-                InterfaceGuid = [string]$adapter.InterfaceGuid
-                DNS = [ordered]@{
-                    Expected = @($expectedDnsServers)
-                    Actual   = @($dnsActual)
-                    OK       = $dnsOK
-                }
-                WINS = [ordered]@{
-                    Expected = @($expectedWinsServers)
-                    Actual   = @($winsActual)
-                    Source   = $winsSource
-                    RegistryPath = $netbtPath
-                    OK       = $winsOK
-                }
-            }
-        }
-
-        $ipc0055Status = if ($terminalAdapters.Count -eq 0) { 'NOK' } elseif ($networkOK) { 'OK' } else { 'NOK' }
-        $checks['IPC0055'] = New-ValidationResult `
-            -Id 'IPC0055' `
-            -Name 'DNS und WINS-Server eintragen' `
-            -Status $ipc0055Status `
-            -Soll ([ordered]@{
-                TerminalbusNameRegex = $terminalbusNameRegex
-                DNSServers  = @($expectedDnsServers)
-                WINSServers = @($expectedWinsServers)
-                Comparison  = 'Reihenfolge und Anzahl muessen exakt uebereinstimmen'
-            }) `
-            -Ist $networkResults `
-            -Quelle 'Direkt/PowerShell/Get-DnsClientServerAddress + NetBT NameServerList' `
-            -Hinweis 'Die Sollwerte sind rechnertyp-/projektspezifisch in Semaphore hinterlegt.'
-
-        # --------------------------------------------------------------
         # IPC0063 - Netzwerkermittlung und Datei-/Druckerfreigabe.
         # Geprueft wird der wirksame Firewall-Endzustand. Deutsche und
         # englische Anzeigenamen werden beruecksichtigt.
@@ -852,7 +743,7 @@
             }) `
             -Quelle 'Direkt/PowerShell/Get-NetFirewallRule ActiveStore'
 
-        # Gemeinsame UltraVNC-Dateipfade fuer IPC0066 und IPC0070.
+        # Gemeinsame UltraVNC-Dateipfade fuer IPC0070.
         $uvncRoots = @(
             'C:\Program Files\uvnc bvba\UltraVNC',
             'C:\Program Files\UltraVNC',
@@ -877,70 +768,72 @@
         $uvncRoots = @($uvncRoots | Select-Object -Unique)
 
         # --------------------------------------------------------------
-        # IPC0066 - File Transfer und User Impersonation deaktiviert.
+        # IPC0070 - nur UltraVNC Viewer; Version aus Semaphore.
         # --------------------------------------------------------------
-        $iniCandidates = @('C:\ProgramData\UltraVNC\ultravnc.ini')
-        foreach ($root in $uvncRoots) { $iniCandidates += (Join-Path $root 'ultravnc.ini') }
-        $iniPath = @($iniCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
-        $iniValues = [ordered]@{}
-        if ($iniPath.Count -gt 0) {
-            foreach ($line in @(Get-Content -LiteralPath $iniPath[0] -ErrorAction SilentlyContinue)) {
-                if ($line -match '^\s*([^;#\[=][^=]*)=(.*)$') {
-                    $iniValues[$Matches[1].Trim()] = $Matches[2].Trim()
+        $viewerPaths = @()
+        foreach ($root in $uvncRoots) {
+            $viewerPaths += (Join-Path $root 'vncviewer.exe')
+        }
+        $viewerExisting = @($viewerPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
+        $viewerVersions = @()
+        foreach ($viewerPath in $viewerExisting) {
+            try {
+                $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($viewerPath)
+                $viewerVersions += [pscustomobject][ordered]@{
+                    Path=$viewerPath
+                    FileVersion=[string]$versionInfo.FileVersion
+                    ProductVersion=[string]$versionInfo.ProductVersion
+                }
+            } catch {
+                $viewerVersions += [pscustomobject][ordered]@{
+                    Path=$viewerPath
+                    FileVersion=$null
+                    ProductVersion=$null
                 }
             }
         }
-        $ftPresent = $iniValues.Contains('FileTransferEnabled')
-        $impPresent = $iniValues.Contains('FTUserImpersonation')
-        if ($iniPath.Count -eq 0 -or -not $ftPresent -or -not $impPresent) {
-            $ipc0066Status = 'NICHT_PRUEFBAR'
+
+        $viewerPresent = ($viewerExisting.Count -gt 0)
+        $viewerPresenceOK = ($viewerPresent -eq $expectedUltraVncViewerInstalled)
+        $viewerVersionKnown = $true
+        $viewerVersionOK = $true
+        if ($expectedUltraVncViewerInstalled -and -not [string]::IsNullOrWhiteSpace($expectedUltraVncViewerVersionRegex)) {
+            $viewerVersionKnown = ($viewerVersions.Count -gt 0)
+            $viewerVersionOK = $viewerVersionKnown -and (@(
+                $viewerVersions | Where-Object {
+                    (([string]$_.FileVersion + ' ' + [string]$_.ProductVersion) -match $expectedUltraVncViewerVersionRegex)
+                }
+            ).Count -gt 0)
         }
-        elseif ([string]$iniValues['FileTransferEnabled'] -eq '0' -and [string]$iniValues['FTUserImpersonation'] -eq '0') {
-            $ipc0066Status = 'OK'
+
+        if (-not $viewerPresenceOK) {
+            $ipc0070Status = 'NOK'
+        }
+        elseif (-not $viewerVersionKnown) {
+            $ipc0070Status = 'NICHT_PRUEFBAR'
+        }
+        elseif ($viewerVersionOK) {
+            $ipc0070Status = 'OK'
         }
         else {
-            $ipc0066Status = 'NOK'
+            $ipc0070Status = 'NOK'
         }
-        $checks['IPC0066'] = New-ValidationResult `
-            -Id 'IPC0066' `
-            -Name 'VNC-Einstellungen konfigurieren - File Transfer' `
-            -Status $ipc0066Status `
-            -Soll ([ordered]@{ FileTransferEnabled='0'; FTUserImpersonation='0' }) `
-            -Ist ([ordered]@{
-                IniPath = if ($iniPath.Count -gt 0) { $iniPath[0] } else { $null }
-                FileTransferEnabled = if ($ftPresent) { $iniValues['FileTransferEnabled'] } else { $null }
-                FTUserImpersonation = if ($impPresent) { $iniValues['FTUserImpersonation'] } else { $null }
-            }) `
-            -Quelle 'Direkt/PowerShell/ultravnc.ini'
 
-        # --------------------------------------------------------------
-        # IPC0070 - UltraVNC Server und Viewer vorhanden.
-        # --------------------------------------------------------------
-        $serverPaths = @()
-        $viewerPaths = @()
-        foreach ($root in $uvncRoots) {
-            $serverPaths += (Join-Path $root 'winvnc.exe')
-            $viewerPaths += (Join-Path $root 'vncviewer.exe')
-        }
-        $serverExisting = @($serverPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
-        $viewerExisting = @($viewerPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
-        $serverPresent = ($serverExisting.Count -gt 0 -or $uvncServices.Count -gt 0)
-        $viewerPresent = ($viewerExisting.Count -gt 0)
-        $serverExpectationOK = ($serverPresent -eq $expectedUltraVncServerInstalled)
-        $viewerExpectationOK = ($viewerPresent -eq $expectedUltraVncViewerInstalled)
         $checks['IPC0070'] = New-ValidationResult `
             -Id 'IPC0070' `
             -Name 'UltraVNC Viewer installieren' `
-            -Status $(if ($serverExpectationOK -and $viewerExpectationOK) { 'OK' } else { 'NOK' }) `
-            -Soll ([ordered]@{ UltraVNCServer=$expectedUltraVncServerInstalled; UltraVNCViewer=$expectedUltraVncViewerInstalled }) `
-            -Ist ([ordered]@{
-                ServerPresent=$serverPresent
-                ViewerPresent=$viewerPresent
-                ServerPaths=@($serverExisting)
-                ViewerPaths=@($viewerExisting)
-                Services=@($uvncServices | Select-Object Name,DisplayName,State,StartMode,PathName)
+            -Status $ipc0070Status `
+            -Soll ([ordered]@{
+                UltraVNCViewer=$expectedUltraVncViewerInstalled
+                VersionRegex=$expectedUltraVncViewerVersionRegex
             }) `
-            -Quelle 'Direkt/PowerShell/Dateisystem + Win32_Service'
+            -Ist ([ordered]@{
+                ViewerPresent=$viewerPresent
+                ViewerPaths=@($viewerExisting)
+                ViewerVersions=@($viewerVersions)
+            }) `
+            -Quelle 'Direkt/PowerShell/vncviewer.exe FileVersion' `
+            -Hinweis 'IPC0070 bewertet bewusst nur den Viewer; der Server wird hier nicht als Voraussetzung verwendet.'
 
         # --------------------------------------------------------------
         # IPC0073 - Restore-Image-Ordner muss geloescht sein.
@@ -1035,9 +928,8 @@
             -Hinweis 'HKCU bezieht sich auf den Benutzer, unter dem WinRM ausgefuehrt wird.'
 
         # --------------------------------------------------------------
-        # IPC0077 - Microsoft-Edge-Verknuepfung loeschen.
-        # Der Dateizustand ist direkt lesbar; die konkrete REG-Datei/Policy
-        # wird ohne bekanntes Schema nur als Evidenz ausgegeben.
+        # IPC0077 - Edge-Desktopverknuepfungen entfernt und erneute
+        # Erstellung bei Installation/Updates verhindert.
         # --------------------------------------------------------------
         $edgeShortcuts = @()
         foreach ($desktopDir in $desktopDirs) {
@@ -1048,15 +940,43 @@
                 Select-Object Name, BaseName, FullName
             )
         }
-        $information['IPC0077'] = New-InformationResult `
+
+        $edgeUpdatePolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\EdgeUpdate'
+        $createShortcutDefault = $null
+        $removeShortcutDefault = $null
+        if (Test-Path -LiteralPath $edgeUpdatePolicyPath) {
+            $edgeUpdatePolicy = Get-ItemProperty -LiteralPath $edgeUpdatePolicyPath -ErrorAction SilentlyContinue
+            if ($edgeUpdatePolicy -and $edgeUpdatePolicy.PSObject.Properties.Name -contains 'CreateDesktopShortcutDefault') {
+                $createShortcutDefault = [int]$edgeUpdatePolicy.CreateDesktopShortcutDefault
+            }
+            if ($edgeUpdatePolicy -and $edgeUpdatePolicy.PSObject.Properties.Name -contains 'RemoveDesktopShortcutDefault') {
+                $removeShortcutDefault = [int]$edgeUpdatePolicy.RemoveDesktopShortcutDefault
+            }
+        }
+
+        $shortcutAbsent = (@($edgeShortcuts).Count -eq 0)
+        $createPrevented = ($createShortcutDefault -eq 0)
+        $removeOnUpdate = ($removeShortcutDefault -in @(1,2))
+        $ipc0077OK = $shortcutAbsent -and $createPrevented -and $removeOnUpdate
+
+        $checks['IPC0077'] = New-ValidationResult `
             -Id 'IPC0077' `
             -Name 'Microsoft Edge Verknuepfung loeschen' `
+            -Status $(if ($ipc0077OK) { 'OK' } else { 'NOK' }) `
+            -Soll ([ordered]@{
+                DesktopShortcutAbsent=$true
+                CreateDesktopShortcutDefault=0
+                RemoveDesktopShortcutDefault='1 oder 2'
+            }) `
             -Ist ([ordered]@{
                 EdgeShortcuts=@($edgeShortcuts)
-                ShortcutAbsent=(@($edgeShortcuts).Count -eq 0)
+                ShortcutAbsent=$shortcutAbsent
+                RegistryPath=$edgeUpdatePolicyPath
+                CreateDesktopShortcutDefault=$createShortcutDefault
+                RemoveDesktopShortcutDefault=$removeShortcutDefault
             }) `
-            -Quelle 'Direkt/PowerShell/Desktop und CommonDesktop' `
-            -Hinweis 'Verknuepfungszustand wird direkt ausgegeben; der genaue Registry-Wert der verwendeten REG-Datei ist nicht vorgegeben.'
+            -Quelle 'Direkt/PowerShell/Desktop + Microsoft Edge Update Policy' `
+            -Hinweis 'Die Policywerte verhindern die automatische Neuerstellung bzw. entfernen Edge-Desktopverknuepfungen bei Updates.'
 
         # IPC0083 - Bildschirmschoner fuer OS Server.
         $screenPolicyPath = 'HKCU:\Software\Policies\Microsoft\Windows\Control Panel\Desktop'
@@ -1099,7 +1019,29 @@
             -Quelle 'Direkt/PowerShell/HKCU ScreenSaver Policy + Control Panel Desktop' `
             -Hinweis 'Bildschirmschonerwerte sind benutzerbezogen; geprueft wird der Benutzer der WinRM-Verbindung.'
 
-        # IPC0087 - effektive AC-Energieparameter des aktiven Plans.
+
+        # IPC0084 - Gegenpruefung "Bildschirmschoner deaktiviert".
+        # Ist der Bildschirmschoner deaktiviert, wird IPC0083 NOK und
+        # IPC0084 OK. Damit bleibt der reale Endzustand transparent.
+        if (-not $screenKnown) {
+            $ipc0084Status = 'NICHT_PRUEFBAR'
+        }
+        elseif ([string]$screenActive.Value -eq '0') {
+            $ipc0084Status = 'OK'
+        }
+        else {
+            $ipc0084Status = 'NOK'
+        }
+        $checks['IPC0084'] = New-ValidationResult `
+            -Id 'IPC0084' `
+            -Name 'Bildschirmschoner deaktivieren' `
+            -Status $ipc0084Status `
+            -Soll ([ordered]@{ ScreenSaveActive=0 }) `
+            -Ist ([ordered]@{ ScreenSaveActive=$screenActive; RunAsUser=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name }) `
+            -Quelle 'Direkt/PowerShell/HKCU ScreenSaver Policy + Control Panel Desktop' `
+            -Hinweis 'Diese Gegenpruefung zeigt explizit, ob der Bildschirmschoner deaktiviert ist.'
+
+        # IPC0087 - aktiver Plan + Display/Disk niemals ausschalten.
         function Get-PowerCfgCurrentIndexes {
             param([string]$SubGroup, [string]$Setting)
             $raw = @(& powercfg.exe /query SCHEME_CURRENT $SubGroup $Setting 2>&1)
@@ -1110,21 +1052,66 @@
             $dc = [Convert]::ToInt64($hexValues[$hexValues.Count - 1].Substring(2), 16)
             [pscustomobject]@{ Succeeded=$true; ACSeconds=$ac; DCSeconds=$dc; Raw=@($raw) }
         }
+
+        $activePlan = $null
+        try {
+            $activePlan = Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerPlan -Filter "IsActive='True'" -ErrorAction Stop |
+                Select-Object -First 1 ElementName,InstanceID,IsActive
+        } catch { }
+
         $displayTimeout = Get-PowerCfgCurrentIndexes 'SUB_VIDEO' 'VIDEOIDLE'
         $diskTimeout = Get-PowerCfgCurrentIndexes 'SUB_DISK' 'DISKIDLE'
         $expectedDisplaySeconds = $expectedDisplayTimeoutAcMinutes * 60
         $expectedDiskSeconds = $expectedDiskTimeoutAcMinutes * 60
+        $planName = if ($activePlan) { [string]$activePlan.ElementName } else { $null }
+        $planInstanceId = if ($activePlan) { [string]$activePlan.InstanceID } else { $null }
+        $planGuid = $null
+        if ($planInstanceId -match '\{([0-9A-Fa-f-]{36})\}') { $planGuid = $Matches[1].ToLowerInvariant() }
+        $planKnown = -not [string]::IsNullOrWhiteSpace($planName)
+        if (-not [string]::IsNullOrWhiteSpace($expectedPowerPlanGuid)) {
+            $planOK = ($null -ne $planGuid -and $planGuid -ieq $expectedPowerPlanGuid.Trim('{}'))
+        }
+        else {
+            $planOK = $planKnown -and ($planName -match $expectedPowerPlanNameRegex)
+        }
         $powerDetailKnown = ($displayTimeout.Succeeded -and $diskTimeout.Succeeded)
-        $powerDetailOK = $powerDetailKnown -and ([int64]$displayTimeout.ACSeconds -eq [int64]$expectedDisplaySeconds) -and ([int64]$diskTimeout.ACSeconds -eq [int64]$expectedDiskSeconds)
-        $ipc0087Status = if (-not $powerDetailKnown) { 'NICHT_PRUEFBAR' } elseif ($powerDetailOK) { 'OK' } else { 'NOK' }
+        $timeoutsOK = $powerDetailKnown -and
+            ([int64]$displayTimeout.ACSeconds -eq [int64]$expectedDisplaySeconds) -and
+            ([int64]$diskTimeout.ACSeconds -eq [int64]$expectedDiskSeconds)
+
+        if (-not $planKnown -or -not $powerDetailKnown) {
+            $ipc0087Status = 'NICHT_PRUEFBAR'
+        }
+        elseif ($planOK -and $timeoutsOK) {
+            $ipc0087Status = 'OK'
+        }
+        else {
+            $ipc0087Status = 'NOK'
+        }
+
         $checks['IPC0087'] = New-ValidationResult `
             -Id 'IPC0087' `
             -Name 'Energieoptionen auf Hoechstleistung setzen' `
             -Status $ipc0087Status `
-            -Soll ([ordered]@{ ComputerType='OS_Server'; DisplayTimeoutACMinutes=$expectedDisplayTimeoutAcMinutes; DiskTimeoutACMinutes=$expectedDiskTimeoutAcMinutes }) `
-            -Ist ([ordered]@{ DisplayTimeoutACSeconds=$displayTimeout.ACSeconds; DisplayTimeoutDCSeconds=$displayTimeout.DCSeconds; DiskTimeoutACSeconds=$diskTimeout.ACSeconds; DiskTimeoutDCSeconds=$diskTimeout.DCSeconds }) `
-            -Quelle 'Direkt/PowerShell/powercfg /query SCHEME_CURRENT' `
-            -Hinweis 'Der aktive Planname wird separat durch IPC0088 geprueft; IPC0087 bewertet die wirksamen AC-Timeouts.'
+            -Soll ([ordered]@{
+                ComputerType='OS_Server'
+                ActivePlanNameRegex=$expectedPowerPlanNameRegex
+                ActivePlanGuid=$expectedPowerPlanGuid
+                DisplayTimeoutACMinutes=$expectedDisplayTimeoutAcMinutes
+                DiskTimeoutACMinutes=$expectedDiskTimeoutAcMinutes
+            }) `
+            -Ist ([ordered]@{
+                ActivePowerPlan=$activePlan
+                PlanName=$planName
+                PlanGuid=$planGuid
+                PlanMatches=$planOK
+                DisplayTimeoutACSeconds=$displayTimeout.ACSeconds
+                DisplayTimeoutDCSeconds=$displayTimeout.DCSeconds
+                DiskTimeoutACSeconds=$diskTimeout.ACSeconds
+                DiskTimeoutDCSeconds=$diskTimeout.DCSeconds
+            }) `
+            -Quelle 'Direkt/PowerShell/Win32_PowerPlan + powercfg /query SCHEME_CURRENT' `
+            -Hinweis 'IPC0087 bewertet den aktiven Energiesparplan sowie Display- und Festplatten-AC-Timeout gemeinsam.'
 
         # IPC0089 - Starten und Wiederherstellen.
         $bcdBootMgr = @(& bcdedit.exe /enum '{bootmgr}' 2>&1)
@@ -1148,6 +1135,237 @@
             -Ist ([ordered]@{ BootManagerTimeout=$bootTimeout; DisplayBootMenu=$displayBootMenu; OperatingSystemListDisabled=$bootListDisabled; RecoveryOptionsDisplaySeconds=$null; RecoveryOptionsDisplaySecondsEvaluation='NICHT_BELASTBAR_DIREKT_AUSLESBAR'; AutoReboot=$autoReboot; BcdEditRaw=@($bcdBootMgr) }) `
             -Quelle 'Direkt/PowerShell/bcdedit + Win32_OSRecoveryConfiguration' `
             -Hinweis 'Die 5-s-Wiederherstellungsanzeige wird nicht erfunden. Wenn Bootliste und AutoReboot korrekt sind, bleibt IPC0089 deshalb NICHT_PRUEFBAR statt faelschlich OK.'
+
+        # --------------------------------------------------------------
+        # IPC0094 / IPC0095 - Zertifikatpfad-/Root-AutoUpdate-Richtlinien.
+        # Direkte Registrypruefung als belastbarer Fallback zum GPO-Snapshot.
+        # --------------------------------------------------------------
+        $chainConfigPath = 'HKLM:\SOFTWARE\Policies\Microsoft\SystemCertificates\ChainEngine\Config'
+        $chainConfigExists = Test-Path -LiteralPath $chainConfigPath
+        $chainOptions = $null
+        if ($chainConfigExists) {
+            $chainConfig = Get-ItemProperty -LiteralPath $chainConfigPath -ErrorAction SilentlyContinue
+            if ($chainConfig -and $chainConfig.PSObject.Properties.Name -contains 'Options') {
+                $chainOptions = $chainConfig.Options
+            }
+        }
+        $ipc0094Status = if (-not $chainConfigExists) { 'NOK' } elseif ($null -eq $chainOptions) { 'NOK' } else { 'OK' }
+        $checks['IPC0094'] = New-ValidationResult `
+            -Id 'IPC0094' `
+            -Name 'Einstellungen fuer die Ueberpruefung des Zertifikatpfades - Netzwerkabruf definieren' `
+            -Status $ipc0094Status `
+            -Soll ([ordered]@{ PolicyDefined=$true; RegistryPath=$chainConfigPath; OptionsValuePresent=$true }) `
+            -Ist ([ordered]@{ RegistryPath=$chainConfigPath; Exists=$chainConfigExists; Options=$chainOptions }) `
+            -Quelle 'Direkt/PowerShell/Registry ChainEngine\\Config'
+
+        $authRootPath = 'HKLM:\SOFTWARE\Wow6432Node\Policies\Microsoft\SystemCertificates\AuthRoot'
+        $authRootExists = Test-Path -LiteralPath $authRootPath
+        $disableRootAutoUpdate = $null
+        if ($authRootExists) {
+            $authRoot = Get-ItemProperty -LiteralPath $authRootPath -ErrorAction SilentlyContinue
+            if ($authRoot -and $authRoot.PSObject.Properties.Name -contains 'DisableRootAutoUpdate') {
+                $disableRootAutoUpdate = [int]$authRoot.DisableRootAutoUpdate
+            }
+        }
+        $ipc0095Status = if ($null -eq $disableRootAutoUpdate) { 'NOK' } elseif ($disableRootAutoUpdate -eq 0) { 'OK' } else { 'NOK' }
+        $checks['IPC0095'] = New-ValidationResult `
+            -Id 'IPC0095' `
+            -Name 'DisableRootAutoUpdate auf 0 setzen' `
+            -Status $ipc0095Status `
+            -Soll ([ordered]@{ RegistryPath=$authRootPath; DisableRootAutoUpdate=0 }) `
+            -Ist ([ordered]@{ RegistryPath=$authRootPath; Exists=$authRootExists; DisableRootAutoUpdate=$disableRootAutoUpdate }) `
+            -Quelle 'Direkt/PowerShell/Registry AuthRoot'
+
+        # --------------------------------------------------------------
+        # IPC0148 - Computerschutz/System Restore deaktiviert.
+        # --------------------------------------------------------------
+        $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+        $osCaption = if ($osInfo) { [string]$osInfo.Caption } else { $null }
+        $isWindows10 = ($osInfo -and ($osCaption -match '(?i)\bWindows\s+10\b'))
+
+        if ($systemRestoreWindows10Only -and -not $isWindows10) {
+            $checks['IPC0148'] = New-ValidationResult `
+                -Id 'IPC0148' `
+                -Name 'Computerschutz deaktivieren' `
+                -Status 'IGNORIERT' `
+                -Soll ([ordered]@{ Windows10Only=$true; Disabled=$expectedSystemRestoreDisabled }) `
+                -Ist ([ordered]@{ OSCaption=$osCaption }) `
+                -Quelle 'Direkt/PowerShell/SystemRestore' `
+                -Hinweis 'Laut Sollwert nur fuer Windows-10-Systeme relevant.'
+        }
+        else {
+            $srPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore'
+            $disableSr = $null
+            $disableConfig = $null
+            if (Test-Path -LiteralPath $srPolicyPath) {
+                $srPolicy = Get-ItemProperty -LiteralPath $srPolicyPath -ErrorAction SilentlyContinue
+                if ($srPolicy -and $srPolicy.PSObject.Properties.Name -contains 'DisableSR') { $disableSr = [int]$srPolicy.DisableSR }
+                if ($srPolicy -and $srPolicy.PSObject.Properties.Name -contains 'DisableConfig') { $disableConfig = [int]$srPolicy.DisableConfig }
+            }
+
+            $srConfig = $null
+            try {
+                $srConfig = Get-CimInstance -Namespace root/default -ClassName SystemRestoreConfig -ErrorAction Stop
+            } catch { }
+
+            $srDisabled = $null
+            $sourceDecision = $null
+            if ($null -ne $disableSr) {
+                $srDisabled = ($disableSr -eq 1)
+                $sourceDecision = 'DisableSR policy'
+            }
+            elseif ($srConfig -and $null -ne $srConfig.RPSessionInterval) {
+                $srDisabled = ([uint64]$srConfig.RPSessionInterval -eq 0)
+                $sourceDecision = 'SystemRestoreConfig.RPSessionInterval'
+            }
+
+            $ipc0148Status = if ($null -eq $srDisabled) {
+                'NICHT_PRUEFBAR'
+            }
+            elseif ($srDisabled -eq $expectedSystemRestoreDisabled) {
+                'OK'
+            }
+            else {
+                'NOK'
+            }
+
+            $checks['IPC0148'] = New-ValidationResult `
+                -Id 'IPC0148' `
+                -Name 'Computerschutz deaktivieren' `
+                -Status $ipc0148Status `
+                -Soll ([ordered]@{ Disabled=$expectedSystemRestoreDisabled }) `
+                -Ist ([ordered]@{
+                    OSCaption=$osCaption
+                    DisableSR=$disableSr
+                    DisableConfig=$disableConfig
+                    RPSessionInterval=if($srConfig){$srConfig.RPSessionInterval}else{$null}
+                    DecisionSource=$sourceDecision
+                    Disabled=$srDisabled
+                }) `
+                -Quelle 'Direkt/PowerShell/SystemRestore policy + SystemRestoreConfig'
+        }
+
+        # --------------------------------------------------------------
+        # IPC0152 - Datenschutz-Einstellungen als echte Sollwertpruefung.
+        # Die konkrete Baseline ist absichtlich Semaphore-gesteuert, da
+        # die verfuegbaren Privacy-Schalter von Windows-Version und Image
+        # abhaengen koennen.
+        # --------------------------------------------------------------
+        $privacyResults = @()
+        $privacyAllOK = $true
+        $privacyConfigured = (@($privacyExpectations).Count -gt 0)
+
+        foreach ($spec in @($privacyExpectations)) {
+            $path = [string]$spec.path
+            $name = [string]$spec.name
+            $expectedValue = $spec.expected_value
+            $exists = $false
+            $actualValue = $null
+            $readError = $null
+
+            try {
+                if (Test-Path -LiteralPath $path) {
+                    $item = Get-ItemProperty -LiteralPath $path -ErrorAction Stop
+                    if ($item.PSObject.Properties.Name -contains $name) {
+                        $exists = $true
+                        $actualValue = $item.$name
+                    }
+                }
+            }
+            catch {
+                $readError = $_.Exception.Message
+            }
+
+            $entryOK = $exists -and ([string]$actualValue -eq [string]$expectedValue)
+            if (-not $entryOK) { $privacyAllOK = $false }
+
+            $privacyResults += [pscustomobject][ordered]@{
+                Path=$path
+                Name=$name
+                ExpectedValue=$expectedValue
+                Exists=$exists
+                ActualValue=$actualValue
+                OK=$entryOK
+                Error=$readError
+            }
+        }
+
+        if (-not $privacyConfigured) {
+            $ipc0152Status = 'NICHT_PRUEFBAR'
+        }
+        elseif ($privacyAllOK) {
+            $ipc0152Status = 'OK'
+        }
+        else {
+            $ipc0152Status = 'NOK'
+        }
+
+        $checks['IPC0152'] = New-ValidationResult `
+            -Id 'IPC0152' `
+            -Name 'Datenschutz-Einstellungen deaktivieren' `
+            -Status $ipc0152Status `
+            -Soll ([ordered]@{ RegistryExpectations=@($privacyExpectations) }) `
+            -Ist ([ordered]@{
+                User=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                Results=@($privacyResults)
+            }) `
+            -Quelle 'Direkt/PowerShell/Windows Privacy Registry' `
+            -Hinweis 'Ohne hardening.privacy.registry_expectations wird kein pauschaler Privacy-Sollwert erfunden.'
+
+        # --------------------------------------------------------------
+        # IPC0166 - Windows-Firewall fuer alle geforderten Profile aktiv
+        # und alle aktuell zugeordneten Netzwerkprofile auf Private.
+        # --------------------------------------------------------------
+        $firewallProfiles = @(Get-NetFirewallProfile -ErrorAction SilentlyContinue |
+            Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction)
+        $connectionProfiles = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue |
+            Select-Object InterfaceAlias,InterfaceIndex,Name,NetworkCategory,IPv4Connectivity,IPv6Connectivity)
+
+        $missingFirewallProfiles = @()
+        $disabledFirewallProfiles = @()
+        foreach ($requiredProfile in @($expectedFirewallProfiles)) {
+            $matching = @($firewallProfiles | Where-Object { [string]$_.Name -ieq [string]$requiredProfile })
+            if ($matching.Count -eq 0) {
+                $missingFirewallProfiles += [string]$requiredProfile
+                continue
+            }
+            foreach ($profile in $matching) {
+                if (-not [bool]$profile.Enabled) {
+                    $disabledFirewallProfiles += [string]$profile.Name
+                }
+            }
+        }
+        $nonPrivateProfiles = @($connectionProfiles | Where-Object {
+            [string]$_.NetworkCategory -ine [string]$expectedNetworkCategory
+        })
+
+        if ($firewallProfiles.Count -eq 0 -or $connectionProfiles.Count -eq 0) {
+            $ipc0166Status = 'NICHT_PRUEFBAR'
+        }
+        elseif ($missingFirewallProfiles.Count -gt 0 -or $disabledFirewallProfiles.Count -gt 0 -or $nonPrivateProfiles.Count -gt 0) {
+            $ipc0166Status = 'NOK'
+        }
+        else {
+            $ipc0166Status = 'OK'
+        }
+
+        $checks['IPC0166'] = New-ValidationResult `
+            -Id 'IPC0166' `
+            -Name 'Windows-Firewall' `
+            -Status $ipc0166Status `
+            -Soll ([ordered]@{
+                RequiredFirewallProfilesEnabled=@($expectedFirewallProfiles)
+                NetworkCategory=$expectedNetworkCategory
+            }) `
+            -Ist ([ordered]@{
+                FirewallProfiles=@($firewallProfiles)
+                ConnectionProfiles=@($connectionProfiles)
+                MissingFirewallProfiles=@($missingFirewallProfiles)
+                DisabledFirewallProfiles=@($disabledFirewallProfiles)
+                NonPrivateConnectionProfiles=@($nonPrivateProfiles)
+            }) `
+            -Quelle 'Direkt/PowerShell/Get-NetFirewallProfile + Get-NetConnectionProfile' `
+            -Hinweis 'Nur Netzwerkprofile mit einer aktuellen Windows-Netzwerkprofilzuordnung koennen als Domain/Private/Public bewertet werden.'
 
         # --------------------------------------------------------------
         # IPC0160 / IPC0161 - aktive TLS Cipher Suites.
@@ -1236,157 +1454,270 @@
         $projectExists = Test-Path -LiteralPath $projectPath -PathType Container
         $checks['IPC0167'] = New-ValidationResult `
             -Id 'IPC0167' `
-            -Name 'D:\Projekt erstellen' `
+            -Name 'D:\Projekt vorhanden' `
             -Status $(if($projectExists){'OK'}else{'NOK'}) `
             -Soll ([ordered]@{ Path=$projectPath; Exists=$true }) `
             -Ist ([ordered]@{ Path=$projectPath; Exists=$projectExists }) `
             -Quelle 'Direkt/PowerShell/Test-Path'
 
         # --------------------------------------------------------------
-        # IPC0182 / IPC0183 - BGSiVaaS lokal + Autostart + RunAsUser-Flag.
-        # Shell-Link LinkFlags liegen bei Offset 0x14; Bit 0x2000 = RunAsUser.
+        # IPC0168 - D:\Projekt Freigabe- und NTFS-Berechtigungen.
+        # --------------------------------------------------------------
+        $projectSpec = $filesystemExpected.project_share
+        $projectShareName = [string]$projectSpec.share_name
+        $projectFolder = [string]$projectSpec.path
+        $projectFolderExists = Test-Path -LiteralPath $projectFolder -PathType Container
+        $projectShare = $null
+        $projectShareAccess = @()
+        $projectAcl = $null
+        $shareReadOK = $false
+        $aclReadOK = $false
+
+        if ($projectFolderExists) {
+            try { $projectShare = Get-SmbShare -Name $projectShareName -ErrorAction Stop } catch { }
+            if ($projectShare) {
+                try {
+                    $projectShareAccess = @(Get-SmbShareAccess -Name $projectShareName -ErrorAction Stop)
+                    $shareReadOK = $true
+                } catch { }
+            }
+            try {
+                $projectAcl = Get-Acl -LiteralPath $projectFolder -ErrorAction Stop
+                $aclReadOK = $true
+            } catch { }
+        }
+
+        $sharePermissionEvaluation = @()
+        foreach ($req in @($projectSpec.share_permissions)) {
+            $matches = @($projectShareAccess | Where-Object {
+                ([string]$_.AccountName -match [string]$req.identity_regex) -and
+                ([string]$_.AccessControlType -notmatch '(?i)Deny') -and
+                ([string]$_.AccessRight -ieq [string]$req.access_right)
+            })
+            $sharePermissionEvaluation += [pscustomobject][ordered]@{
+                IdentityRegex=[string]$req.identity_regex
+                RequiredAccessRight=[string]$req.access_right
+                MatchingEntries=@($matches | Select-Object AccountName,AccessControlType,AccessRight)
+                Compliant=($matches.Count -gt 0)
+            }
+        }
+
+        $ntfsPermissionEvaluation = @()
+        foreach ($req in @($projectSpec.ntfs_permissions)) {
+            $matches = @()
+            if ($projectAcl) {
+                $matches = @($projectAcl.Access | Where-Object {
+                    ([string]$_.AccessControlType -ieq 'Allow') -and
+                    ([string]$_.IdentityReference -match [string]$req.identity_regex)
+                })
+            }
+            $compliantMatches = @($matches | Where-Object {
+                $rightsText = [string]$_.FileSystemRights
+                $allRights = $true
+                foreach ($requiredRight in @($req.required_rights)) {
+                    if ($rightsText -notmatch [regex]::Escape([string]$requiredRight)) {
+                        $allRights = $false
+                        break
+                    }
+                }
+                $allRights
+            })
+            $ntfsPermissionEvaluation += [pscustomobject][ordered]@{
+                IdentityRegex=[string]$req.identity_regex
+                RequiredRights=@($req.required_rights)
+                MatchingEntries=@($matches | Select-Object IdentityReference,FileSystemRights,AccessControlType,IsInherited)
+                Compliant=($compliantMatches.Count -gt 0)
+            }
+        }
+
+        $sharePathOK = ($projectShare -and ([string]$projectShare.Path).TrimEnd('\') -ieq $projectFolder.TrimEnd('\'))
+        $sharePermissionsOK = ($sharePermissionEvaluation.Count -eq @($projectSpec.share_permissions).Count -and @($sharePermissionEvaluation | Where-Object { -not $_.Compliant }).Count -eq 0)
+        $ntfsPermissionsOK = ($ntfsPermissionEvaluation.Count -eq @($projectSpec.ntfs_permissions).Count -and @($ntfsPermissionEvaluation | Where-Object { -not $_.Compliant }).Count -eq 0)
+
+        if (-not $projectFolderExists -or -not $projectShare) {
+            $ipc0168Status = 'NOK'
+        }
+        elseif (-not $shareReadOK -or -not $aclReadOK) {
+            $ipc0168Status = 'NICHT_PRUEFBAR'
+        }
+        elseif ($sharePathOK -and $sharePermissionsOK -and $ntfsPermissionsOK) {
+            $ipc0168Status = 'OK'
+        }
+        else {
+            $ipc0168Status = 'NOK'
+        }
+
+        $projectShareSummary = if ($projectShare) { $projectShare | Select-Object Name,Path,Description,ShareState } else { $null }
+        $projectNtfsOwner = if ($projectAcl) { [string]$projectAcl.Owner } else { $null }
+
+        $checks['IPC0168'] = New-ValidationResult `
+            -Id 'IPC0168' `
+            -Name 'D:\Projekt Freigabe- und NTFS-Berechtigungen' `
+            -Status $ipc0168Status `
+            -Soll $projectSpec `
+            -Ist ([ordered]@{
+                FolderExists=$projectFolderExists
+                Share=$projectShareSummary
+                SharePermissions=@($projectShareAccess | Select-Object AccountName,AccessControlType,AccessRight)
+                SharePermissionEvaluation=@($sharePermissionEvaluation)
+                NtfsOwner=$projectNtfsOwner
+                NtfsPermissionEvaluation=@($ntfsPermissionEvaluation)
+            }) `
+            -Quelle 'Direkt/PowerShell/Get-SmbShare + Get-SmbShareAccess + Get-Acl' `
+            -Hinweis 'Zusaetzliche geerbte Standard-ACEs sind zulaessig; alle geforderten Rechte muessen vorhanden sein.'
+
+        # --------------------------------------------------------------
+        # IPC0182 - BGSiVaaS lokal unter C:\Programme\Siemens vorhanden.
+        # IPC0183/IPC0184 - kompakte Ausfuehrungs-/Autorun-Evidenz.
         # --------------------------------------------------------------
         $bgSpec = $toolsExpected.bgsivaas
         $bgExePath = [string]$bgSpec.executable_path
-        $bgExeExists = Test-Path -LiteralPath $bgExePath -PathType Leaf
+        $bgInstallPath = [string]$bgSpec.install_path
+        if ([string]::IsNullOrWhiteSpace($bgInstallPath)) {
+            if (-not [string]::IsNullOrWhiteSpace($bgExePath)) { $bgInstallPath = Split-Path -Parent $bgExePath }
+            else { $bgInstallPath = 'C:\Programme\Siemens\BGSiVaaS' }
+        }
+        $bgInstallExists = (Test-Path -LiteralPath $bgInstallPath) -or (-not [string]::IsNullOrWhiteSpace($bgExePath) -and (Test-Path -LiteralPath $bgExePath -PathType Leaf))
+        $checks['IPC0182'] = New-ValidationResult `
+            -Id 'IPC0182' `
+            -Name 'BGSiVaaS lokal vorhanden' `
+            -Status $(if($bgInstallExists){'OK'}else{'NOK'}) `
+            -Soll ([ordered]@{ InstallPath=$bgInstallPath; Exists=$true }) `
+            -Ist ([ordered]@{ InstallPath=$bgInstallPath; ExecutablePath=$bgExePath; Exists=$bgInstallExists }) `
+            -Quelle 'Direkt/PowerShell/Test-Path'
+
         $startupDirs = @(
             [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonStartup),
             [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
         ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }
-
         $bgStartupItems = @()
         $shell = $null
         try { $shell = New-Object -ComObject WScript.Shell } catch { }
-
         foreach ($startupDir in $startupDirs) {
             foreach ($file in @(Get-ChildItem -LiteralPath $startupDir -File -Force -ErrorAction SilentlyContinue)) {
-                $targetPath = $null
-                $arguments = $null
-                $runAsUser = $null
-
+                $targetPath = $null; $arguments = $null; $runAsUser = $null
                 if ($file.Extension -ieq '.lnk' -and $shell) {
                     try {
                         $shortcut = $shell.CreateShortcut($file.FullName)
                         $targetPath = [string]$shortcut.TargetPath
                         $arguments = [string]$shortcut.Arguments
                     } catch { }
-
                     try {
                         $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
                         if ($bytes.Length -ge 24) {
-                            $linkFlags = [BitConverter]::ToUInt32($bytes, 20)
+                            $linkFlags = [BitConverter]::ToUInt32($bytes,20)
                             $runAsUser = (($linkFlags -band 0x00002000) -ne 0)
                         }
                     } catch { }
                 }
-
                 $searchable = ([string]$file.Name + ' ' + [string]$targetPath + ' ' + [string]$arguments)
-                if ($searchable -match [string]$bgSpec.startup_target_regex) {
+                if ($searchable -match '(?i)BGSiVaaS|BGInfo') {
                     $bgStartupItems += [pscustomobject][ordered]@{
+                        Source='Startup'
                         Name=$file.Name
                         FullName=$file.FullName
                         TargetPath=$targetPath
                         Arguments=$arguments
-                        RunAsUser=$runAsUser
+                        RunAsAdministrator=$runAsUser
                     }
                 }
             }
         }
 
-        $startupRequired = [bool]$bgSpec.startup_required
-        $bgStartupOk = if ($startupRequired) { $bgStartupItems.Count -gt 0 } else { $true }
-        $ipc0182Ok = ($bgExeExists -and $bgStartupOk)
-        $checks['IPC0182'] = New-ValidationResult `
-            -Id 'IPC0182' `
-            -Name 'BGInfo/BGSiVaaS' `
-            -Status $(if($ipc0182Ok){'OK'}else{'NOK'}) `
-            -Soll ([ordered]@{
-                ExecutablePath=$bgExePath
-                StartupRequired=$startupRequired
-            }) `
-            -Ist ([ordered]@{
-                ExecutableExists=$bgExeExists
-                StartupItems=@($bgStartupItems)
-            }) `
-            -Quelle 'Direkt/PowerShell/Test-Path + Startup Shell Links'
+        $bgProcesses = @()
+        foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ([string]$_.Name -ieq 'BGSiVaas.exe') -or ([string]$_.ExecutablePath -match '(?i)BGSiVaaS') })) {
+            $owner = $null
+            try {
+                $ownerResult = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
+                if ($ownerResult.ReturnValue -eq 0) { $owner = (([string]$ownerResult.Domain) + '\' + ([string]$ownerResult.User)).Trim('\') }
+            } catch { }
+            $bgProcesses += [pscustomobject][ordered]@{
+                Source='RunningProcess'
+                Name=[string]$proc.Name
+                ProcessId=$proc.ProcessId
+                ExecutablePath=[string]$proc.ExecutablePath
+                CommandLine=[string]$proc.CommandLine
+                Owner=$owner
+                Running=$true
+            }
+        }
 
-        $runAsRequired = [bool]$bgSpec.run_as_administrator
-        if ($bgStartupItems.Count -eq 0) {
-            $ipc0183Status = 'NICHT_PRUEFBAR'
+        $bgPrefetch = @()
+        if (Test-Path -LiteralPath 'C:\Windows\Prefetch' -PathType Container) {
+            $bgPrefetch = @(Get-ChildItem -LiteralPath 'C:\Windows\Prefetch' -Filter 'BGSIVAAS*.pf' -File -ErrorAction SilentlyContinue | Select-Object Name,FullName,LastWriteTimeUtc)
         }
-        elseif ($runAsRequired) {
-            if (@($bgStartupItems | Where-Object { $_.RunAsUser -eq $false }).Count -gt 0) {
-                $ipc0183Status = 'NOK'
-            }
-            elseif (@($bgStartupItems | Where-Object { $null -eq $_.RunAsUser }).Count -gt 0) {
-                $ipc0183Status = 'NICHT_PRUEFBAR'
-            }
-            else {
-                $ipc0183Status = 'OK'
-            }
-        }
-        else {
-            if (@($bgStartupItems | Where-Object { $_.RunAsUser -eq $true }).Count -gt 0) {
-                $ipc0183Status = 'NOK'
-            }
-            elseif (@($bgStartupItems | Where-Object { $null -eq $_.RunAsUser }).Count -gt 0) {
-                $ipc0183Status = 'NICHT_PRUEFBAR'
-            }
-            else {
-                $ipc0183Status = 'OK'
-            }
-        }
-        $checks['IPC0183'] = New-ValidationResult `
-            -Id 'IPC0183' `
-            -Name 'BGInfo/BGSiVaaS - Als Administrator ausfuehren' `
-            -Status $ipc0183Status `
-            -Soll ([ordered]@{ RunAsAdministrator=$runAsRequired }) `
-            -Ist @($bgStartupItems) `
-            -Quelle 'Direkt/PowerShell/Shell-Link LinkFlags RunAsUser'
-
-        # --------------------------------------------------------------
-        # IPC0184 - Hintergrundbild/BGSiVaaS.
-        # Benutzerfreigabe: Es reicht als technische Sollwertpruefung,
-        # dass BGSiVaaS.exe aktuell ausgefuehrt wird.
-        # --------------------------------------------------------------
-        $bgProcesses = @(
-            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
-                ([string]$_.Name -ieq 'BGSiVaas.exe') -or
-                (
-                    -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
-                    [string]$_.ExecutablePath -ieq $bgExePath
-                )
-            } |
-            ForEach-Object {
+        $bgLocalUsers = @()
+        try {
+            $adminGroup = Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop
+            $adminNames = @((Get-LocalGroupMember -Group $adminGroup -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Name }))
+            $bgLocalUsers = @(Get-LocalUser -ErrorAction Stop | ForEach-Object {
+                $simpleName = [string]$_.Name
                 [pscustomobject][ordered]@{
-                    Name=[string]$_.Name
-                    ProcessId=$_.ProcessId
-                    ExecutablePath=[string]$_.ExecutablePath
-                    CommandLine=[string]$_.CommandLine
+                    Name=$simpleName
+                    Enabled=$_.Enabled
+                    LastLogon=$_.LastLogon
+                    IsLocalAdministrator=(@($adminNames | Where-Object { $_ -match ('\\' + [regex]::Escape($simpleName) + '$') }).Count -gt 0)
                 }
-            }
-        )
-        $bgRunning = ($bgProcesses.Count -gt 0)
+            })
+        } catch { }
 
-        $checks['IPC0184'] = New-ValidationResult `
+        $bgInfoAutoruns = @($bgStartupItems)
+        $bgInfoAutoruns += @($bgProcesses)
+        foreach ($pf in $bgPrefetch) {
+            $bgInfoAutoruns += [pscustomobject][ordered]@{ Source='Prefetch'; Name=$pf.Name; FullName=$pf.FullName; LastWriteTimeUtc=$pf.LastWriteTimeUtc }
+        }
+        $bgSimple = [ordered]@{ BGInfoAutoruns=@($bgInfoAutoruns); LocalUsers=@($bgLocalUsers) }
+        $information['IPC0183'] = New-InformationResult `
+            -Id 'IPC0183' `
+            -Name 'BGSiVaaS als Administrator ausgefuehrt / ausgefuehrt' `
+            -Ist $bgSimple `
+            -Quelle 'Direkt/PowerShell/Startup + Win32_Process + Prefetch + LocalUsers' `
+            -Hinweis 'RunAsAdministrator aus .lnk ist ein belastbarer Konfigurationshinweis; Prozessbesitzer allein beweist keine Token-Elevation.'
+        $information['IPC0184'] = New-InformationResult `
             -Id 'IPC0184' `
-            -Name 'Hintergrundbild anpassen' `
-            -Status $(if($bgRunning){'OK'}else{'NOK'}) `
-            -Soll ([ordered]@{
-                BgSiVaaSExecutable=$bgExePath
-                ProcessRunning=$true
-            }) `
-            -Ist ([ordered]@{
-                ExecutableExists=$bgExeExists
-                Running=$bgRunning
-                Processes=@($bgProcesses)
-            }) `
-            -Quelle 'Direkt/PowerShell/Win32_Process' `
-            -Hinweis 'OK bedeutet: BGSiVaaS.exe wird aktuell ausgefuehrt.'
+            -Name 'BGSiVaaS Ausfuehrungsevidenz' `
+            -Ist $bgSimple `
+            -Quelle 'Direkt/PowerShell/Startup + Win32_Process + Prefetch + LocalUsers'
 
-        # --------------------------------------------------------------
-        # --------------------------------------------------------------
+        # IPC0187 - VNC Server eingehend, Allow, fuer Domain/Private/Public.
+        function Test-AllFirewallProfiles {
+            param($Profile)
+            $p = [string]$Profile
+            return ($p -match '(?i)^(Any|All)$') -or (($p -match '(?i)Domain') -and ($p -match '(?i)Private') -and ($p -match '(?i)Public'))
+        }
+        $vncServerRules = @($allFirewallRules | Where-Object {
+            (([string]$_.DisplayName + ' ' + [string]$_.Name + ' ' + [string]$_.DisplayGroup) -match '(?i)VNC') -and
+            ([string]$_.Enabled -match '^(True|1)$') -and
+            ([string]$_.Direction -eq 'Inbound') -and
+            ([string]$_.Action -eq 'Allow') -and
+            (Test-AllFirewallProfiles $_.Profile)
+        })
+        $checks['IPC0187'] = New-ValidationResult `
+            -Id 'IPC0187' `
+            -Name 'VNC Server Firewallregel fuer alle Profile' `
+            -Status $(if($allFirewallRules.Count -eq 0){'NICHT_PRUEFBAR'}elseif($vncServerRules.Count -gt 0){'OK'}else{'NOK'}) `
+            -Soll ([ordered]@{ Enabled=$true; Direction='Inbound'; Action='Allow'; Profiles=@('Domain','Private','Public') }) `
+            -Ist @($vncServerRules | Select-Object Name,DisplayName,DisplayGroup,Enabled,Direction,Action,Profile) `
+            -Quelle 'Direkt/PowerShell/Get-NetFirewallRule ActiveStore'
+
+        # IPC0188 - hosts und lmhosts vorhanden.
+        $hostsPath = [string]$nameResolutionExpected.hosts_path
+        $lmhostsPath = [string]$nameResolutionExpected.lmhosts_path
+        if ([string]::IsNullOrWhiteSpace($hostsPath)) { $hostsPath = 'C:\Windows\System32\drivers\etc\hosts' }
+        if ([string]::IsNullOrWhiteSpace($lmhostsPath)) { $lmhostsPath = 'C:\Windows\System32\drivers\etc\lmhosts' }
+        $requireHosts = if ($null -ne $nameResolutionExpected.require_hosts) { [bool]$nameResolutionExpected.require_hosts } else { $true }
+        $requireLmhosts = if ($null -ne $nameResolutionExpected.require_lmhosts) { [bool]$nameResolutionExpected.require_lmhosts } else { $true }
+        $hostsExists = Test-Path -LiteralPath $hostsPath -PathType Leaf
+        $lmhostsExists = Test-Path -LiteralPath $lmhostsPath -PathType Leaf
+        $ipc0188Ok = ((-not $requireHosts) -or $hostsExists) -and ((-not $requireLmhosts) -or $lmhostsExists)
+        $checks['IPC0188'] = New-ValidationResult `
+            -Id 'IPC0188' `
+            -Name 'hosts/lmhosts Dateien vorhanden' `
+            -Status $(if($ipc0188Ok){'OK'}else{'NOK'}) `
+            -Soll ([ordered]@{ Hosts=$hostsPath; HostsExists=$requireHosts; Lmhosts=$lmhostsPath; LmhostsExists=$requireLmhosts }) `
+            -Ist ([ordered]@{ HostsExists=$hostsExists; LmhostsExists=$lmhostsExists }) `
+            -Quelle 'Direkt/PowerShell/Test-Path'
+
         # IPC0200 - WSUSClientManager vorhanden; WSUS-Status als Zusatzinfo.
         # --------------------------------------------------------------
         $wsusTool = $toolsExpected.wsus_client_manager
@@ -1578,6 +1909,52 @@
             -Quelle 'Direkt/PowerShell/Win32_ComputerSystem + Win32_PageFileSetting + Win32_PageFileUsage'
 
         # --------------------------------------------------------------
+        # IPC0245 - VNC-Viewer-Zugriff fuer alle Netzwerkprofile.
+        # --------------------------------------------------------------
+        $viewerFirewallRuleRegex = [string]$expectedVncViewerFirewallRegex
+        $viewerFirewallEvidence = @()
+        foreach ($rule in $allFirewallRules) {
+            $application = $null
+            try { $application = ($rule | Get-NetFirewallApplicationFilter -ErrorAction Stop).Program } catch { }
+            $haystack = ([string]$rule.Name + ' ' + [string]$rule.DisplayName + ' ' + [string]$rule.DisplayGroup + ' ' + [string]$application)
+            $isViewerRule = ($haystack -match $viewerFirewallRuleRegex) -or ([string]$application -match '(?i)vncviewer\.exe$')
+            if (-not $isViewerRule) { continue }
+            $allProfiles = Test-AllFirewallProfiles $rule.Profile
+            $viewerFirewallEvidence += [pscustomobject][ordered]@{
+                Name=[string]$rule.Name
+                DisplayName=[string]$rule.DisplayName
+                Enabled=[string]$rule.Enabled
+                Direction=[string]$rule.Direction
+                Action=[string]$rule.Action
+                Profile=[string]$rule.Profile
+                Program=[string]$application
+                AllProfiles=$allProfiles
+                Compliant=(([string]$rule.Enabled -match '^(True|1)$') -and ([string]$rule.Action -eq 'Allow') -and $allProfiles)
+            }
+        }
+        $ipc0245Status = if ($allFirewallRules.Count -eq 0) { 'NICHT_PRUEFBAR' } elseif (@($viewerFirewallEvidence | Where-Object Compliant).Count -gt 0) { 'OK' } else { 'NOK' }
+        $checks['IPC0245'] = New-ValidationResult `
+            -Id 'IPC0245' `
+            -Name 'VNC-Viewer Firewallregel alle Profile' `
+            -Status $ipc0245Status `
+            -Soll ([ordered]@{ ViewerRule=$true; Enabled=$true; Action='Allow'; Profiles=@('Domain','Private','Public') }) `
+            -Ist @($viewerFirewallEvidence) `
+            -Quelle 'Direkt/PowerShell/Get-NetFirewallRule + Get-NetFirewallApplicationFilter'
+
+        # IPC0246 - Windows Firewall fuer Domain/Private/Public aktiv.
+        $firewallProfilesLive = @(Get-NetFirewallProfile -Profile Domain,Private,Public -ErrorAction SilentlyContinue)
+        $requiredProfileNames = @('Domain','Private','Public')
+        $missingFirewallProfiles = @($requiredProfileNames | Where-Object { $wanted=$_; -not ($firewallProfilesLive | Where-Object { [string]$_.Name -ieq $wanted }) })
+        $disabledFirewallProfiles = @($firewallProfilesLive | Where-Object { -not [bool]$_.Enabled })
+        $ipc0246Status = if ($firewallProfilesLive.Count -eq 0) { 'NICHT_PRUEFBAR' } elseif ($missingFirewallProfiles.Count -eq 0 -and $disabledFirewallProfiles.Count -eq 0) { 'OK' } else { 'NOK' }
+        $checks['IPC0246'] = New-ValidationResult `
+            -Id 'IPC0246' `
+            -Name 'Firewall fuer alle Profile aktiviert' `
+            -Status $ipc0246Status `
+            -Soll ([ordered]@{ Domain=$true; Private=$true; Public=$true }) `
+            -Ist ([ordered]@{ Profiles=@($firewallProfilesLive | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction); Missing=@($missingFirewallProfiles) }) `
+            -Quelle 'Direkt/PowerShell/Get-NetFirewallProfile'
+
         # IPC0247 - Defender Manipulationsschutz aus.
         # --------------------------------------------------------------
         $mpStatus = $null
@@ -1658,94 +2035,51 @@
             -Hinweis 'Fehlt ein expliziter Registry-/Policywert, bleibt die UI-Einstellung NICHT_PRUEFBAR.'
 
         # --------------------------------------------------------------
-        # IPC0251 - Defender Sicherheitsstatus erneut kontrollieren.
-        # Verweist im OS-Server-Scope auf IPC0247 und IPC0250.
+        # IPC0251 - Defender Sicherheitsstatus muss in Ordnung sein.
         # --------------------------------------------------------------
-        $ipc0247CurrentStatus = [string]$checks['IPC0247'].status
-        $ipc0250CurrentStatus = [string]$checks['IPC0250'].status
-
-        if ($ipc0247CurrentStatus -eq 'NOK' -or $ipc0250CurrentStatus -eq 'NOK') {
-            $ipc0251Status = 'NOK'
+        $requiredDefenderStatusFields = @($requiredDefenderStatusFieldsExpected)
+        $defenderHealth = @()
+        if ($mpStatus) {
+            foreach ($field in $requiredDefenderStatusFields) {
+                $exists = ($mpStatus.PSObject.Properties.Name -contains $field)
+                $value = if($exists){$mpStatus.$field}else{$null}
+                $defenderHealth += [pscustomobject][ordered]@{ Name=$field; Available=$exists; Value=$value; Compliant=($exists -and [bool]$value) }
+            }
         }
-        elseif ($ipc0247CurrentStatus -eq 'OK' -and $ipc0250CurrentStatus -eq 'OK') {
-            $ipc0251Status = 'OK'
-        }
-        else {
+        if (-not $mpStatus) {
             $ipc0251Status = 'NICHT_PRUEFBAR'
         }
-
+        elseif (@($defenderHealth | Where-Object { -not $_.Available }).Count -gt 0) {
+            $ipc0251Status = 'NICHT_PRUEFBAR'
+        }
+        elseif (@($defenderHealth | Where-Object { -not $_.Compliant }).Count -gt 0) {
+            $ipc0251Status = 'NOK'
+        }
+        else {
+            $ipc0251Status = 'OK'
+        }
+        $defenderSignatureLastUpdated = if ($mpStatus) { $mpStatus.AntivirusSignatureLastUpdated } else { $null }
         $checks['IPC0251'] = New-ValidationResult `
             -Id 'IPC0251' `
             -Name 'Defender Sicherheitsstatus i.O.' `
             -Status $ipc0251Status `
-            -Soll ([ordered]@{
-                ReferenzIds=@('IPC0247','IPC0250')
-                IPC0247='OK'
-                IPC0250='OK'
-            }) `
-            -Ist ([ordered]@{
-                IPC0247=$checks['IPC0247']
-                IPC0250=$checks['IPC0250']
-            }) `
-            -Quelle 'Referenz auf IPC0247 und IPC0250'
+            -Soll ([ordered]@{ RequiredTrue=@($requiredDefenderStatusFields) }) `
+            -Ist ([ordered]@{ StatusFields=@($defenderHealth); AntivirusSignatureLastUpdated=$defenderSignatureLastUpdated }) `
+            -Quelle 'Direkt/PowerShell/Get-MpComputerStatus' `
+            -Hinweis 'IPC0247 (Manipulationsschutz) und IPC0250 (Downloads blockieren) werden separat bewertet.'
 
         # --------------------------------------------------------------
-        # IPC0252 - UltraVNC Viewer + .vnc-Dateizuordnung.
-        # Erwartete Installation wird aus derselben Softwarevariable wie
-        # IPC0070 gelesen.
+        # IPC0252 - nur pruefen, ob UltraVNC Viewer installiert/vorhanden ist.
         # --------------------------------------------------------------
-        $vncProgId = $null
-        $vncOpenCommand = $null
-        try {
-            $vncExtensionKey = Get-Item `
-                -LiteralPath 'Registry::HKEY_CLASSES_ROOT\.vnc' `
-                -ErrorAction Stop
-            $vncProgId = [string]$vncExtensionKey.GetValue('')
-        } catch { }
-
-        if (-not [string]::IsNullOrWhiteSpace([string]$vncProgId)) {
-            try {
-                $vncCommandKey = Get-Item `
-                    -LiteralPath ("Registry::HKEY_CLASSES_ROOT\{0}\shell\open\command" -f [string]$vncProgId) `
-                    -ErrorAction Stop
-                $vncOpenCommand = [string]$vncCommandKey.GetValue('')
-            } catch { }
-        }
-
-        $associationPresent = (
-            -not [string]::IsNullOrWhiteSpace([string]$vncProgId) -and
-            -not [string]::IsNullOrWhiteSpace([string]$vncOpenCommand) -and
-            [string]$vncOpenCommand -match '(?i)vncviewer\.exe'
-        )
-
-        if ($expectedUltraVncViewerInstalled) {
-            $ipc0252Ok = (
-                $viewerPresent -and
-                (-not $expectedVncViewerFileAssociation -or $associationPresent)
-            )
-        }
-        else {
-            $ipc0252Ok = (-not $viewerPresent)
-        }
-
+        if ($expectedUltraVncViewerInstalled) { $ipc0252Ok = $viewerPresent } else { $ipc0252Ok = -not $viewerPresent }
         $checks['IPC0252'] = New-ValidationResult `
             -Id 'IPC0252' `
-            -Name 'UltraVNC-Viewer nachinstallieren' `
+            -Name 'UltraVNC Viewer installiert' `
             -Status $(if($ipc0252Ok){'OK'}else{'NOK'}) `
-            -Soll ([ordered]@{
-                ExpectedInstalled=$expectedUltraVncViewerInstalled
-                VncFileAssociationRequired=$expectedVncViewerFileAssociation
-            }) `
-            -Ist ([ordered]@{
-                ViewerPresent=$viewerPresent
-                ViewerPaths=@($viewerExisting)
-                VncProgId=$vncProgId
-                VncOpenCommand=$vncOpenCommand
-                VncAssociationToViewer=$associationPresent
-            }) `
-            -Quelle 'Direkt/PowerShell/UltraVNC Dateisystem + HKCR\.vnc'
+            -Soll ([ordered]@{ ExpectedInstalled=$expectedUltraVncViewerInstalled }) `
+            -Ist ([ordered]@{ ViewerPresent=$viewerPresent; ViewerPaths=@($viewerExisting); ViewerVersions=@($viewerVersions) }) `
+            -Quelle 'Direkt/PowerShell/vncviewer.exe'
 
-        # --------------------------------------------------------------
         # IPC0263-IPC0271 - BIOS/Firmware-Sollwerte.
         # --------------------------------------------------------------
         $biosFirmwareEvidence = @(Get-BiosFirmwareEvidence)
@@ -1836,179 +2170,6 @@
             -Name 'Festplatte als erstes Start-Medium' `
             -Specification $firmwareExpected.bios_checks.IPC0271 `
             -Evidence $biosFirmwareEvidence
-
-        # --------------------------------------------------------------
-        # IPC0144: reine Zertifikats-Informationsausgabe fuer die OS-Station.
-        # IPC0145/IPC0146: ORCLA-Trust-Endzustand mit dem verbleibenden
-        # WinCC-Client-Subject-Regex aus Semaphore.
-        # --------------------------------------------------------------
-        function Get-CertificateFiles {
-            param([string[]]$Directories)
-            $items = @()
-            foreach ($dir in $Directories) {
-                if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
-                foreach ($file in @(Get-ChildItem -LiteralPath $dir -File -Recurse -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Extension -match '(?i)^\.(der|cer|crt)$' })) {
-                    $subject = $null
-                    $issuer = $null
-                    $thumbprint = $null
-                    $notAfter = $null
-                    try {
-                        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($file.FullName)
-                        $subject = $cert.Subject
-                        $issuer = $cert.Issuer
-                        $thumbprint = $cert.Thumbprint
-                        $notAfter = $cert.NotAfter.ToString('o')
-                    } catch { }
-                    $items += [pscustomobject][ordered]@{
-                        Path       = $file.FullName
-                        FileName   = $file.Name
-                        Subject    = $subject
-                        Issuer     = $issuer
-                        Thumbprint = $thumbprint
-                        NotAfter   = $notAfter
-                    }
-                }
-            }
-            return @($items)
-        }
-
-        function Test-CertRegexes {
-            param($Certificates, $Regexes)
-            $regexList = @($Regexes)
-            if ($regexList.Count -eq 0) {
-                return [pscustomobject][ordered]@{
-                    Configured = $false
-                    OK = $null
-                    Results = @()
-                }
-            }
-            $results = @()
-            $overall = $true
-            foreach ($regex in $regexList) {
-                $matched = @($Certificates | Where-Object {
-                    (($_.Subject + ' ' + $_.Issuer + ' ' + $_.FileName) -match [string]$regex)
-                })
-                $found = ($matched.Count -gt 0)
-                if (-not $found) { $overall = $false }
-                $results += [pscustomobject][ordered]@{
-                    Regex = [string]$regex
-                    Found = $found
-                    Matches = @($matched)
-                }
-            }
-            return [pscustomobject][ordered]@{
-                Configured = $true
-                OK = $overall
-                Results = @($results)
-            }
-        }
-
-        $orclaProductFound = $false
-        foreach ($root in @(
-            'C:\Program Files\Siemens\Automation\Orcla',
-            'C:\Program Files\Siemens\Automation\SIMATIC IPC ORCLA'
-        )) {
-            if (Test-Path -LiteralPath $root -PathType Container) {
-                $orclaProductFound = $true
-                break
-            }
-        }
-
-        $winccTrustedDirs = @(
-            'C:\Program Files (x86)\Siemens\WINCC\OPC\UAClient\PKI\Trusted\Certs',
-            'C:\Program Files (x86)\Siemens\WINCC\OPC\UAClient\PKI\OPCUA\certs'
-        )
-        $orclaTrustedDirs = @(
-            'C:\Program Files\Siemens\Automation\Orcla\OpcUaServer\pkiserver\trusted\certs',
-            'C:\Program Files\Siemens\Automation\SIMATIC IPC ORCLA\OpcUaServer\pkiserver\Trusted\Certs',
-            'C:\Program Files\Siemens\Automation\SIMATIC IPC ORCLA\OpcUaServer\pkiserver\trusted\certs'
-        )
-        $orclaOwnDirs = @(
-            'C:\Program Files\Siemens\Automation\Orcla\OpcUaServer\pkiserver\own\certs',
-            'C:\Program Files\Siemens\Automation\SIMATIC IPC ORCLA\OpcUaServer\pkiserver\own\certs'
-        )
-
-        $winccTrustedCerts = Get-CertificateFiles $winccTrustedDirs
-        $orclaTrustedCerts = Get-CertificateFiles $orclaTrustedDirs
-        $orclaOwnCerts = Get-CertificateFiles $orclaOwnDirs
-
-        $winccClientOnIpcCheck = Test-CertRegexes $orclaTrustedCerts @($orclaCertExpectations.wincc_client_subject_regexes_on_ipc)
-
-
-        $information['IPC0144'] = New-InformationResult `
-            -Id 'IPC0144' `
-            -Name 'Zertifikate - WinCC OPC UA Client / OS-Stationen' `
-            -Ist ([ordered]@{
-                TrustedDirectories=$winccTrustedDirs
-                Certificates=@($winccTrustedCerts)
-            }) `
-            -Quelle 'Direkt/PowerShell/WinCC OPC UA Client PKI' `
-            -Hinweis 'Reine Zertifikatsausgabe; kein Sollwertvergleich.'
-
-        if (-not $expectedOrclaInstalled) {
-            foreach ($id in @('IPC0145','IPC0146')) {
-                $checks[$id] = New-ValidationResult `
-                    -Id $id `
-                    -Name 'ORCLA Zertifikatsaustausch' `
-                    -Status 'IGNORIERT' `
-                    -Soll 'ORCLA ist laut Semaphore fuer diesen Rechner nicht gefordert' `
-                    -Ist ([ordered]@{ OrclaDirectoryDetected=$orclaProductFound }) `
-                    -Quelle 'Direkt/PowerShell/ORCLA-PKI' `
-                    -Hinweis 'Abhaengige ORCLA-Zertifikatspruefung.'
-            }
-        }
-        elseif (-not $orclaProductFound) {
-            foreach ($id in @('IPC0145','IPC0146')) {
-                $checks[$id] = New-ValidationResult `
-                    -Id $id `
-                    -Name 'ORCLA Zertifikatsaustausch' `
-                    -Status 'NOK' `
-                    -Soll ([ordered]@{ OrclaInstalled=$true; CertificateTrustEndState=$true }) `
-                    -Ist ([ordered]@{ OrclaDirectoryDetected=$false }) `
-                    -Quelle 'Direkt/PowerShell/ORCLA-PKI' `
-                    -Hinweis 'Der Zertifikats-Endzustand kann nicht erfuellt sein, wenn das fuer OS Server geforderte ORCLA lokal fehlt.'
-            }
-        }
-        else {
-            $orclaOwnCertPresent = ($orclaOwnCerts.Count -gt 0)
-            if (-not $winccClientOnIpcCheck.Configured) {
-                $ipc0145Status = 'NICHT_PRUEFBAR'
-            }
-            elseif ($winccClientOnIpcCheck.OK -and $orclaOwnCertPresent) {
-                $ipc0145Status = 'OK'
-            }
-            else {
-                $ipc0145Status = 'NOK'
-            }
-
-            $orclaCertState = [ordered]@{
-                TrustedDirectories = $orclaTrustedDirs
-                OwnDirectories = $orclaOwnDirs
-                TrustedCertificates = @($orclaTrustedCerts)
-                OwnCertificates = @($orclaOwnCerts)
-                WinCCClientMatch = $winccClientOnIpcCheck
-                OwnServerCertificatePresent = $orclaOwnCertPresent
-            }
-
-            $checks['IPC0145'] = New-ValidationResult `
-                -Id 'IPC0145' `
-                -Name 'Zertifikate austauschen - WinCC OPC UA Client / ORCLA OPC UA Server' `
-                -Status $ipc0145Status `
-                -Soll ([ordered]@{ TrustedWinCCClientCertificate=$true; OwnOrclaServerCertificate=$true }) `
-                -Ist $orclaCertState `
-                -Quelle 'Direkt/PowerShell/ORCLA OPC UA PKI' `
-                -Hinweis 'Der Zertifikatsinhalt wird read-only aus den vorgesehenen PKI-Verzeichnissen gelesen.'
-
-            $checks['IPC0146'] = New-ValidationResult `
-                -Id 'IPC0146' `
-                -Name 'Zertifikate austauschen - Online-Modus' `
-                -Status $ipc0145Status `
-                -Soll ([ordered]@{ TrustedCertificateEndState=$true }) `
-                -Ist $orclaCertState `
-                -Quelle 'Direkt/PowerShell/ORCLA OPC UA PKI' `
-                -Hinweis 'Online-/Offline-Methode ist im Endzustand nicht unterscheidbar; bewertet wird der resultierende Trust-Zustand.'
-        }
 
             [pscustomobject][ordered]@{
                 host   = $env:COMPUTERNAME

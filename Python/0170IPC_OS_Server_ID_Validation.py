@@ -110,6 +110,19 @@ def make_information(task_id, task_name, information, source, note=None):
     return result
 
 
+def make_ignored(task_id, task_name, reason, source="0170-Prueflogik"):
+    return {
+        "id": task_id,
+        "aufgabe": task_name,
+        "pruefart": "IGNORIERT",
+        "status": "IGNORIERT",
+        "soll": None,
+        "ist": None,
+        "quelle": source,
+        "hinweis": reason,
+    }
+
+
 def missing_check(task_id, task_name, soll, source, soll_source=None, note=None):
     return make_check(
         task_id,
@@ -179,7 +192,241 @@ def first_registry_value(records, name=None, path_contains=None):
     return matches[0].get("Value"), matches
 
 def software_products(software):
-    return as_list(as_dict(software).get("AllProducts"))
+    if not isinstance(software, dict):
+        return None
+    products = software.get("AllProducts")
+    return products if isinstance(products, list) else None
+
+
+def normalize_install_date(value):
+    raw = text(value).strip()
+    if re.fullmatch(r"\d{8}", raw):
+        return f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]}"
+    return raw
+
+
+def software_inventory(installed_software, key):
+    if not isinstance(installed_software, dict) or key not in installed_software:
+        return None
+
+    result = []
+    seen = set()
+    for product in as_list(installed_software.get(key)):
+        if not isinstance(product, dict):
+            continue
+        name = text(product.get("DisplayName")).strip()
+        if not name:
+            continue
+        item = {
+            "name": name,
+            "version": text(product.get("DisplayVersion")).strip(),
+            "install_date": normalize_install_date(product.get("InstallDate")),
+            "publisher": text(product.get("Publisher")).strip(),
+        }
+        dedupe_key = (
+            item["name"].casefold(),
+            item["version"].casefold(),
+            item["install_date"].casefold(),
+            item["publisher"].casefold(),
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        result.append(item)
+
+    result.sort(key=lambda item: (
+        item["name"].casefold(),
+        item["version"].casefold(),
+        item["publisher"].casefold(),
+        item["install_date"].casefold(),
+    ))
+    return result
+
+
+def software_inventory_csv_value(items):
+    if items is None:
+        return "NICHT_PRUEFBAR"
+    if not items:
+        return "KEINE_EINTRAEGE"
+    return "\n".join(
+        "{name} | Version={version} | Installiert={install_date}".format(
+            name=item.get("name") or "-",
+            version=item.get("version") or "-",
+            install_date=item.get("install_date") or "-",
+        )
+        for item in items
+    )
+
+
+def compact_users(users):
+    parts = []
+    for user in as_list(users):
+        if not isinstance(user, dict):
+            continue
+        groups = ",".join(text(x) for x in as_list(user.get("LocalGroups")) if text(x))
+        parts.append(
+            "{name} [Enabled={enabled}; PasswordExpires={expires}; Groups={groups}]".format(
+                name=text(user.get("Name")) or "?",
+                enabled=text(user.get("Enabled")) or "?",
+                expires=text(user.get("PasswordExpires")) or "?",
+                groups=groups or "-",
+            )
+        )
+    return " | ".join(parts) if parts else "NICHT_PRUEFBAR"
+
+
+def compact_network(adapters):
+    parts = []
+    for adapter in as_list(adapters):
+        if not isinstance(adapter, dict):
+            continue
+        ipv4 = []
+        for address in as_list(adapter.get("IPAddresses")):
+            if not isinstance(address, dict):
+                continue
+            if text(address.get("AddressFamily")).lower() not in {"ipv4", "2"}:
+                continue
+            ip = text(address.get("IPAddress"))
+            prefix = text(address.get("PrefixLength"))
+            if ip:
+                ipv4.append(ip + ("/" + prefix if prefix else ""))
+        dns = []
+        for dns_record in as_list(adapter.get("DnsServers")):
+            if not isinstance(dns_record, dict):
+                continue
+            if text(dns_record.get("AddressFamily")).lower() not in {"ipv4", "2"}:
+                continue
+            dns.extend(text(x) for x in as_list(dns_record.get("ServerAddresses")) if text(x))
+        gateways = [text(x) for x in as_list(adapter.get("Gateway")) if text(x)]
+        parts.append(
+            "{name} [Status={status}; IPv4={ipv4}; Gateway={gateway}; DNS={dns}; MAC={mac}]".format(
+                name=text(adapter.get("Name")) or "?",
+                status=text(adapter.get("Status")) or "?",
+                ipv4=",".join(ipv4) or "-",
+                gateway=",".join(gateways) or "-",
+                dns=",".join(dns) or "-",
+                mac=text(adapter.get("MacAddress")) or "-",
+            )
+        )
+    return " | ".join(parts) if parts else "NICHT_PRUEFBAR"
+
+
+def compact_domain(domain):
+    data = as_dict(domain)
+    if not data:
+        return "NICHT_PRUEFBAR"
+    domain_name = data.get("Domain") or data.get("Workgroup")
+    return "Domain={domain}; OU={ou}; DN={dn}".format(
+        domain=text(domain_name) or "-",
+        ou=text(data.get("ComputerAccountOU") or data.get("ComputerAccountParentDN")) or "-",
+        dn=text(data.get("ComputerAccountDN")) or "-",
+    )
+
+
+def compact_certificates(value):
+    rows = []
+
+    def collect(node, inherited_store=None):
+        if isinstance(node, list):
+            for item in node:
+                collect(item, inherited_store)
+            return
+        if not isinstance(node, dict):
+            return
+
+        subject = node.get("Subject")
+        thumbprint = node.get("Thumbprint")
+        if subject or thumbprint:
+            rows.append({
+                "Subject": subject or node.get("FriendlyName") or node.get("FileName"),
+                "Thumbprint": thumbprint,
+                "NotAfter": node.get("NotAfter"),
+                "Store": node.get("Store") or node.get("StoreName") or inherited_store,
+            })
+            return
+
+        for key, item in node.items():
+            next_store = inherited_store
+            if key not in {"Raw", "Properties"} and isinstance(item, (dict, list)):
+                next_store = inherited_store or text(key)
+            collect(item, next_store)
+
+    collect(value)
+    parts = []
+    seen = set()
+    for item in rows:
+        dedupe = (text(item.get("Subject")), text(item.get("Thumbprint")), text(item.get("Store")))
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
+        parts.append(
+            "{subject} [Thumbprint={thumb}; Ablauf={expires}; Store={store}]".format(
+                subject=text(item.get("Subject")) or "?",
+                thumb=text(item.get("Thumbprint")) or "-",
+                expires=text(item.get("NotAfter")) or "-",
+                store=text(item.get("Store")) or "-",
+            )
+        )
+    return " | ".join(parts) if parts else "KEINE_ZERTIFIKATE"
+
+
+def physical_network_adapters(adapters):
+    selected = []
+    for adapter in as_list(adapters):
+        if not isinstance(adapter, dict):
+            continue
+        if bool_value(adapter.get("Virtual")) is True:
+            continue
+        if adapter.get("HardwareInterface") is not None and bool_value(adapter.get("HardwareInterface")) is False:
+            continue
+        selected.append(adapter)
+    return selected
+
+
+def adapter_present(adapter):
+    status = text(as_dict(adapter).get("Status")).strip().lower()
+    return status not in {"not present", "nicht vorhanden"}
+
+
+def adapter_is_enabled(adapter):
+    status = text(as_dict(adapter).get("Status")).strip().lower()
+    if not status:
+        return None
+    return status not in {"disabled", "deaktiviert", "not present", "nicht vorhanden"}
+
+
+def find_adapters_by_name_regex(adapters, pattern):
+    if not text(pattern):
+        return []
+    return [
+        adapter for adapter in as_list(adapters)
+        if isinstance(adapter, dict) and regex_search(pattern, adapter.get("Name"))
+    ]
+
+
+def binding_matches(adapter, component_id=None, display_regex=None):
+    matches = []
+    for binding in as_list(as_dict(adapter).get("Bindings")):
+        if not isinstance(binding, dict):
+            continue
+        if component_id is not None and text(binding.get("ComponentID")).strip().lower() != text(component_id).strip().lower():
+            continue
+        if display_regex is not None and not regex_search(display_regex, binding.get("DisplayName")):
+            continue
+        matches.append(binding)
+    return matches
+
+
+def ordered_string_list(values):
+    return [text(value).strip() for value in as_list(values) if text(value).strip()]
+
+
+def bytes_to_gb(value):
+    try:
+        return float(value) / (1024.0 ** 3)
+    except (TypeError, ValueError):
+        return None
+
 
 def product_matches(products, name_pattern, version_pattern=None):
     matches = []
@@ -406,15 +653,84 @@ def project_share_state(smb, expected_folder, expected_share):
     folder_confirmed = any(item.get("FolderExists") is True for item in matches)
     return folder_confirmed, bool(matches), matches
 
-def matrix_information_value(item):
+def identity_matches(pattern, identity):
+    return regex_search(pattern, text(identity))
+
+
+def rights_contain(actual_rights, required_right):
+    actual = re.sub(r"[\s_]", "", text(actual_rights)).lower()
+    required = re.sub(r"[\s_]", "", text(required_right)).lower()
+    return required in actual
+
+
+def project_share_evaluation(smb_snapshot, specification):
+    spec = as_dict(specification)
+    if not isinstance(smb_snapshot, dict):
+        return None, None
+    wanted_path = normalize_windows_path(spec.get("path"))
+    wanted_name = text(spec.get("share_name")).strip().lower()
+    shares = [row for row in as_list(smb_snapshot.get("Shares")) if isinstance(row, dict) and (
+        normalize_windows_path(row.get("Path")) == wanted_path or text(row.get("Name")).strip().lower() == wanted_name
+    )]
+    if not shares:
+        return False, {"MatchingShares": []}
+    share = shares[0]
+    share_results = []
+    for requirement in as_list(spec.get("share_permissions")):
+        req = as_dict(requirement)
+        matches = [ace for ace in as_list(share.get("SharePermissions")) if isinstance(ace, dict)
+                   and text(ace.get("AccessControlType")).lower() != "deny"
+                   and identity_matches(req.get("identity_regex"), ace.get("AccountName"))
+                   and text(ace.get("AccessRight")).lower() == text(req.get("access_right")).lower()]
+        share_results.append({"Requirement": req, "Matches": matches, "Compliant": bool(matches)})
+    ntfs_acl = as_dict(share.get("NtfsRootAcl"))
+    ntfs_results = []
+    for requirement in as_list(spec.get("ntfs_permissions")):
+        req = as_dict(requirement)
+        matches = [ace for ace in as_list(ntfs_acl.get("Access")) if isinstance(ace, dict)
+                   and text(ace.get("AccessControlType")).lower() == "allow"
+                   and identity_matches(req.get("identity_regex"), ace.get("IdentityReference"))]
+        compliant = bool(matches) and any(all(rights_contain(ace.get("FileSystemRights"), right) for right in as_list(req.get("required_rights"))) for ace in matches)
+        ntfs_results.append({"Requirement": req, "Matches": matches, "Compliant": compliant})
+    state = normalize_windows_path(share.get("Path")) == wanted_path and text(share.get("Name")).strip().lower() == wanted_name and all(x["Compliant"] for x in share_results) and all(x["Compliant"] for x in ntfs_results)
+    return state, {"Share": share, "SharePermissionEvaluation": share_results, "NtfsPermissionEvaluation": ntfs_results}
+
+
+def matrix_information_value(task_id, item):
     item = as_dict(item)
     if item.get("status") != "INFORMATION":
-        return "NICHT_PRUEFBAR"
+        return item.get("status") or "NICHT_PRUEFBAR"
     value = item.get("ist")
     if value is None:
         return "KEINE_INFORMATION"
     if isinstance(value, str):
         return value
+    if task_id == "IPC0013":
+        return compact_users(value)
+    if task_id == "IPC0015":
+        if isinstance(value, dict):
+            return text(value.get("ComputerName") or value.get("DNSHostName") or value.get("FQDN")) or "NICHT_PRUEFBAR"
+        return text(value) or "NICHT_PRUEFBAR"
+    if task_id in {"IPC0024", "IPC0050", "IPC0053"}:
+        return compact_network(value)
+    if task_id == "IPC0055":
+        data = as_dict(value)
+        return "DNS={dns}; WINS={wins}".format(
+            dns=",".join(text(x) for x in as_list(data.get("DNS")) if text(x)) or "-",
+            wins=",".join(text(x) for x in as_list(data.get("WINS")) if text(x)) or "-",
+        )
+    if task_id in {"IPC0060", "IPC0189"}:
+        return compact_domain(value)
+    if task_id in {"IPC0141", "IPC0142", "IPC0143", "IPC0144", "IPC0145", "IPC0146"}:
+        return compact_certificates(value)
+    if task_id == "IPC0149":
+        return " | ".join(
+            "{name} [State={state}]".format(
+                name=text(as_dict(x).get("DisplayName") or as_dict(x).get("Name")) or "?",
+                state=text(as_dict(x).get("State") or as_dict(x).get("InstallState")) or "Enabled",
+            )
+            for x in as_list(value) if isinstance(x, dict)
+        ) or "KEINE_AKTIVEN_FEATURES"
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 TASK_IDS = [
@@ -448,8 +764,6 @@ TASK_IDS = [
     "IPC0059",
     "IPC0060",
     "IPC0063",
-    "IPC0065",
-    "IPC0066",
     "IPC0070",
     "IPC0072",
     "IPC0073",
@@ -463,9 +777,11 @@ TASK_IDS = [
     "IPC0081",
     "IPC0082",
     "IPC0083",
+    "IPC0084",
     "IPC0087",
     "IPC0088",
     "IPC0089",
+    "IPC0090",
     "IPC0091",
     "IPC0092",
     "IPC0093",
@@ -496,11 +812,15 @@ TASK_IDS = [
     "IPC0140",
     "IPC0141",
     "IPC0142",
+    "IPC0143",
     "IPC0144",
-    "IPC0147",
+    "IPC0145",
+    "IPC0146",
+    "IPC0148",
     "IPC0149",
     "IPC0150",
     "IPC0151",
+    "IPC0152",
     "IPC0153",
     "IPC0154",
     "IPC0155",
@@ -508,8 +828,6 @@ TASK_IDS = [
     "IPC0159",
     "IPC0160",
     "IPC0161",
-    "IPC0162",
-    "IPC0165",
     "IPC0166",
     "IPC0167",
     "IPC0168",
@@ -555,7 +873,6 @@ TASK_IDS = [
     "IPC0270",
     "IPC0271",
 ]
-
 TASK_NAMES = {
     "IPC0007": 'Sprache auswählen (Deutsch)',
     "IPC0008": 'Region auswählen (Deutschland)',
@@ -602,9 +919,11 @@ TASK_NAMES = {
     "IPC0081": 'Microsoft .NET Framework 3.5 aktivieren',
     "IPC0082": 'Microsoft Message Queue (MSMQ) Server aktivieren',
     "IPC0083": 'Bildschirmschoner aktivieren (SE + ES)',
+    "IPC0084": 'Bildschirmschoner deaktivieren',
     "IPC0087": 'Energieoptionen auf "Höchstleistung" setzen',
     "IPC0088": 'Kontrolle Energieoptionen',
     "IPC0089": 'Starten und Wiederherstellen anpassen',
+    "IPC0090": '7Zip installieren',
     "IPC0091": '.NET Framework 3.5 SP1 installieren',
     "IPC0092": 'Zertifikat installieren',
     "IPC0093": 'Zertifikat installieren',
@@ -635,11 +954,16 @@ TASK_NAMES = {
     "IPC0140": 'Orcla installieren Setupdatei ausführen',
     "IPC0141": 'Setupdatei ausführen',
     "IPC0142": 'Watchdog und OPC UA server',
+    "IPC0143": 'Zertifikate austauschen',
     "IPC0144": 'Zertifikate austauschen',
+    "IPC0145": 'Zertifikate austauschen',
+    "IPC0146": 'Zertifikate austauschen',
     "IPC0147": 'Zugriffsskript ausführen',
+    "IPC0148": 'Computerschutz deaktivieren',
     "IPC0149": 'Deinstallieren von Windows-Komponenten',
     "IPC0150": 'BitLocker Aktivierung',
     "IPC0151": 'Deaktivieren von Diensten',
+    "IPC0152": 'Datenschutz-Einstellungen deaktivieren',
     "IPC0153": 'Einstellung von Datenschutz- und Telemetriedaten in Windows 10 Teil 2',
     "IPC0154": 'SMB Signierung',
     "IPC0155": 'SMBv3-Verschlüsselung',
@@ -653,9 +977,9 @@ TASK_NAMES = {
     "IPC0167": 'D:\\Projekt',
     "IPC0168": 'Ordner freigeben',
     "IPC0180": 'SQL Server MGMT Studio',
-    "IPC0182": 'BGInfo/BGSiVaaS',
-    "IPC0183": 'BGInfo/BGSiVaaS',
-    "IPC0184": 'Hintergrundbild anpassen',
+    "IPC0182": 'BGSiVaaS lokal vorhanden',
+    "IPC0183": 'BGSiVaaS Ausfuehrung / Administrator-Evidenz',
+    "IPC0184": 'BGSiVaaS Ausfuehrungsevidenz',
     "IPC0185": 'Kontrolle mit WinCC_RT Benutzer',
     "IPC0187": 'VNC',
     "IPC0188": 'host/lmhost',
@@ -696,11 +1020,34 @@ TASK_NAMES = {
 }
 
 ROLE_EXCLUDED_IDS = [
-    "IPC0097", "IPC0103", "IPC0105", "IPC0109", "IPC0133", "IPC0134", "IPC0135",
-    "IPC0143", "IPC0145", "IPC0146", "IPC0148", "IPC0152", "IPC0171", "IPC0177",
-    "IPC0178", "IPC0179", "IPC0186", "IPC0222", "IPC0223", "IPC0248", "IPC0249", "IPC0254",
+    "IPC0065",
+    "IPC0066",
+    "IPC0097",
+    "IPC0103",
+    "IPC0105",
+    "IPC0109",
+    "IPC0133",
+    "IPC0134",
+    "IPC0135",
+    "IPC0147",
+    "IPC0162",
+    "IPC0165",
+    "IPC0171",
+    "IPC0177",
+    "IPC0178",
+    "IPC0179",
+    "IPC0185",
+    "IPC0186",
+    "IPC0190",
+    "IPC0207",
+    "IPC0208",
+    "IPC0209",
+    "IPC0222",
+    "IPC0223",
+    "IPC0248",
+    "IPC0249",
+    "IPC0254",
 ]
-
 
 def component_records(windows_components):
     rows = []
@@ -732,6 +1079,7 @@ def evaluate_os_server(host, expected):
     info = {}
 
     identity = library_section(host, "system_und_hardware", "Initial_Valid", "Identity")
+    system_info = library_section(host, "system_und_hardware", "Initial_Valid", "SystemInformation")
     language = library_section(host, "sprache_und_region", "Initial_Valid", "LanguageAndRegion")
     time_config = library_section(host, "zeitkonfiguration", "Initial_Valid", "TimeConfiguration")
     local_users = library_section(host, "benutzer_und_gruppen", "Initial_Valid", "LocalUsers")
@@ -1383,16 +1731,13 @@ def evaluate_os_server(host, expected):
         "Firewall_SMB_Patch_Valid.Firewall", "Aufgabenliste",
     )
 
-    # IPC0168 - Projektordner + Freigabe aus Snapshot.
-    folder_ok, share_ok, project_shares = project_share_state(
-        smb, expected.get("project_folder"), expected.get("project_share")
-    )
+    # IPC0168 - D:\Projekt mit geforderten Freigabe- und NTFS-Rechten.
+    project_share_expected = as_dict(as_dict(expected.get("filesystem")).get("project_share"))
+    ipc0168_state, ipc0168_evidence = project_share_evaluation(smb, project_share_expected)
     checks["IPC0168"] = make_check(
-        "IPC0168", "Ordner freigeben", folder_ok and share_ok,
-        {"Folder": expected.get("project_folder"), "Share": expected.get("project_share"), "FolderExists": True, "ShareExists": True},
-        project_shares if project_shares else "Keine passende Projektfreigabe gefunden",
-        "Firewall_SMB_Patch_Valid.SMB.Shares",
-        "Semaphore: expected_project_folder/expected_project_share",
+        "IPC0168", TASK_NAMES["IPC0168"], ipc0168_state, project_share_expected,
+        ipc0168_evidence, "Firewall_SMB_Patch_Valid.SMB.Shares + NtfsRootAcl",
+        "Geprueft werden alle in Semaphore geforderten Share- und NTFS-Berechtigungen.",
     )
 
     # IPC0180 - SSMS 20.2.1.
@@ -1402,23 +1747,40 @@ def evaluate_os_server(host, expected):
         "SQL Server Management Studio 20.2.1 installiert",
     )
 
-    # IPC0182 / 0183 / 0184 - BGSiVaaS.
+    # IPC0182 - BGSiVaaS lokal unter C:\Programme\Siemens vorhanden.
+    bg_spec = as_dict(as_dict(expected.get("tools")).get("bgsivaas"))
+    bg_install_path = text(bg_spec.get("install_path")) or r"C:\Programme\Siemens\BGSiVaaS"
+    checks["IPC0182"] = make_check("IPC0182", TASK_NAMES["IPC0182"], None,
+        {"Path": bg_install_path, "Exists": True}, None, "Direkt/PowerShell/Test-Path",
+        "Dateisystempruefung erfolgt im Live-Teil.")
+
     bg_matches = startup_matches(autoruns, r"BGSiVaaS|BGInfo")
-    checks["IPC0182"] = make_check(
-        "IPC0182", "BGInfo/BGSiVaaS", bool(bg_matches),
-        "BGSiVaaS/BGInfo in Common Startup oder Autorun vorhanden", bg_matches,
-        "Firewall_SMB_Patch_Valid.Autoruns", "Aufgabenliste",
-    )
-    info["IPC0183"] = make_information(
-        "IPC0183", "BGInfo/BGSiVaaS - Als Administrator ausführen", bg_matches,
-        "Firewall_SMB_Patch_Valid.Autoruns.StartupFolders",
-        "Shortcut-Evidenz wird ausgegeben; RunAsAdmin-Flag wird nicht separat erfasst.",
-    )
-    info["IPC0184"] = make_information(
-        "IPC0184", "Hintergrundbild anpassen", bg_matches,
-        "Firewall_SMB_Patch_Valid.Autoruns",
-        "BGSiVaaS-Start-Evidenz wird ausgegeben; visuelles Endergebnis des Hintergrundbilds ist kein Snapshotfeld.",
-    )
+    bg_simple = {"BGInfoAutoruns": bg_matches, "LocalUsers": as_list(local_users)}
+    info["IPC0183"] = make_information("IPC0183", TASK_NAMES["IPC0183"], bg_simple,
+        "Firewall_SMB_Patch_Valid.Autoruns + Initial_Valid.LocalUsers")
+    info["IPC0184"] = make_information("IPC0184", TASK_NAMES["IPC0184"], bg_simple,
+        "Firewall_SMB_Patch_Valid.Autoruns + Initial_Valid.LocalUsers")
+
+    vnc_rule_candidates = []
+    for rule in as_list(as_dict(firewall).get("Rules")):
+        if not isinstance(rule, dict): continue
+        haystack = " ".join(text(rule.get(k)) for k in ("Name", "DisplayName", "Description", "DisplayGroup"))
+        if regex_search(r"(?i)VNC", haystack) and bool_value(rule.get("Enabled")) is True and text(rule.get("Action")).lower() == "allow" and profile_is_all(rule.get("Profile")):
+            vnc_rule_candidates.append(rule)
+    checks["IPC0187"] = make_check("IPC0187", TASK_NAMES["IPC0187"], bool(vnc_rule_candidates) if isinstance(firewall, dict) else None,
+        {"Enabled": True, "Action": "Allow", "Profiles": ["Domain", "Private", "Public"]}, vnc_rule_candidates if isinstance(firewall, dict) else None,
+        "Firewall_SMB_Patch_Valid.Firewall.Rules")
+
+    checks["IPC0188"] = make_check("IPC0188", TASK_NAMES["IPC0188"], None,
+        {"hosts": True, "lmhosts": True}, None, "Direkt/PowerShell/Test-Path", "Dateiexistenz wird live geprueft.")
+
+    part_of_domain = bool_value(as_dict(domain_info).get("PartOfDomain"))
+    if part_of_domain is False:
+        checks.pop("IPC0189", None)
+        info["IPC0189"] = make_information("IPC0189", TASK_NAMES["IPC0189"], domain_info, "Initial_Valid.DomainInformation")
+    elif part_of_domain is True:
+        checks["IPC0189"] = make_ignored("IPC0189", TASK_NAMES["IPC0189"], "Domaenenmitglied; Arbeitsgruppe nicht relevant.", "Initial_Valid.DomainInformation")
+        info.pop("IPC0189", None)
 
     # IPC0202 / IPC0203 - SIMATIC Logon.
     checks["IPC0202"] = software_presence_check(
@@ -1434,14 +1796,21 @@ def evaluate_os_server(host, expected):
         "InstalledSoftware.AllProducts", "Aufgabenliste",
     )
 
-    simatic_logon_registry = registry_evidence_matches(
-        siemens_registry, r"SIMATIC.*Logon|Logon.*SIMATIC|Automatic.*Log|Auto.*Log"
-    )
-    info["IPC0204"] = make_information(
-        "IPC0204", "SIMATIC Logon konfigurieren", simatic_logon_registry,
-        "Software_PCS7_Components_Valid.SiemensRegistryEvidence",
-        "SIMATIC-Logon-Evidenz fuer automatisches Abmelden wird ausgegeben; Checkbox ist nicht als festes Feld normalisiert.",
-    )
+    simatic_logon_registry = registry_evidence_matches(siemens_registry, r"SIMATIC.*Logon|Logon.*SIMATIC|Automatic.*Log|Auto.*Log")
+    simatic_logon_expected = as_dict(software_expected.get("simatic_logon"))
+    simatic_logon_any_matches = product_matches(products, text(simatic_logon_expected.get("name_regex") or r"SIMATIC\s*Logon")) if products is not None else []
+    if simatic_logon_any_matches or simatic_logon_registry:
+        ipc0204_state = True
+    elif products is not None:
+        ipc0204_state = False
+    else:
+        ipc0204_state = None
+    checks["IPC0204"] = make_check("IPC0204", "SIMATIC Logon konfigurieren - automatisches Abmelden deaktivieren", ipc0204_state,
+        {"SimaticLogonInstalledOrDetected": True, "GuiAutomaticLogoffSetting": "NICHT_PRUEFBAR"},
+        {"InstalledSoftware": simatic_logon_any_matches, "RegistryEvidence": simatic_logon_registry},
+        "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts + SiemensRegistryEvidence",
+        "Gleiche Logik wie 0160/ES; die konkrete GUI-Checkbox ist nicht stabil normalisiert.")
+    info.pop("IPC0204", None)
 
     # IPC0210 - WinCC Explorer Sprache indirekt.
     wincc_language = registry_evidence_matches(
@@ -1471,12 +1840,12 @@ def evaluate_os_server(host, expected):
         "Microsoft Edge 137.0.3296.83 installiert",
     )
 
-    # IPC0234 - Pagefiles indirekt.
-    info["IPC0234"] = make_information(
-        "IPC0234", "Auslagerungsdatei konfigurieren", as_dict(best_practice).get("PageFiles"),
-        "Initial_Valid.InstallationBestPractice.PageFiles",
-        "Aktuelle Pagefile-Pfade und Groessen; AutomaticManagedPagefile ist nicht als eigenes Snapshotfeld vorhanden.",
-    )
+    # IPC0234 - Sollwertpruefung erfolgt direkt (C: und D: systemverwaltet).
+    checks["IPC0234"] = make_check("IPC0234", TASK_NAMES["IPC0234"], None,
+        as_dict(as_dict(expected.get("system")).get("pagefile")),
+        as_dict(best_practice).get("PageFiles") if isinstance(best_practice, dict) else None,
+        "Direkt/PowerShell/Win32_ComputerSystem + Win32_PageFileSetting + Win32_PageFileUsage")
+    info.pop("IPC0234", None)
 
     # IPC0235 / IPC0238 - WinCC Autostart und Service-Mode Evidenz.
     wincc_registry = registry_evidence_matches(
@@ -1498,21 +1867,23 @@ def evaluate_os_server(host, expected):
         "OS-Server-Service-Mode-/WinCC_RT-Evidenz wird ausgegeben; ohne eindeutiges normiertes Feld manuelle Bewertung.",
     )
 
-    # IPC0245 / IPC0246 - Firewall.
-    checks["IPC0245"] = make_check(
-        "IPC0245", "VNC-Viewer Firewallregel prüfen", vnc_fw_ok,
-        "VNC-Regeln aktiviert, Inbound Allow, alle Profile", pattern_results,
-        "Firewall_SMB_Patch_Valid.Firewall.Rules",
-        "Semaphore: expected_firewall_rule_name_patterns + Aufgabenliste",
-    )
+    # IPC0245 - VNC-Viewer-Firewallregel fuer alle Profile.
+    viewer_rule_regex = text(as_dict(as_dict(expected.get("hardening")).get("firewall")).get("vnc_viewer_rule_name_regex") or r"(?i)(VNC.*Viewer|UltraVNC.*Viewer)")
+    viewer_rules = []
+    for rule in as_list(as_dict(firewall).get("Rules")):
+        if not isinstance(rule, dict): continue
+        haystack = " ".join(text(rule.get(k)) for k in ("Name", "DisplayName", "Description", "DisplayGroup"))
+        if regex_search(viewer_rule_regex, haystack) and bool_value(rule.get("Enabled")) is True and text(rule.get("Action")).lower() == "allow" and profile_is_all(rule.get("Profile")):
+            viewer_rules.append(rule)
+    checks["IPC0245"] = make_check("IPC0245", TASK_NAMES["IPC0245"], bool(viewer_rules) if isinstance(firewall, dict) else None,
+        {"ViewerRuleRegex": viewer_rule_regex, "Enabled": True, "Action": "Allow", "Profiles": ["Domain", "Private", "Public"]}, viewer_rules if isinstance(firewall, dict) else None,
+        "Firewall_SMB_Patch_Valid.Firewall.Rules")
     required = {"domain", "private", "public"}
     profile_map = {text(x.get("Name")).lower(): x for x in fw_profiles if isinstance(x, dict)}
     fw_all_ok = all(name in profile_map and bool_value(profile_map[name].get("Enabled")) is True for name in required)
-    checks["IPC0246"] = make_check(
-        "IPC0246", "Firewall für alle Profile aktiviert", fw_all_ok,
-        {"Domain": True, "Private": True, "Public": True}, fw_profiles,
-        "Firewall_SMB_Patch_Valid.Firewall.Profiles", "Aufgabenliste",
-    )
+    checks["IPC0246"] = make_check("IPC0246", TASK_NAMES["IPC0246"], fw_all_ok if isinstance(firewall, dict) else None,
+        {"Domain": True, "Private": True, "Public": True}, fw_profiles if isinstance(firewall, dict) else None,
+        "Firewall_SMB_Patch_Valid.Firewall.Profiles")
 
     # IPC0247 - Defender Manipulationsschutz aus.
     defender_status = as_dict(as_dict(defender).get("ComputerStatus"))
@@ -1529,10 +1900,13 @@ def evaluate_os_server(host, expected):
         "Initial_Valid.MicrosoftDefender",
         "Defender-Status/Preferences fuer manuellen Abgleich; konkrete UI-Option ist nicht normiert.",
     )
-    info["IPC0251"] = make_information(
-        "IPC0251", "Defender Sicherheitsstatus i.O.", defender,
-        "Initial_Valid.MicrosoftDefender", "Vollstaendiger vorhandener Defender-Status.",
-    )
+    defender_health_fields = ["AMServiceEnabled", "AntivirusEnabled", "AntispywareEnabled", "BehaviorMonitorEnabled", "IoavProtectionEnabled", "NISEnabled", "OnAccessProtectionEnabled", "RealTimeProtectionEnabled"]
+    defender_health_evidence = {name: defender_status.get(name) for name in defender_health_fields if name in defender_status}
+    defender_health_state = all(bool_value(v) is True for v in defender_health_evidence.values()) if defender_health_evidence else None
+    checks["IPC0251"] = make_check("IPC0251", TASK_NAMES["IPC0251"], defender_health_state,
+        {name: True for name in defender_health_fields}, defender_health_evidence or None,
+        "Initial_Valid.MicrosoftDefender.ComputerStatus", "Manipulationsschutz wird separat in IPC0247 bewertet.")
+    info.pop("IPC0251", None)
 
     # ------------------------------------------------------------------
     # Zusaetzliche OS-Server-ID-Pruefungen, aus 0160-Prueflogik abgeleitet.
@@ -1623,10 +1997,6 @@ def evaluate_os_server(host, expected):
     info["IPC0165"] = make_information("IPC0165", TASK_NAMES["IPC0165"], setup_logs, "Software_PCS7_Components_Valid.PCS7SetupLogEvidence", "Security-Controller-/Rahmensetup-Evidenz wird ausgegeben; der historische fehlerfreie Dialogdurchlauf ist nicht eindeutig als Einzelwert normalisiert.")
 
     info["IPC0185"] = make_information("IPC0185", TASK_NAMES["IPC0185"], {"BGInfoAutoruns": bg_matches, "LocalUsers": [u for u in as_list(local_users) if isinstance(u, dict) and regex_search(r"WinCC_RT", u.get("Name"))]}, "Firewall_SMB_Patch_Valid.Autoruns + Initial_Valid.LocalUsers", "Das visuelle Hintergrundbild im WinCC_RT-Benutzerprofil kann aus den vorhandenen Snapshots nicht belastbar bewertet werden.")
-    checks["IPC0187"] = referenced_check("IPC0187", TASK_NAMES["IPC0187"], "IPC0027", checks.get("IPC0027"), "Wiederholungspruefung derselben VNC-Firewall-Endzustaende.")
-    info["IPC0188"] = make_information("IPC0188", TASK_NAMES["IPC0188"], network_adapters, "Initial_Valid.NetworkAdapters", "hosts/lmhosts-Dateiinhalte sind im aktuellen Snapshot nicht als eigener normalisierter Abschnitt enthalten; Netzwerk-/WINS-Evidenz wird ausgegeben.")
-    info["IPC0189"] = make_information("IPC0189", TASK_NAMES["IPC0189"], domain_info, "Initial_Valid.DomainInformation", "WORKGROUP war ein Zwischenzustand vor dem Domain-Join. Der aktuelle OS-Server-Endzustand ist Domainmitgliedschaft; der historische WORKGROUP-Schritt ist nachtraeglich nicht beweisbar.")
-    info["IPC0190"] = make_information("IPC0190", TASK_NAMES["IPC0190"], vnc_services, "Certificates_Services_Drivers_Valid.Services", "Ein Neustart der VNC-Verbindung ist ein historischer Vorgang; dokumentiert wird der aktuelle UltraVNC-Dienstzustand.")
     checks["IPC0191"] = referenced_check("IPC0191", TASK_NAMES["IPC0191"], "IPC0038", checks.get("IPC0038"), "Identischer Endzustand des integrierten RID-500-Administratorkontos.")
 
     pm_matches = product_matches(products, r"PM[\s-]*Logon") if products else []
@@ -1645,6 +2015,668 @@ def evaluate_os_server(host, expected):
     checks["IPC0231"] = make_check("IPC0231", TASK_NAMES["IPC0231"], (bool(sql2019) and bool(wincc8)) if products else None, {"SQLServer2019": True, "WinCCV8": True}, {"SQLServer2019": sql2019, "WinCCV8": wincc8, "SQLServerComponents": sql_components}, "Software_PCS7_Components_Valid.InstalledSoftware/SQLServerComponents", "Aufgabenliste", "Geprueft wird der aktuelle Endzustand; die historische Deinstallation/Neuinstallation selbst ist nicht beweisbar.")
 
     checks["IPC0252"] = software_presence_check("IPC0252", TASK_NAMES["IPC0252"], installed_software, r"UltraVNC|uvnc", None, "UltraVNC Viewer installiert")
+
+
+    # ------------------------------------------------------------------
+    # Konsolidierte OS-Server-Prueflogik nach Installationsliste.
+    # Dieser Block ueberschreibt bewusst aeltere Informations-/Pruefwerte
+    # dort, wo ein belastbarer Endzustand vorhanden ist.
+    # ------------------------------------------------------------------
+    network_expected = as_dict(expected.get("network"))
+    adapter_policy = as_dict(network_expected.get("adapter_policy"))
+    terminalbus_expected = as_dict(network_expected.get("terminalbus"))
+    anlagenbus_expected = as_dict(network_expected.get("anlagenbus"))
+    redundanzbus_expected = as_dict(network_expected.get("redundanzbus"))
+    software_expected = as_dict(expected.get("software"))
+    hardening_expected = as_dict(expected.get("hardening"))
+
+    # IPC0013 - alle lokalen Benutzer in der Matrix ausgeben.
+    checks.pop("IPC0013", None)
+    info["IPC0013"] = make_information(
+        "IPC0013",
+        TASK_NAMES["IPC0013"],
+        local_users if isinstance(local_users, list) else None,
+        "Initial_Valid.LocalUsers",
+        "Alle lokalen Benutzer werden mit Enabled, PasswordExpires und Gruppen ausgegeben.",
+    )
+
+    # IPC0015 - nur den Computernamen ausgeben.
+    checks.pop("IPC0015", None)
+    info["IPC0015"] = make_information(
+        "IPC0015",
+        TASK_NAMES["IPC0015"],
+        as_dict(identity).get("ComputerName") if isinstance(identity, dict) else None,
+        "Initial_Valid.Identity.ComputerName",
+    )
+
+    # IPC0024 - alle Netzwerkadapter; die CSV-Ausgabe wird kompakt formatiert.
+    checks.pop("IPC0024", None)
+    info["IPC0024"] = make_information(
+        "IPC0024",
+        TASK_NAMES["IPC0024"],
+        network_adapters if isinstance(network_adapters, list) else None,
+        "Initial_Valid.NetworkAdapters",
+    )
+
+    # IPC0025 - BIOS/Chipset inklusive Datum gegen den vorgegebenen Sollwert.
+    chipset_expected = as_dict(expected.get("chipset"))
+    chipset_regex = text(chipset_expected.get("regex")).strip()
+    expected_bios_date = text(chipset_expected.get("release_date") or "2022-10-12").strip()
+    bios_evidence = None
+    bios_state = None
+    if isinstance(bios, dict) or isinstance(system_info, dict):
+        raw_release = text(as_dict(bios).get("ReleaseDate")).strip()
+        actual_bios_date = raw_release
+        m = re.match(r"^(\d{4})(\d{2})(\d{2})", raw_release)
+        if m:
+            actual_bios_date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        elif re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", raw_release):
+            d, mth, y = raw_release.split(".")
+            actual_bios_date = f"{y}-{mth}-{d}"
+
+        bios_evidence = {
+            "BIOS": {
+                "Manufacturer": as_dict(bios).get("Manufacturer"),
+                "Name": as_dict(bios).get("Name"),
+                "Version": as_dict(bios).get("Version"),
+                "SMBIOSBIOSVersion": as_dict(bios).get("SMBIOSBIOSVersion"),
+                "ReleaseDate": as_dict(bios).get("ReleaseDate"),
+                "NormalizedReleaseDate": actual_bios_date,
+            },
+            "Mainboard": as_list(as_dict(system_info).get("Mainboard")),
+        }
+        searchable = json.dumps(bios_evidence, ensure_ascii=False)
+        chipset_ok = bool(chipset_regex) and regex_search(chipset_regex, searchable)
+        date_ok = (not expected_bios_date) or actual_bios_date == expected_bios_date
+        bios_state = chipset_ok and date_ok
+
+    checks["IPC0025"] = make_check(
+        "IPC0025",
+        TASK_NAMES["IPC0025"],
+        bios_state,
+        {"ChipsetRegex": chipset_regex, "ReleaseDate": expected_bios_date},
+        bios_evidence,
+        "Initial_Valid.BIOS + Initial_Valid.SystemInformation.Mainboard",
+        "Semaphore: chipset.regex/chipset.release_date",
+    )
+    info.pop("IPC0025", None)
+
+    terminalbus = find_adapters_by_name_regex(
+        network_adapters,
+        terminalbus_expected.get("name_regex") or expected.get("terminalbus_adapter_regex") or r"^Terminalbus$",
+    )
+    anlagenbus = find_adapters_by_name_regex(
+        network_adapters,
+        anlagenbus_expected.get("name_regex") or r"^Anlagenbus$",
+    )
+    redundanzbus = find_adapters_by_name_regex(
+        network_adapters,
+        redundanzbus_expected.get("name_regex") or r"^Redundanzbus$",
+    )
+
+    # IPC0050 - Terminalbus ausgeben; fehlt er, ist der Endzustand NOK.
+    checks.pop("IPC0050", None)
+    info.pop("IPC0050", None)
+    if isinstance(network_adapters, list) and terminalbus:
+        info["IPC0050"] = make_information(
+            "IPC0050", TASK_NAMES["IPC0050"], terminalbus,
+            "Initial_Valid.NetworkAdapters",
+        )
+    else:
+        checks["IPC0050"] = make_check(
+            "IPC0050", TASK_NAMES["IPC0050"],
+            False if isinstance(network_adapters, list) else None,
+            {"Adapter": "Terminalbus", "Present": True},
+            {"MatchingAdapters": terminalbus} if isinstance(network_adapters, list) else None,
+            "Initial_Valid.NetworkAdapters",
+        )
+
+    # IPC0052 - Anlagenbus 192.168.220.x und die drei geforderten Bindings.
+    anlagenbus_ipv4_regex = text(anlagenbus_expected.get("ipv4_regex") or r"^192\.168\.220\.")
+    ipc0052_state = None
+    ipc0052_ist = None
+    if isinstance(network_adapters, list):
+        adapter_results = []
+        all_ok = bool(anlagenbus)
+        for adapter in anlagenbus:
+            ipv4 = [
+                text(row.get("IPAddress"))
+                for row in as_list(adapter.get("IPAddresses"))
+                if isinstance(row, dict)
+                and text(row.get("AddressFamily")).lower() in {"ipv4", "2"}
+                and text(row.get("IPAddress"))
+            ]
+            ip_ok = any(regex_search(anlagenbus_ipv4_regex, value) for value in ipv4)
+            client_bindings = binding_matches(adapter, component_id="ms_msclient")
+            server_bindings = binding_matches(adapter, component_id="ms_server")
+            simatic_bindings = binding_matches(
+                adapter,
+                display_regex=r"SIMATIC.*Industrial.*Ethernet.*\(ISO\)|SIMATIC.*Industrial.*Ethernet.*ISO",
+            )
+            client_ok = bool(client_bindings) and all(bool_value(x.get("Enabled")) is False for x in client_bindings)
+            server_ok = bool(server_bindings) and all(bool_value(x.get("Enabled")) is False for x in server_bindings)
+            simatic_ok = bool(simatic_bindings) and any(bool_value(x.get("Enabled")) is True for x in simatic_bindings)
+            adapter_ok = ip_ok and client_ok and server_ok and simatic_ok
+            all_ok = all_ok and adapter_ok
+            adapter_results.append({
+                "Adapter": adapter,
+                "IPv4": ipv4,
+                "IPv4OK": ip_ok,
+                "Bindings": {
+                    "ClientForMicrosoftNetworks": {"OK": client_ok, "Matches": client_bindings},
+                    "FileAndPrinterSharing": {"OK": server_ok, "Matches": server_bindings},
+                    "SIMATICIndustrialEthernetISO": {"OK": simatic_ok, "Matches": simatic_bindings},
+                },
+            })
+        ipc0052_state = all_ok
+        ipc0052_ist = adapter_results
+
+    checks["IPC0052"] = make_check(
+        "IPC0052", TASK_NAMES["IPC0052"], ipc0052_state,
+        {
+            "IPv4Regex": anlagenbus_ipv4_regex,
+            "ms_msclient": False,
+            "ms_server": False,
+            "SIMATIC Industrial Ethernet (ISO)": True,
+        },
+        ipc0052_ist,
+        "Initial_Valid.NetworkAdapters[].IPAddresses/Bindings",
+        "Semaphore: network.anlagenbus",
+    )
+    info.pop("IPC0052", None)
+
+    # IPC0053 - Redundanzbus nur ausgeben; fehlt er, NOK.
+    checks.pop("IPC0053", None)
+    info.pop("IPC0053", None)
+    if isinstance(network_adapters, list) and redundanzbus:
+        info["IPC0053"] = make_information(
+            "IPC0053", TASK_NAMES["IPC0053"], redundanzbus,
+            "Initial_Valid.NetworkAdapters",
+        )
+    else:
+        checks["IPC0053"] = make_check(
+            "IPC0053", TASK_NAMES["IPC0053"],
+            False if isinstance(network_adapters, list) else None,
+            {"Adapter": "Redundanzbus", "Present": True},
+            {"MatchingAdapters": redundanzbus} if isinstance(network_adapters, list) else None,
+            "Initial_Valid.NetworkAdapters",
+        )
+
+    # IPC0054 - maximale Anzahl aktivierter physischer Adapter ist rechnertypabhaengig.
+    max_by_type = as_dict(adapter_policy.get("max_enabled_physical_adapters_by_type"))
+    max_physical = int_value(max_by_type.get("OS_Server"))
+    if max_physical is None:
+        max_physical = int_value(adapter_policy.get("max_enabled_physical_adapters"))
+    allowed_adapter_names = [
+        text(x).strip()
+        for x in as_list(adapter_policy.get("allowed_names") or expected.get("allowed_enabled_adapter_names"))
+        if text(x).strip()
+    ]
+    allowed_normalized = {x.lower() for x in allowed_adapter_names}
+    physical = physical_network_adapters(network_adapters)
+    enabled_physical = [adapter for adapter in physical if adapter_is_enabled(adapter) is True]
+    ipc0054_state = None
+    if isinstance(network_adapters, list):
+        ipc0054_state = (
+            max_physical is not None
+            and len(enabled_physical) <= max_physical
+            and all(text(adapter.get("Name")).strip().lower() in allowed_normalized for adapter in enabled_physical)
+        )
+    checks["IPC0054"] = make_check(
+        "IPC0054", TASK_NAMES["IPC0054"], ipc0054_state,
+        {"ComputerType": "OS_Server", "MaxEnabledPhysicalAdapters": max_physical, "AllowedNames": allowed_adapter_names},
+        {
+            "EnabledPhysicalAdapterCount": len(enabled_physical),
+            "PhysicalAdapters": [
+                {
+                    "Name": x.get("Name"),
+                    "Status": x.get("Status"),
+                    "EnabledByStatus": adapter_is_enabled(x),
+                    "Virtual": x.get("Virtual"),
+                }
+                for x in physical
+            ],
+        } if isinstance(network_adapters, list) else None,
+        "Initial_Valid.NetworkAdapters",
+        "Semaphore: network.adapter_policy.max_enabled_physical_adapters_by_type.OS_Server",
+        "Deaktivierte bzw. nicht vorhandene Hardwareadapter werden nicht gegen die Maximalzahl gezaehlt.",
+    )
+
+    # IPC0055 - alle eingetragenen DNS- und WINS-Server ausgeben.
+    all_dns = []
+    all_wins = []
+    if isinstance(network_adapters, list):
+        for adapter in network_adapters:
+            if not isinstance(adapter, dict):
+                continue
+            for dns_record in as_list(adapter.get("DnsServers")):
+                if isinstance(dns_record, dict):
+                    all_dns.extend(text(x) for x in as_list(dns_record.get("ServerAddresses")) if text(x))
+            wins = as_dict(adapter.get("WINS"))
+            for key in ("NameServerList", "WINSServers", "WinsServers", "PrimaryWINSServer", "SecondaryWINSServer"):
+                all_wins.extend(text(x) for x in as_list(wins.get(key)) if text(x))
+    all_dns = list(dict.fromkeys(all_dns))
+    all_wins = list(dict.fromkeys(all_wins))
+    checks.pop("IPC0055", None)
+    info["IPC0055"] = make_information(
+        "IPC0055", TASK_NAMES["IPC0055"],
+        {"DNS": all_dns, "WINS": all_wins} if isinstance(network_adapters, list) else None,
+        "Initial_Valid.NetworkAdapters[].DnsServers/WINS",
+    )
+
+    # IPC0059 - Domaenenmitgliedschaft gegen Semaphore.
+    wanted_domain = text(as_dict(expected.get("domain")).get("name")).strip().rstrip(".")
+    domain = as_dict(domain_info)
+    actual_domain = text(domain.get("Domain")).strip().rstrip(".")
+    domain_state = None
+    if domain:
+        domain_state = bool_value(domain.get("PartOfDomain")) is True and actual_domain.lower() == wanted_domain.lower()
+    checks["IPC0059"] = make_check(
+        "IPC0059", TASK_NAMES["IPC0059"], domain_state,
+        {"PartOfDomain": True, "Domain": wanted_domain},
+        domain if domain else None,
+        "Initial_Valid.DomainInformation",
+        "Semaphore: domain.name",
+    )
+    info.pop("IPC0059", None)
+
+    # IPC0060 - Domain/OU/DN nur dokumentieren.
+    checks.pop("IPC0060", None)
+    info["IPC0060"] = make_information(
+        "IPC0060", TASK_NAMES["IPC0060"],
+        domain if domain else None,
+        "Initial_Valid.DomainInformation",
+    )
+
+    # IPC0070 - nur UltraVNC Viewer; Version aus Semaphore.
+    viewer_expected = as_dict(software_expected.get("ultravnc_viewer"))
+    viewer_required = bool_value(viewer_expected.get("expected_installed"))
+    viewer_name_regex = text(viewer_expected.get("name_regex") or r"UltraVNC|uvnc")
+    viewer_version_regex = text(
+        viewer_expected.get("version_regex")
+        or as_dict(software_expected.get("ultravnc_server")).get("version_regex")
+    )
+    viewer_name_matches = product_matches(products, viewer_name_regex) if products is not None else []
+    viewer_version_matches = product_matches(products, viewer_name_regex, viewer_version_regex if viewer_version_regex else None) if products is not None else []
+    viewer_state = None
+    if products is not None and viewer_required is not None:
+        if viewer_required:
+            viewer_state = bool(viewer_version_matches if viewer_version_regex else viewer_name_matches)
+        else:
+            viewer_state = not bool(viewer_name_matches)
+    checks["IPC0070"] = make_check(
+        "IPC0070", TASK_NAMES["IPC0070"], viewer_state,
+        {"ExpectedInstalled": viewer_required, "NameRegex": viewer_name_regex, "VersionRegex": viewer_version_regex},
+        {"NameMatches": viewer_name_matches, "VersionMatches": viewer_version_matches} if products is not None else None,
+        "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+        "Semaphore: software.ultravnc_viewer",
+        "Die direkte Live-Pruefung des vncviewer.exe-Binaries ueberschreibt diesen Inventarcheck, wenn verfuegbar.",
+    )
+
+    # IPC0072 - Partitionsgroessen fuer OS Server.
+    storage_expected = as_dict(expected.get("storage"))
+    system_drive_expected = as_dict(storage_expected.get("system_drive"))
+    data_drive_expected = as_dict(storage_expected.get("data_drive"))
+    c_min_gb = float(system_drive_expected.get("minimum_size_gb")) if system_drive_expected.get("minimum_size_gb") is not None else None
+    d_by_type = as_dict(data_drive_expected.get("expected_size_gb_by_type"))
+    d_expected_gb = float(d_by_type.get("OS_Server")) if d_by_type.get("OS_Server") is not None else None
+    d_tolerance_gb = float(data_drive_expected.get("tolerance_gb")) if data_drive_expected.get("tolerance_gb") is not None else 0.0
+    ipc0072_state = None
+    ipc0072_ist = None
+    if isinstance(storage, dict):
+        volumes = [x for x in as_list(storage.get("Volumes")) if isinstance(x, dict)]
+        c_rows = [x for x in volumes if text(x.get("DriveLetter")).upper().rstrip(":") == "C"]
+        d_rows = [x for x in volumes if text(x.get("DriveLetter")).upper().rstrip(":") == "D"]
+        c_gb = bytes_to_gb(c_rows[0].get("SizeBytes")) if c_rows else None
+        d_gb = bytes_to_gb(d_rows[0].get("SizeBytes")) if d_rows else None
+        ipc0072_ist = {
+            "C": {"SizeGB": round(c_gb, 2) if c_gb is not None else None},
+            "D": {"SizeGB": round(d_gb, 2) if d_gb is not None else None},
+        }
+        if c_gb is not None and d_gb is not None and c_min_gb is not None and d_expected_gb is not None:
+            ipc0072_state = c_gb >= c_min_gb and abs(d_gb - d_expected_gb) <= d_tolerance_gb
+    checks["IPC0072"] = make_check(
+        "IPC0072", TASK_NAMES["IPC0072"], ipc0072_state,
+        {"ComputerType": "OS_Server", "C_MinimumSizeGB": c_min_gb, "D_ExpectedSizeGB": d_expected_gb, "D_ToleranceGB": d_tolerance_gb},
+        ipc0072_ist,
+        "Initial_Valid.Storage.Volumes",
+        "Semaphore: storage",
+    )
+    info.pop("IPC0072", None)
+
+    # IPC0090 - 7-Zip mit Version aus Semaphore.
+    seven_zip_expected = as_dict(software_expected.get("seven_zip"))
+    seven_required = bool_value(seven_zip_expected.get("expected_installed"))
+    seven_name = text(seven_zip_expected.get("name_regex"))
+    seven_version = text(seven_zip_expected.get("version_regex"))
+    seven_names = product_matches(products, seven_name) if products is not None and seven_name else []
+    seven_versions = product_matches(products, seven_name, seven_version if seven_version else None) if products is not None and seven_name else []
+    seven_state = None
+    if products is not None and seven_required is not None and seven_name:
+        seven_state = bool(seven_versions if seven_version else seven_names) if seven_required else not bool(seven_names)
+    checks["IPC0090"] = make_check(
+        "IPC0090", TASK_NAMES["IPC0090"], seven_state,
+        {"ExpectedInstalled": seven_required, "NameRegex": seven_name, "VersionRegex": seven_version},
+        {"NameMatches": seven_names, "VersionMatches": seven_versions} if products is not None else None,
+        "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+        "Semaphore: software.seven_zip",
+    )
+
+    # IPC0094 - Certificate Path Validation Settings / Network Retrieval ist definiert.
+    certificate_policy = as_list(as_dict(policy_areas).get("Certificates"))
+    chain_config_rows = [
+        row for row in certificate_policy
+        if isinstance(row, dict)
+        and "\\software\\policies\\microsoft\\systemcertificates\\chainengine\\config" in text(row.get("Path")).replace("/", "\\").lower()
+    ]
+    ipc0094_state = None if not isinstance(policy_areas, dict) else bool(chain_config_rows)
+    checks["IPC0094"] = make_check(
+        "IPC0094", TASK_NAMES["IPC0094"], ipc0094_state,
+        {"PolicyDefined": True, "RegistryPath": r"HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\ChainEngine\Config"},
+        chain_config_rows if chain_config_rows else None,
+        "GPOs_Valid.PolicyAreaSnapshots.Certificates",
+        "Aufgabenliste",
+    )
+    info.pop("IPC0094", None)
+
+    # IPC0126 - UC02 ist eine Sollwertpruefung; Software- oder Setup-Log-Treffer reichen als Nachweis.
+    def _flatten_strings(value):
+        result = []
+        if isinstance(value, dict):
+            for key, item in value.items():
+                result.append(text(key))
+                result.extend(_flatten_strings(item))
+        elif isinstance(value, list):
+            for item in value:
+                result.extend(_flatten_strings(item))
+        elif value is not None:
+            result.append(text(value))
+        return result
+
+    uc02_products = product_matches(products, r"PCS\s*7.*(UC\s*0?2|Update.*Collection.*0?2)") if products is not None else []
+    uc02_logs = [
+        value for value in _flatten_strings(setup_logs)
+        if regex_search(r"(UC\s*0?2|Update.*Collection.*0?2)", value)
+    ]
+    uc02_source_available = products is not None or isinstance(setup_logs, (dict, list))
+    checks["IPC0126"] = make_check(
+        "IPC0126", TASK_NAMES["IPC0126"],
+        bool(uc02_products or uc02_logs) if uc02_source_available else None,
+        {"PCS7V10UC02Installed": True},
+        {"InstalledSoftwareMatches": uc02_products, "SetupLogMatches": uc02_logs[:100]} if uc02_source_available else None,
+        "InstalledSoftware + PCS7SetupLogEvidence",
+        "Aufgabenliste",
+    )
+    info.pop("IPC0126", None)
+
+    # IPC0139 - WinCC OPCServer V3.9 SP12 Update 5 mit Versionsausgabe.
+    opc_expected = as_dict(software_expected.get("wincc_opc_server"))
+    opc_name_regex = text(opc_expected.get("name_regex") or r"WinCC.*OPC|OPC.*Server")
+    opc_version_regex = text(opc_expected.get("version_regex") or r"(3[._ ]?9.*SP\s*12.*(?:Upd|Update)\s*5|3\.9(?:\.\d+)*\D*SP\s*12\D*(?:Upd|Update)\s*5)")
+    opc_matches = []
+    if products is not None:
+        for product in products:
+            if not isinstance(product, dict):
+                continue
+            combined = " ".join([text(product.get("DisplayName")), text(product.get("DisplayVersion"))])
+            if regex_search(opc_name_regex, product.get("DisplayName")) and regex_search(opc_version_regex, combined):
+                opc_matches.append({
+                    "DisplayName": product.get("DisplayName"),
+                    "DisplayVersion": product.get("DisplayVersion"),
+                    "Publisher": product.get("Publisher"),
+                })
+    checks["IPC0139"] = make_check(
+        "IPC0139", TASK_NAMES["IPC0139"],
+        bool(opc_matches) if products is not None else None,
+        {"Installed": True, "NameRegex": opc_name_regex, "VersionRegex": opc_version_regex},
+        opc_matches if products is not None else None,
+        "Software_PCS7_Components_Valid.InstalledSoftware.AllProducts",
+        "Semaphore: software.wincc_opc_server",
+    )
+    info.pop("IPC0139", None)
+
+    # IPC0140 steuert die abhaengigen Schritte IPC0141-IPC0146.
+    orcla_result = as_dict(checks.get("IPC0140"))
+    if orcla_result.get("status") == "NOK":
+        for tid in ("IPC0141", "IPC0142", "IPC0143", "IPC0144", "IPC0145", "IPC0146"):
+            checks[tid] = make_ignored(
+                tid, TASK_NAMES.get(tid, "ORCLA-Folgeschritt"),
+                "IGNORIERT: IPC0140 ist NOK; ORCLA ist nicht installiert und die abhaengige Pruefung ist daher nicht relevant.",
+                "Abhaengigkeit IPC0140",
+            )
+            info.pop(tid, None)
+    elif orcla_result.get("status") == "OK":
+        cert_info = {"Certificates": certificates, "Bindings": certificate_bindings}
+        for tid in ("IPC0141", "IPC0142", "IPC0143", "IPC0144", "IPC0145", "IPC0146"):
+            checks.pop(tid, None)
+            info[tid] = make_information(
+                tid, TASK_NAMES.get(tid, "Zertifikate austauschen"), cert_info,
+                "Certificates_Services_Drivers_Valid.Certificates/CertificateBindings",
+                "Zertifikate werden im CSV in einem kompakten Format ausgegeben.",
+            )
+
+    # IPC0149 - optionaler Sollwert aus Semaphore; ohne Liste reine Ausgabe der aktiven Features.
+    feature_expected = as_dict(hardening_expected.get("windows_features"))
+    disabled_feature_patterns = [
+        text(x) for x in as_list(feature_expected.get("disabled_name_regexes")) if text(x)
+    ]
+    active_features = [x for x in comp_rows if x.get("Enabled") is True]
+    if disabled_feature_patterns:
+        forbidden_active = [
+            row for row in active_features
+            if any(regex_search(pattern, " ".join([text(row.get("Name")), text(row.get("DisplayName"))])) for pattern in disabled_feature_patterns)
+        ]
+        checks["IPC0149"] = make_check(
+            "IPC0149", TASK_NAMES["IPC0149"], not bool(forbidden_active),
+            {"DisabledNameRegexes": disabled_feature_patterns},
+            {"ForbiddenActiveFeatures": forbidden_active, "ActiveFeatures": active_features},
+            "Initial_Valid.WindowsComponents",
+            "Semaphore: hardening.windows_features.disabled_name_regexes",
+        )
+        info.pop("IPC0149", None)
+    else:
+        checks.pop("IPC0149", None)
+        info["IPC0149"] = make_information(
+            "IPC0149", TASK_NAMES["IPC0149"],
+            active_features if isinstance(windows_components, dict) else None,
+            "Initial_Valid.WindowsComponents",
+            "Keine Windows-Feature-Sollwertliste in Semaphore: Ausgabe aller aktiven Features.",
+        )
+
+    # IPC0150 - BitLocker nach strukturiertem Semaphore-Sollwert.
+    bitlocker_expected = as_dict(as_dict(hardening_expected.get("bitlocker")).get("system_drive"))
+    expected_bitlocker_enabled = bool_value(bitlocker_expected.get("expected_enabled"))
+    minimum_encryption = int_value(bitlocker_expected.get("minimum_encryption_percentage"))
+    bitlocker_rows = as_list(as_dict(best_practice).get("BitLocker"))
+    system_bitlocker = [row for row in bitlocker_rows if isinstance(row, dict) and text(row.get("MountPoint")).upper().startswith("C:")]
+    bitlocker_state = None
+    if isinstance(best_practice, dict) and expected_bitlocker_enabled is not None:
+        if expected_bitlocker_enabled:
+            bitlocker_state = bool(system_bitlocker) and any(
+                bool_value(row.get("ProtectionStatus")) is True
+                or text(row.get("ProtectionStatus")).strip().lower() in {"on", "1", "enabled"}
+                for row in system_bitlocker
+            )
+            if bitlocker_state and minimum_encryption is not None:
+                bitlocker_state = any((int_value(row.get("EncryptionPercentage")) or 0) >= minimum_encryption for row in system_bitlocker)
+        else:
+            bitlocker_state = not any(
+                bool_value(row.get("ProtectionStatus")) is True
+                or text(row.get("ProtectionStatus")).strip().lower() in {"on", "1", "enabled"}
+                for row in system_bitlocker
+            )
+    checks["IPC0150"] = make_check(
+        "IPC0150", TASK_NAMES["IPC0150"], bitlocker_state,
+        {"ExpectedEnabled": expected_bitlocker_enabled, "MinimumEncryptionPercentage": minimum_encryption},
+        system_bitlocker if isinstance(best_practice, dict) else None,
+        "Initial_Valid.InstallationBestPractice.BitLocker",
+        "Semaphore: hardening.bitlocker.system_drive",
+    )
+
+    # IPC0151 - deaktivierte Dienste aus hardening.services.disabled.
+    service_specs = [
+        as_dict(x) for x in as_list(as_dict(hardening_expected.get("services")).get("disabled"))
+        if isinstance(x, dict) and text(as_dict(x).get("name_regex"))
+    ]
+    service_patterns = [text(x.get("name_regex")) for x in service_specs]
+    service_ok, service_details = check_disabled_services(services, service_patterns)
+    checks["IPC0151"] = make_check(
+        "IPC0151", TASK_NAMES["IPC0151"],
+        service_ok if service_patterns else None,
+        {"DisabledServices": service_specs},
+        service_details if service_patterns else None,
+        "Certificates_Services_Drivers_Valid.Services.Services",
+        "Semaphore: hardening.services.disabled",
+    )
+
+    # IPC0153 - Telemetrielevel aus Semaphore.
+    telemetry_expected = int_value(as_dict(hardening_expected.get("telemetry")).get("allowed_level"))
+    telemetry_rows = as_list(as_dict(policy_areas).get("Telemetry"))
+    telemetry_value, telemetry_evidence = first_registry_value(telemetry_rows, name="AllowTelemetry")
+    if telemetry_value is None:
+        telemetry_value, telemetry_evidence = first_registry_value(telemetry_rows, name="AllowDiagnosticData")
+    checks["IPC0153"] = make_check(
+        "IPC0153", TASK_NAMES["IPC0153"],
+        (int_value(telemetry_value) == telemetry_expected) if telemetry_expected is not None and telemetry_value is not None else None,
+        {"AllowedTelemetry": telemetry_expected},
+        telemetry_evidence if telemetry_evidence else None,
+        "GPOs_Valid.PolicyAreaSnapshots.Telemetry",
+        "Semaphore: hardening.telemetry.allowed_level",
+    )
+
+    # IPC0154/IPC0155 - SMB-Sollwerte aus Semaphore.
+    smb_expected = as_dict(hardening_expected.get("smb"))
+    signing_expected = as_dict(smb_expected.get("signing"))
+    encryption_expected = as_dict(smb_expected.get("encryption"))
+    expected_client_require = bool_value(signing_expected.get("client_require_security_signature"))
+    expected_server_require = bool_value(signing_expected.get("server_require_security_signature"))
+    expected_server_enable = bool_value(signing_expected.get("server_enable_security_signature"))
+    server_cfg = as_dict(as_dict(smb).get("ServerConfiguration"))
+    client_cfg = as_dict(as_dict(smb).get("ClientConfiguration"))
+    effective_registry = as_dict(as_dict(smb).get("EffectiveRegistry"))
+    server_registry = as_dict(effective_registry.get("Server"))
+    client_registry = as_dict(effective_registry.get("Client"))
+    server_require = smb_config_value(server_cfg, server_registry, "RequireSecuritySignature")
+    server_enable = smb_config_value(server_cfg, server_registry, "EnableSecuritySignature")
+    client_require = smb_config_value(client_cfg, client_registry, "RequireSecuritySignature")
+    signing_known = all(x is not None for x in (expected_client_require, expected_server_require, expected_server_enable, server_require, server_enable, client_require))
+    signing_state = None if not signing_known else (
+        bool_value(client_require) == expected_client_require
+        and bool_value(server_require) == expected_server_require
+        and bool_value(server_enable) == expected_server_enable
+    )
+    checks["IPC0154"] = make_check(
+        "IPC0154", TASK_NAMES["IPC0154"], signing_state,
+        {
+            "Client.RequireSecuritySignature": expected_client_require,
+            "Server.RequireSecuritySignature": expected_server_require,
+            "Server.EnableSecuritySignature": expected_server_enable,
+        },
+        {
+            "Client.RequireSecuritySignature": client_require,
+            "Server.RequireSecuritySignature": server_require,
+            "Server.EnableSecuritySignature": server_enable,
+        },
+        "Firewall_SMB_Patch_Valid.SMB",
+        "Semaphore: hardening.smb.signing",
+    )
+    expected_encrypt_data = bool_value(encryption_expected.get("server_encrypt_data"))
+    actual_encrypt_data = smb_config_value(server_cfg, server_registry, "EncryptData")
+    checks["IPC0155"] = make_check(
+        "IPC0155", TASK_NAMES["IPC0155"],
+        (bool_value(actual_encrypt_data) == expected_encrypt_data) if expected_encrypt_data is not None and actual_encrypt_data is not None else None,
+        {"Server.EncryptData": expected_encrypt_data},
+        {"Server.EncryptData": actual_encrypt_data},
+        "Firewall_SMB_Patch_Valid.SMB.ServerConfiguration",
+        "Semaphore: hardening.smb.encryption.server_encrypt_data",
+    )
+
+    # IPC0156 - Remote Desktop gem. Semaphore deaktiviert/aktiviert.
+    expected_rdp_allowed = bool_value(as_dict(hardening_expected.get("rdp")).get("allow_remote_connections"))
+    effective_values_local = as_list(as_dict(effective_policy).get("Values"))
+    terminal_service_policy = as_list(as_dict(policy_areas).get("TerminalServices"))
+    rdp_value, rdp_rows = first_registry_value(effective_values_local, name="fDenyTSConnections")
+    if rdp_value is None:
+        rdp_value, rdp_rows = first_registry_value(terminal_service_policy, name="fDenyTSConnections")
+    actual_rdp_allowed = None if rdp_value is None else int_value(rdp_value) == 0
+    checks["IPC0156"] = make_check(
+        "IPC0156", TASK_NAMES["IPC0156"],
+        (actual_rdp_allowed == expected_rdp_allowed) if expected_rdp_allowed is not None and actual_rdp_allowed is not None else None,
+        {"AllowRemoteConnections": expected_rdp_allowed},
+        {"fDenyTSConnections": rdp_value, "AllowRemoteConnections": actual_rdp_allowed},
+        "GPOs_Valid.InstallationRelevantEffectiveSettings / PolicyAreaSnapshots.TerminalServices",
+        "Semaphore: hardening.rdp.allow_remote_connections",
+    )
+
+    # IPC0159 - SSL/TLS-Protokolle aus hardening.tls.protocols.
+    tls_expected = as_dict(hardening_expected.get("tls"))
+    protocol_expected = as_dict(tls_expected.get("protocols"))
+    disabled_protocols = [
+        name for name, spec in protocol_expected.items()
+        if bool_value(as_dict(spec).get("enabled")) is False
+    ]
+    enabled_protocols = [
+        name for name, spec in protocol_expected.items()
+        if bool_value(as_dict(spec).get("enabled")) is True
+    ]
+    schannel_ok, schannel_details = check_schannel_protocols(
+        effective_values_local,
+        disabled_protocols,
+        enabled_protocols,
+    )
+    checks["IPC0159"] = make_check(
+        "IPC0159", TASK_NAMES["IPC0159"],
+        schannel_ok if protocol_expected and effective_values_local else None,
+        {"Protocols": protocol_expected},
+        schannel_details if effective_values_local else None,
+        "GPOs_Valid.InstallationRelevantEffectiveSettings.Values (SCHANNEL)",
+        "Semaphore: hardening.tls.protocols",
+    )
+
+    # IPC0166 - Firewallprofile + aktive Netzwerke aus Semaphore.
+    firewall_expected = as_dict(hardening_expected.get("firewall"))
+    required_profiles = [text(x) for x in as_list(firewall_expected.get("required_profiles_enabled")) if text(x)]
+    wanted_category = text(firewall_expected.get("active_network_category"))
+    profile_details = []
+    profile_states = []
+    for wanted in required_profiles:
+        matches = [
+            x for x in as_list(as_dict(firewall).get("Profiles"))
+            if isinstance(x, dict) and text(x.get("Name")).lower() == wanted.lower()
+        ]
+        profile_states.append(bool(matches) and all(bool_value(x.get("Enabled")) is True for x in matches))
+        profile_details.append({"Profile": wanted, "Matches": matches})
+    active_networks = as_list(as_dict(firewall).get("ActiveNetworkProfiles"))
+    network_private = None
+    if active_networks and wanted_category:
+        network_private = all(
+            text(x.get("NetworkCategory")).lower() == wanted_category.lower()
+            for x in active_networks if isinstance(x, dict)
+        )
+    fw_state = None
+    if isinstance(firewall, dict) and required_profiles:
+        requirements = profile_states + [network_private]
+        if any(x is False for x in requirements):
+            fw_state = False
+        elif all(x is True for x in requirements):
+            fw_state = True
+    checks["IPC0166"] = make_check(
+        "IPC0166", TASK_NAMES["IPC0166"], fw_state,
+        {"RequiredProfilesEnabled": required_profiles, "ActiveNetworkCategory": wanted_category},
+        {"ProfileEvaluation": profile_details, "ActiveNetworkProfiles": active_networks, "ActiveNetworksCompliant": network_private},
+        "Firewall_SMB_Patch_Valid.Firewall",
+        "Semaphore: hardening.firewall",
+    )
+
+    for tid, reason in {
+        "IPC0185": "Gemaess Vorgabe ignorieren.",
+        "IPC0190": "Gemaess Vorgabe ignorieren.",
+        "IPC0207": "Gemaess Vorgabe ignorieren.",
+        "IPC0208": "Gemaess Vorgabe ignorieren.",
+        "IPC0209": "Gemaess Vorgabe ignorieren.",
+    }.items():
+        checks[tid] = make_ignored(tid, TASK_NAMES.get(tid, tid), reason)
+        info.pop(tid, None)
 
     # Fehlende Snapshot-Quellen duerfen nicht zu einem Konfigurations-NOK werden.
     # Das ist relevant, wenn eines der fuenf 0120-PowerShell-Skripte auf einem
@@ -1773,12 +2805,12 @@ def evaluate_os_server(host, expected):
 # build/merge pattern as 0160.
 
 DIRECT_IDS = [
-    "IPC0046", "IPC0047", "IPC0063", "IPC0070", "IPC0073", "IPC0076",
-    "IPC0083", "IPC0089", "IPC0160", "IPC0161", "IPC0167", "IPC0200",
-    "IPC0252", "IPC0263", "IPC0264", "IPC0265", "IPC0267", "IPC0268",
-    "IPC0269", "IPC0270", "IPC0271",
+    "IPC0046", "IPC0047", "IPC0048", "IPC0063", "IPC0070", "IPC0073", "IPC0074", "IPC0075", "IPC0076", "IPC0077",
+    "IPC0083", "IPC0084", "IPC0087", "IPC0089", "IPC0094", "IPC0095", "IPC0148", "IPC0152", "IPC0160", "IPC0161",
+    "IPC0166", "IPC0167", "IPC0168", "IPC0182", "IPC0187", "IPC0188", "IPC0200", "IPC0234", "IPC0245", "IPC0246",
+    "IPC0247", "IPC0250", "IPC0251", "IPC0252", "IPC0263", "IPC0264", "IPC0265", "IPC0267", "IPC0268", "IPC0269", "IPC0270", "IPC0271",
 ]
-DIRECT_INFORMATION_IDS = ["IPC0077"]
+DIRECT_INFORMATION_IDS = ["IPC0183", "IPC0184"]
 
 
 def write_json_atomic(path, data):
@@ -1792,16 +2824,49 @@ def write_json_atomic(path, data):
     os.replace(str(tmp), str(path))
 
 
-def csv_information_value(item):
+def csv_information_value(task_id, item):
+    return matrix_information_value(task_id, item)
+
+
+def csv_check_value(task_id, item):
     item = as_dict(item)
-    if item.get("status") != "INFORMATION":
-        return item.get("status") or "NICHT_PRUEFBAR"
-    value = item.get("ist")
-    if value is None:
-        return "NICHT_PRUEFBAR"
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    status = item.get("status") or "NICHT_PRUEFBAR"
+    ist = item.get("ist")
+
+    if task_id == "IPC0072" and status == "NOK":
+        data = as_dict(ist)
+        c_size = as_dict(data.get("C")).get("SizeGB")
+        d_size = as_dict(data.get("D")).get("SizeGB")
+        return "NOK | C={c} GB; D={d} GB".format(
+            c="-" if c_size is None else c_size,
+            d="-" if d_size is None else d_size,
+        )
+
+    if task_id == "IPC0089" and status == "NICHT_PRUEFBAR":
+        data = as_dict(ist)
+        return (
+            "NICHT_PRUEFBAR | Betriebssystemliste={boot}; "
+            "Wiederherstellungsoptionen={recovery}; AutoNeustart={auto}"
+        ).format(
+            boot="deaktiviert" if data.get("OperatingSystemListDisabled") is True else text(data.get("OperatingSystemListDisabled")) or "?",
+            recovery=text(data.get("RecoveryOptionsDisplaySeconds")) or "NICHT_AUSLESBAR",
+            auto=text(data.get("AutoReboot")) or "?",
+        )
+
+    if task_id == "IPC0126":
+        return status + " | " + json.dumps(ist if ist is not None else {}, ensure_ascii=False, separators=(",", ":"))
+
+    if task_id == "IPC0139" and status == "OK":
+        versions = []
+        for match in as_list(ist):
+            if not isinstance(match, dict):
+                continue
+            name = text(match.get("DisplayName")) or "WinCC OPCServer"
+            version = text(match.get("DisplayVersion")) or "-"
+            versions.append(f"{name} [Version={version}]")
+        return "OK | " + (" | ".join(versions) if versions else "Version=-")
+
+    return status
 
 
 def write_csv(output, csv_path):
@@ -1810,17 +2875,32 @@ def write_csv(output, csv_path):
     tmp = csv_path.with_name(csv_path.name + ".tmp")
     with tmp.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle, delimiter=";", quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(["IP-Adresse", "Rechnername", "Computerart", "Ansible-Zugriff", *TASK_IDS])
+        writer.writerow([
+            "IP-Adresse",
+            "Rechnername",
+            "Computerart",
+            "Ansible-Zugriff",
+            "Installierte Software Siemens mit Version",
+            "Installierte Software Gesamt mit Version",
+            *TASK_IDS,
+        ])
         for ip in sorted(hosts, key=ip_sort_key):
             host = as_dict(hosts[ip])
-            row = [ip, host.get("computer_name") or "", "OS Server", "JA" if host.get("ansible_access") else "NEIN"]
+            row = [
+                ip,
+                host.get("computer_name") or "",
+                "OS Server",
+                "JA" if host.get("ansible_access") else "NEIN",
+                software_inventory_csv_value(host.get("siemens_components")),
+                software_inventory_csv_value(host.get("installed_software")),
+            ]
             checks = as_dict(host.get("pruefungen"))
             information = as_dict(host.get("informationen"))
             for task_id in TASK_IDS:
                 if task_id in checks:
-                    row.append(as_dict(checks[task_id]).get("status") or "NICHT_PRUEFBAR")
+                    row.append(csv_check_value(task_id, checks[task_id]))
                 elif task_id in information:
-                    row.append(csv_information_value(information[task_id]))
+                    row.append(csv_information_value(task_id, information[task_id]))
                 else:
                     row.append("NICHT_PRUEFBAR")
             writer.writerow(row)
@@ -1871,6 +2951,15 @@ def run_build(args):
         if text(source_host.get("classification")) != "OS_Server":
             continue
         access = as_dict(source_host.get("zugriff"))
+        installed_software_snapshot = library_section(
+            source_host,
+            "software_und_pcs7",
+            "Software_PCS7_Components_Valid",
+            "InstalledSoftware",
+        )
+        siemens_components = software_inventory(installed_software_snapshot, "SiemensAndPCS7")
+        all_installed_software = software_inventory(installed_software_snapshot, "AllProducts")
+
         if access and bool(access.get("ansible_access")) is False:
             checks = {
                 task_id: make_not_testable(
@@ -1889,6 +2978,8 @@ def run_build(args):
             "computer_name": source_host.get("computer_name"),
             "classification": "OS_Server",
             "ansible_access": bool(access.get("ansible_access")),
+            "siemens_components": siemens_components,
+            "installed_software": all_installed_software,
             "data_quality": source_host.get("datenqualitaet"),
             "pruefungen": checks,
             "informationen": information,

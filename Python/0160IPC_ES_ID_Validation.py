@@ -50,8 +50,6 @@ def run_build(args):
         "IPC0059",
         "IPC0060",
         "IPC0063",
-        "IPC0065",
-        "IPC0066",
         "IPC0070",
         "IPC0072",
         "IPC0073",
@@ -1192,12 +1190,13 @@ def run_build(args):
         if task_id in {"IPC0050", "IPC0053"}:
             return compact_network(value)
 
-        if task_id == "IPC0060":
+        if task_id in {"IPC0060", "IPC0189"}:
             data = as_dict(value)
             if not data:
                 return "NICHT_PRUEFBAR"
+            domain_name = data.get("Domain") or data.get("Workgroup")
             return "Domain={domain}; OU={ou}; DN={dn}".format(
-                domain=text(data.get("Domain")) or "-",
+                domain=text(domain_name) or "-",
                 ou=text(data.get("ComputerAccountOU") or data.get("ComputerAccountParentDN")) or "-",
                 dn=text(data.get("ComputerAccountDN")) or "-",
             )
@@ -1926,13 +1925,25 @@ def run_build(args):
         # --------------------------------------------------------------
         # IPC0053 - Redundanzbus-Informationen ausgeben.
         # --------------------------------------------------------------
-        information["IPC0053"] = make_information(
-            "IPC0053",
-            "Redundanzbus-Adresse einstellen",
-            redundanzbus if redundanzbus else None,
-            "Initial_Valid.NetworkAdapters",
-            "Ausgabe des vollstaendigen Redundanzbus-Adapters; keine IP-Sollwertpruefung in dieser ID.",
-        )
+        if isinstance(network_adapters, list) and redundanzbus:
+            information["IPC0053"] = make_information(
+                "IPC0053",
+                "Redundanzbus-Adresse einstellen",
+                redundanzbus,
+                "Initial_Valid.NetworkAdapters",
+                "Ausgabe des vollstaendigen Redundanzbus-Adapters; keine IP-Sollwertpruefung in dieser ID.",
+            )
+        else:
+            checks["IPC0053"] = make_check(
+                "IPC0053",
+                "Redundanzbus-Adresse einstellen",
+                False if isinstance(network_adapters, list) else None,
+                {"Adapter": "Redundanzbus", "Present": True},
+                {"MatchingAdapters": redundanzbus} if isinstance(network_adapters, list) else None,
+                "Initial_Valid.NetworkAdapters",
+                "Wenn kein Redundanzbus vorhanden ist, wird die ID als NOK bewertet.",
+            )
+            information.pop("IPC0053", None)
 
         # --------------------------------------------------------------
         # IPC0054 - nicht benoetigte physische Adapter deaktivieren.
@@ -1940,7 +1951,10 @@ def run_build(args):
         # Fuer ES wird die maximal erlaubte Zahl aktivierter Hardware-NICs
         # ueber Semaphore vorgegeben.
         # --------------------------------------------------------------
-        max_enabled = int_value(adapter_policy.get("max_enabled_physical_adapters"))
+        max_by_type = as_dict(adapter_policy.get("max_enabled_physical_adapters_by_type"))
+        max_enabled = int_value(max_by_type.get("ES"))
+        if max_enabled is None:
+            max_enabled = int_value(adapter_policy.get("max_enabled_physical_adapters"))
         ipc0054_state = None
         ipc0054_ist = None
         if isinstance(network_adapters, list) and physical_adapters:
@@ -3590,125 +3604,33 @@ def run_build(args):
             )
 
         # --------------------------------------------------------------
-        # IPC0187 - VNC-Firewallregel nur bei Workgroup-Rechnern.
+        # IPC0187 - VNC-Server-Firewallregel fuer alle Netzwerkprofile.
         # --------------------------------------------------------------
         part_of_domain = bool_value(as_dict(domain_info).get("PartOfDomain"))
-        if part_of_domain is True:
-            checks["IPC0187"] = make_ignored(
-                "IPC0187",
-                "VNC-Firewallregel fuer Arbeitsgruppe",
-                "Nur relevant, wenn der Rechner keiner Domaene angehoert.",
-                "Initial_Valid.DomainInformation",
-            )
-        elif part_of_domain is None:
-            checks["IPC0187"] = make_check(
-                "IPC0187",
-                "VNC-Firewallregel fuer Arbeitsgruppe",
-                None,
-                {"Profiles": ["Domain", "Private", "Public"]},
-                None,
-                "Initial_Valid.DomainInformation + Firewall_SMB_Patch_Valid.Firewall",
-            )
+        fw_rules = [row for row in as_list(as_dict(firewall).get("Rules")) if isinstance(row, dict)]
+        candidates = []
+        for rule in fw_rules:
+            searchable = " ".join([text(rule.get("Name")), text(rule.get("DisplayName")), text(rule.get("DisplayGroup")), text(rule.get("Description"))])
+            if regex_match(r"(?i)VNC", searchable) and bool_value(rule.get("Enabled")) is True and text(rule.get("Action")).lower() == "allow" and profile_is_all(rule.get("Profile")):
+                candidates.append(rule)
+        checks["IPC0187"] = make_check("IPC0187", "VNC-Firewallregel fuer Arbeitsgruppe", bool(candidates) if isinstance(firewall, dict) else None,
+            {"Enabled": True, "Action": "Allow", "Profiles": ["Domain", "Private", "Public"]}, candidates if isinstance(firewall, dict) else None,
+            "Firewall_SMB_Patch_Valid.Firewall.Rules")
+
+        checks["IPC0188"] = make_check("IPC0188", "host/lmhost Dateien verteilen", None,
+            {"hosts": True, "lmhosts": True}, None, "Direkt/PowerShell/Test-Path")
+
+        if part_of_domain is False:
+            checks.pop("IPC0189", None)
+            information["IPC0189"] = make_information("IPC0189", "Arbeitsgruppe einstellen", domain_info, "Initial_Valid.DomainInformation")
+        elif part_of_domain is True:
+            checks["IPC0189"] = make_ignored("IPC0189", "Arbeitsgruppe einstellen", "Domaenenmitglied; Arbeitsgruppe nicht relevant.", "Initial_Valid.DomainInformation")
+            information.pop("IPC0189", None)
         else:
-            fw_rules = [
-                row for row in as_list(as_dict(firewall).get("Rules"))
-                if isinstance(row, dict)
-            ]
-            candidates = []
-            for rule in fw_rules:
-                searchable = " ".join([
-                    text(rule.get("Name")),
-                    text(rule.get("DisplayName")),
-                    text(rule.get("DisplayGroup")),
-                    text(rule.get("Description")),
-                ])
-                if not regex_match(r"(?i)VNC", searchable):
-                    continue
-                if text(rule.get("Enabled")).lower() not in {"true", "1"}:
-                    continue
-                if text(rule.get("Direction")).lower() != "inbound":
-                    continue
-                if text(rule.get("Action")).lower() != "allow":
-                    continue
+            checks["IPC0189"] = make_check("IPC0189", "Arbeitsgruppe einstellen", None, None, None, "Initial_Valid.DomainInformation")
 
-                profile_text = text(rule.get("Profile"))
-                normalized_profiles = profile_text.lower()
-                all_profiles = (
-                    normalized_profiles in {"any", "all"}
-                    or all(
-                        profile.lower() in normalized_profiles
-                        for profile in ("Domain", "Private", "Public")
-                    )
-                )
-                if all_profiles:
-                    candidates.append(rule)
-
-            checks["IPC0187"] = make_check(
-                "IPC0187",
-                "VNC-Firewallregel fuer Arbeitsgruppe",
-                bool(candidates) if isinstance(firewall, dict) else None,
-                {
-                    "DomainMember": False,
-                    "VncInboundAllow": True,
-                    "Profiles": ["Domain", "Private", "Public"],
-                },
-                candidates,
-                "Firewall_SMB_Patch_Valid.Firewall.Rules",
-            )
-
-        # --------------------------------------------------------------
-        # IPC0189 - Arbeitsgruppe nur bei nicht-domainjoined ES.
-        # --------------------------------------------------------------
-        workgroup_expected = text(
-            as_dict(expected.get("workgroup")).get("expected_name")
-        )
-        if part_of_domain is True:
-            checks["IPC0189"] = make_ignored(
-                "IPC0189",
-                "Arbeitsgruppe einstellen",
-                "Nur relevant, wenn der Rechner keiner Domaene angehoert.",
-                "Initial_Valid.DomainInformation",
-            )
-        elif isinstance(domain_info, dict):
-            actual_workgroup = text(domain_info.get("Workgroup"))
-            checks["IPC0189"] = make_check(
-                "IPC0189",
-                "Arbeitsgruppe einstellen",
-                actual_workgroup.lower() == workgroup_expected.lower(),
-                {"Workgroup": workgroup_expected},
-                {"Workgroup": actual_workgroup},
-                "Initial_Valid.DomainInformation",
-            )
-        else:
-            checks["IPC0189"] = make_check(
-                "IPC0189",
-                "Arbeitsgruppe einstellen",
-                None,
-                {"Workgroup": workgroup_expected},
-                None,
-                "Initial_Valid.DomainInformation",
-            )
-
-        # --------------------------------------------------------------
-        # IPC0190 - VNC-Verbindung neu starten.
-        # Der Neustart ist ein historischer Vorgang. Als belastbare
-        # Endzustands-Evidenz wird der aktuelle UltraVNC-Dienstzustand
-        # dokumentiert.
-        # --------------------------------------------------------------
-        vnc_runtime_services = find_services(
-            services,
-            r"(?i)UltraVNC|uvnc|winvnc",
-        )
-        information["IPC0190"] = make_information(
-            "IPC0190",
-            "VNC Verbindung",
-            vnc_runtime_services if isinstance(services_snapshot, dict) else None,
-            "Certificates_Services_Drivers_Valid.Services",
-            (
-                "Der historische Neustart ist nicht beweisbar. Dokumentiert wird "
-                "der aktuelle UltraVNC-Dienstzustand."
-            ),
-        )
+        checks["IPC0190"] = make_ignored("IPC0190", "VNC Verbindung", "Gemaess Vorgabe ignorieren.", "0160-Prueflogik")
+        information.pop("IPC0190", None)
 
         # --------------------------------------------------------------
         # IPC0191 - Admin_L nur bei Workgroup-Rechnern.
@@ -4191,12 +4113,6 @@ def run_build(args):
             "0160-Prueflogik",
         )
 
-        checks["IPC0188"] = make_ignored(
-            "IPC0188",
-            "host/lmhost Dateien verteilen",
-            "Task wird nicht automatisch geprueft; anlagenspezifische Dateiinhalte.",
-            "0160-Prueflogik",
-        )
 
         checks["IPC0186"] = make_ignored(
             "IPC0186",
@@ -4204,6 +4120,10 @@ def run_build(args):
             "OS-Client-spezifische Aufgabe; OS Clients werden aktuell ignoriert.",
             "Aktueller ES-only Scope",
         )
+
+        for tid, name in (("IPC0207", "PM-Logon RT Konfiguration"), ("IPC0208", "PM-Logon Konfiguration verteilen"), ("IPC0209", "PM-Logon Konfiguration anpassen")):
+            checks[tid] = make_ignored(tid, name, "Gemaess Vorgabe ignorieren.", "0160-Prueflogik")
+            information.pop(tid, None)
 
         # IPC0143/IPC0144 werden nachfolgend als direkte
         # Zertifikats-INFORMATION ausgegeben. IPC0145/IPC0146 bleiben
@@ -4334,8 +4254,8 @@ def run_build(args):
             "Rechnername",
             "Computerart",
             "Ansible-Zugriff",
-            "Siemens-Komponenten",
-            "Installierte-Software-Gesamt",
+            "Installierte Software Siemens mit Version",
+            "Installierte Software Gesamt mit Version",
             *TASK_IDS,
         ])
 
@@ -4382,15 +4302,15 @@ def run_merge(args):
     live_dir = Path(args.live_dir)
 
     direct_ids = [
-        "IPC0046", "IPC0047", "IPC0048", "IPC0055", "IPC0063", "IPC0066",
+        "IPC0046", "IPC0047", "IPC0048", "IPC0055", "IPC0063",
         "IPC0070", "IPC0073", "IPC0074", "IPC0075", "IPC0076", "IPC0083",
         "IPC0087", "IPC0089", "IPC0145", "IPC0146", "IPC0148", "IPC0160",
-        "IPC0161", "IPC0167", "IPC0178", "IPC0182", "IPC0183", "IPC0184",
-        "IPC0200", "IPC0234", "IPC0247", "IPC0250", "IPC0251", "IPC0252",
+        "IPC0161", "IPC0167", "IPC0168", "IPC0178", "IPC0182", "IPC0187", "IPC0188",
+        "IPC0200", "IPC0234", "IPC0245", "IPC0246", "IPC0247", "IPC0250", "IPC0251", "IPC0252",
         "IPC0263", "IPC0264", "IPC0265", "IPC0267", "IPC0268", "IPC0269",
         "IPC0270", "IPC0271",
     ]
-    direct_information_ids = ["IPC0077", "IPC0143", "IPC0144", "IPC0152"]
+    direct_information_ids = ["IPC0077", "IPC0143", "IPC0144", "IPC0152", "IPC0183", "IPC0184"]
 
     with output_path.open("r", encoding="utf-8-sig") as handle:
         output = json.load(handle)
@@ -4406,7 +4326,6 @@ def run_merge(args):
             "IPC0048": "Region - Copy Settings fuer Willkommensseite und neue Benutzer",
             "IPC0055": "DNS und WINS-Server eintragen",
             "IPC0063": "Sichtbarkeit im Netzwerk",
-            "IPC0066": "VNC-Einstellungen konfigurieren - File Transfer",
             "IPC0070": "UltraVNC Viewer installieren",
             "IPC0073": "Restore Image loeschen",
             "IPC0074": "Taskleiste",
@@ -4427,6 +4346,8 @@ def run_merge(args):
             "IPC0184": "Hintergrundbild anpassen",
             "IPC0200": "WSUSClientManager ablegen",
             "IPC0234": "Auslagerungsdatei konfigurieren",
+            "IPC0245": "VNC-Viewer Firewallregel alle Profile",
+            "IPC0246": "Firewall fuer alle Profile aktiviert",
             "IPC0247": "Defender - Manipulationsschutz",
             "IPC0250": "Defender - Downloads blockieren deaktiviert",
             "IPC0251": "Defender Sicherheitsstatus i.O.",
@@ -4457,6 +4378,8 @@ def run_merge(args):
             "IPC0143": "Zertifikate - WinCC OPC UA Client / SIMATIC NET OPC Server",
             "IPC0144": "Zertifikate - WinCC OPC UA Client / OS-Stationen",
             "IPC0152": "Datenschutz-/Privacy-Einstellungen",
+            "IPC0183": "BGSiVaaS Administrator-/Ausfuehrungsevidenz",
+            "IPC0184": "BGSiVaaS Autorun-/Benutzerevidenz",
         }
         return {
             "id": task_id,
@@ -4566,7 +4489,6 @@ def run_merge(args):
         "IPC0048: Welcome Screen + Default User International Registry",
         "IPC0055: Terminalbus DNS + NetBT WINS NameServerList",
         "IPC0063: aktive Windows-Firewallregeln fuer Netzwerkerkennung und Datei-/Druckerfreigabe",
-        "IPC0066: UltraVNC ultravnc.ini",
         "IPC0070: UltraVNC Server/Viewer Dateien und Dienst",
         "IPC0073: D:\\Images",
         "IPC0074/IPC0075: HKCU Explorer Advanced",
@@ -4579,15 +4501,17 @@ def run_merge(args):
         "IPC0148: SystemRestore policy + root/default:SystemRestoreConfig",
         "IPC0152: INFORMATION - Windows Privacy Registry",
         "IPC0160/IPC0161: Get-TlsCipherSuite",
-        "IPC0167: Test-Path D:\\Projekt",
-        "IPC0178: Office Registry + WINWORD/EXCEL executable evidence",
-        "IPC0182/IPC0183: BGSiVaaS path + startup shortcut LinkFlags",
-        "IPC0184: BGSiVaaS Win32_Process",
+        "IPC0167/IPC0168: Test-Path D:\\Projekt + SMB Share/NTFS ACL",
+        "IPC0178: WINWORD/EXCEL executable evidence",
+        "IPC0182: BGSiVaaS Installationspfad",
+        "IPC0183/IPC0184: INFORMATION - BGInfoAutoruns + LocalUsers + Process/Prefetch-Evidenz",
+        "IPC0187/IPC0188: VNC-Server-Firewallregel + hosts/lmhosts-Dateien",
         "IPC0200: WSUSClientManager path + WSUS policy/reachability",
         "IPC0234: Win32_ComputerSystem + Win32_PageFileSetting/Usage",
+        "IPC0245/IPC0246: VNC-Viewer-Firewallregel + Firewallprofile",
         "IPC0247: Get-MpComputerStatus.IsTamperProtected",
-        "IPC0250/IPC0251: SmartScreenPuaEnabled + Referenzprüfung",
-        "IPC0252: UltraVNC Viewer + HKCR .vnc association",
+        "IPC0250: SmartScreenPuaEnabled; IPC0251: Get-MpComputerStatus Schutzstatus",
+        "IPC0252: UltraVNC Viewer vorhanden",
         "IPC0263-IPC0271: CIM BIOS/Firmware Provider Discovery",
     ]
 
