@@ -497,6 +497,8 @@ TASK_IDS = [
     "IPC0141",
     "IPC0142",
     "IPC0144",
+    "IPC0145",
+    "IPC0146",
     "IPC0147",
     "IPC0149",
     "IPC0150",
@@ -636,6 +638,8 @@ TASK_NAMES = {
     "IPC0141": 'Setupdatei ausführen',
     "IPC0142": 'Watchdog und OPC UA server',
     "IPC0144": 'Zertifikate austauschen',
+    "IPC0145": 'Zertifikate austauschen - WinCC OPC UA Client / ORCLA OPC UA Server',
+    "IPC0146": 'Zertifikate austauschen - Online-Modus',
     "IPC0147": 'Zugriffsskript ausführen',
     "IPC0149": 'Deinstallieren von Windows-Komponenten',
     "IPC0150": 'BitLocker Aktivierung',
@@ -697,9 +701,116 @@ TASK_NAMES = {
 
 ROLE_EXCLUDED_IDS = [
     "IPC0097", "IPC0103", "IPC0105", "IPC0109", "IPC0133", "IPC0134", "IPC0135",
-    "IPC0143", "IPC0145", "IPC0146", "IPC0148", "IPC0152", "IPC0171", "IPC0177",
+    "IPC0143", "IPC0148", "IPC0152", "IPC0171", "IPC0177",
     "IPC0178", "IPC0179", "IPC0186", "IPC0222", "IPC0223", "IPC0248", "IPC0249", "IPC0254",
 ]
+
+
+def normalize_expected_config(raw_expected):
+    """
+    Akzeptiert sowohl die alte flache 0170-Sollwertstruktur als auch den
+    gemeinsamen ipc_es_validation_expected-Block von 0160.
+
+    Es werden nur eindeutig ableitbare OS-Server-Werte uebernommen. Fehlt
+    ein projektspezifischer Sollwert, bleibt er absichtlich leer, damit
+    daraus spaeter NICHT_PRUEFBAR statt eines erfundenen NOK entsteht.
+    """
+    raw = as_dict(raw_expected)
+    if isinstance(raw.get("ipc_es_validation_expected"), dict):
+        block = as_dict(raw.get("ipc_es_validation_expected"))
+    elif isinstance(raw.get("ipc_os_server_validation_expected"), dict):
+        block = as_dict(raw.get("ipc_os_server_validation_expected"))
+    else:
+        block = raw
+
+    normalized = dict(block)
+
+    network = as_dict(block.get("network"))
+    adapter_policy = as_dict(network.get("adapter_policy"))
+    terminalbus = as_dict(network.get("terminalbus"))
+    anlagenbus = as_dict(network.get("anlagenbus"))
+    redundanzbus = as_dict(network.get("redundanzbus"))
+
+    allowed_names = [text(x) for x in as_list(adapter_policy.get("allowed_names")) if text(x)]
+    if "present_adapters" not in normalized and allowed_names:
+        normalized["present_adapters"] = allowed_names
+
+    if "terminalbus_adapter_regex" not in normalized:
+        normalized["terminalbus_adapter_regex"] = terminalbus.get("name_regex") or r"^Terminalbus$"
+
+    if "network_adapter_name_regex" not in normalized:
+        role_regexes = [
+            text(terminalbus.get("name_regex")),
+            text(anlagenbus.get("name_regex")),
+            text(redundanzbus.get("name_regex")),
+        ]
+        role_regexes = [value for value in role_regexes if value]
+        if role_regexes:
+            normalized["network_adapter_name_regex"] = "(?:" + "|".join(role_regexes) + ")"
+
+    normalized.setdefault("terminalbus_gateway", terminalbus.get("gateway"))
+    normalized.setdefault("terminalbus_dns_servers", as_list(terminalbus.get("dns_servers")))
+    normalized.setdefault("terminalbus_wins_servers", as_list(terminalbus.get("wins_servers")))
+    normalized.setdefault("enable_lmhosts", 0)
+
+    # Nicht aus allowed_names ableiten: "vorhanden" und "aktiv erlaubt" sind
+    # unterschiedliche Anforderungen.
+    normalized.setdefault("absent_adapters", [])
+    normalized.setdefault("allowed_enabled_adapter_names", [])
+
+    domain = as_dict(block.get("domain"))
+    if "computer_ou_regex" not in normalized and domain.get("ou_regex"):
+        normalized["computer_ou_regex"] = domain.get("ou_regex")
+
+    normalized.setdefault("admin_l_user", as_dict(block.get("builtin_admin")).get("name") or "Admin_L")
+    normalized.setdefault("timezone_id", as_dict(block.get("time")).get("timezone_id") or "W. Europe Standard Time")
+    normalized.setdefault("keyboard", as_dict(block.get("keyboard")))
+
+    vnc_rules = [
+        text(as_dict(item).get("name_regex"))
+        for item in as_list(as_dict(block.get("vnc_firewall")).get("rules"))
+        if text(as_dict(item).get("name_regex"))
+    ]
+    if "firewall_rule_name_patterns" not in normalized and vnc_rules:
+        normalized["firewall_rule_name_patterns"] = vnc_rules
+
+    power_os = as_dict(as_dict(as_dict(block.get("power")).get("by_type")).get("OS_Server"))
+    if "power_plan_regex" not in normalized and power_os.get("active_plan_name_regex"):
+        normalized["power_plan_regex"] = power_os.get("active_plan_name_regex")
+    normalized.setdefault("display_timeout_ac_minutes", power_os.get("display_timeout_ac_minutes"))
+    normalized.setdefault("disk_timeout_ac_minutes", power_os.get("disk_timeout_ac_minutes"))
+
+    hardening = as_dict(block.get("hardening"))
+    disabled_service_patterns = [
+        text(as_dict(item).get("name_regex"))
+        for item in as_list(as_dict(hardening.get("services")).get("disabled"))
+        if text(as_dict(item).get("name_regex"))
+    ]
+    if "disabled_service_patterns" not in normalized and disabled_service_patterns:
+        normalized["disabled_service_patterns"] = disabled_service_patterns
+
+    protocol_config = as_dict(as_dict(hardening.get("tls")).get("protocols"))
+    disabled_protocols = []
+    enabled_protocols = []
+    for protocol_name, requirement in protocol_config.items():
+        enabled = bool_value(as_dict(requirement).get("enabled"))
+        if enabled is False:
+            disabled_protocols.append(protocol_name)
+        elif enabled is True:
+            enabled_protocols.append(protocol_name)
+    if "disabled_schannel_protocols" not in normalized and disabled_protocols:
+        normalized["disabled_schannel_protocols"] = disabled_protocols
+    if "enabled_schannel_protocols" not in normalized and enabled_protocols:
+        normalized["enabled_schannel_protocols"] = enabled_protocols
+
+    project_share = as_dict(as_dict(block.get("filesystem")).get("project_share"))
+    if "project_folder" not in normalized and project_share.get("path"):
+        normalized["project_folder"] = project_share.get("path")
+    if "project_share" not in normalized and project_share.get("share_name"):
+        normalized["project_share"] = project_share.get("share_name")
+
+    normalized["_shared_expected"] = block
+    return normalized
 
 
 def component_records(windows_components):
@@ -939,24 +1050,71 @@ def evaluate_os_server(host, expected):
         wanted for wanted in as_list(expected.get("present_adapters"))
         if not any(text(name).lower() == text(wanted).lower() for name in adapter_names)
     ]
+    present_adapters_expected = [text(x) for x in as_list(expected.get("present_adapters")) if text(x)]
+    ipc0049_state = None if not present_adapters_expected else not missing_present
     checks["IPC0049"] = make_check(
-        "IPC0049", "Netzwerkadapter umbenennen", not missing_present,
-        {"ExpectedPresentAdapters": expected.get("present_adapters")},
+        "IPC0049", "Netzwerkadapter umbenennen", ipc0049_state,
+        {"ExpectedPresentAdapters": present_adapters_expected},
         {"AdapterNames": adapter_names, "Missing": missing_present},
-        "Initial_Valid.NetworkAdapters[].Name", "Semaphore: expected_present_adapters",
+        "Initial_Valid.NetworkAdapters[].Name",
+        "Semaphore: network.adapter_policy.allowed_names / expected_present_adapters",
+        "Ohne konfigurierte Sollnamen wird kein NOK aus einer leeren Sollwertliste abgeleitet.",
     )
 
-    # IPC0050 / 0052 / 0055 - komplette Adapterinformationen.
+    # IPC0050 / IPC0052 - komplette Adapterinformationen.
     for task_id, task_name in (
         ("IPC0050", "Terminalbus-Adresse einstellen"),
         ("IPC0052", "Anlagenbus-Adresse einstellen"),
-        ("IPC0055", "DNS und WINS-Server eintragen"),
     ):
         info[task_id] = make_information(
             task_id, task_name, network_adapters,
             "Initial_Valid.NetworkAdapters",
             "Vollstaendige Adapterinformationen fuer den manuellen Abgleich.",
         )
+
+    # IPC0055 - zentrale DNS-/WINS-Sollwerte plus Snapshot-Evidenz.
+    # WINS ist je Collector-Version nicht vollstaendig normalisiert; deshalb
+    # bleibt die Bibliotheksauswertung INFORMATION und erfindet kein NOK.
+    terminalbus_for_name_servers = [
+        adapter for adapter in as_list(network_adapters)
+        if isinstance(adapter, dict)
+        and regex_search(expected.get("terminalbus_adapter_regex"), adapter.get("Name"))
+    ]
+    name_server_evidence = []
+    for adapter in terminalbus_for_name_servers:
+        dns_actual = (
+            adapter.get("DNSServers")
+            or adapter.get("DnsServers")
+            or as_dict(adapter.get("DNS")).get("Servers")
+            or as_dict(adapter.get("DNS")).get("ServerAddresses")
+        )
+        wins_data = as_dict(adapter.get("WINS"))
+        wins_actual = (
+            wins_data.get("NameServerList")
+            or wins_data.get("Servers")
+            or wins_data.get("WINSServers")
+        )
+        name_server_evidence.append({
+            "Name": adapter.get("Name"),
+            "DNS": dns_actual,
+            "WINS": wins_actual,
+            "RawWINS": wins_data,
+        })
+    info["IPC0055"] = make_information(
+        "IPC0055", "DNS und WINS-Server eintragen",
+        {
+            "ExpectedDNS": as_list(expected.get("terminalbus_dns_servers")),
+            "ExpectedWINS": as_list(expected.get("terminalbus_wins_servers")),
+            "Adapters": name_server_evidence,
+        } if isinstance(network_adapters, list) else None,
+        "Initial_Valid.NetworkAdapters",
+        (
+            "DNS/WINS-Sollwerte stammen aus der gemeinsamen Semaphore-Struktur. "
+            "Die vollstaendige NetBT-NameServerList ist im Snapshot nicht fuer jede "
+            "Collector-Version garantiert; eine direkte Livepruefung kann diese "
+            "Information spaeter zu OK/NOK verfeinern."
+        ),
+    )
 
     # IPC0051 - finaler Terminalbus-Gatewaywert 192.168.210.254.
     terminalbus = [
@@ -967,14 +1125,16 @@ def evaluate_os_server(host, expected):
         {"Name": adapter.get("Name"), "Gateway": as_list(adapter.get("Gateway"))}
         for adapter in terminalbus
     ]
+    expected_gateway = text(expected.get("terminalbus_gateway")) or "192.168.210.254"
     gateway_ok = bool(terminalbus) and any(
-        "192.168.210.254" in [text(x) for x in as_list(adapter.get("Gateway"))]
+        expected_gateway in [text(x) for x in as_list(adapter.get("Gateway"))]
         for adapter in terminalbus
     )
     checks["IPC0051"] = make_check(
         "IPC0051", "Terminalbus Gateway korrigieren", gateway_ok,
-        "192.168.210.254", gateway_details,
-        "Initial_Valid.NetworkAdapters[].Routes", "Aufgabenliste",
+        expected_gateway, gateway_details,
+        "Initial_Valid.NetworkAdapters[].Routes",
+        "Semaphore: network.terminalbus.gateway / Aufgabenliste",
     )
 
     # IPC0053 - Redundanzbus 192.168.230.x.
@@ -1013,20 +1173,33 @@ def evaluate_os_server(host, expected):
         and text(adapter.get("Status")).lower() in {"up", "connected"}
         and bool_value(adapter.get("Virtual")) is not True
     ]
+    allowed_enabled = [text(x) for x in as_list(expected.get("allowed_enabled_adapter_names")) if text(x)]
     disallowed_enabled = [
         adapter for adapter in enabled_hardware
-        if text(adapter.get("Name")).lower() not in {text(x).lower() for x in as_list(expected.get("allowed_enabled_adapter_names"))}
+        if allowed_enabled
+        and text(adapter.get("Name")).lower() not in {name.lower() for name in allowed_enabled}
     ]
+    adapter_policy_configured = bool(as_list(expected.get("absent_adapters")) or allowed_enabled)
+    ipc0054_state = (
+        bool(as_list(network_adapters)) and absent_ok and not disallowed_enabled
+        if adapter_policy_configured
+        else None
+    )
     checks["IPC0054"] = make_check(
         "IPC0054", "Nicht benötigte Netzwerkadapter deaktivieren",
-        bool(as_list(network_adapters)) and absent_ok and not disallowed_enabled,
+        ipc0054_state,
         {
             "AbsentOrDisabled": expected.get("absent_adapters"),
-            "AllowedEnabledAdapters": expected.get("allowed_enabled_adapter_names"),
+            "AllowedEnabledAdapters": allowed_enabled,
         },
-        {"AbsentChecks": absent_results, "DisallowedEnabledAdapters": disallowed_enabled},
+        {
+            "AbsentChecks": absent_results,
+            "EnabledHardwareAdapters": enabled_hardware,
+            "DisallowedEnabledAdapters": disallowed_enabled,
+        },
         "Initial_Valid.NetworkAdapters",
-        "Semaphore: expected_absent_adapters + allowed_enabled_adapter_names",
+        "Semaphore: rollenabhaengige Adapter-Policy",
+        "Ohne explizite OS-Server-Policy fuer deaktivierte/erlaubte aktive Adapter wird kein NOK erfunden.",
     )
 
     # IPC0056 - LMHOSTS deaktiviert.
@@ -1063,11 +1236,19 @@ def evaluate_os_server(host, expected):
         text(domain.get("ComputerAccountDN")), text(domain.get("ComputerAccountParentDN")),
         text(domain.get("ComputerAccountOU")), " ".join(text(x) for x in as_list(domain.get("OrganizationalUnits"))),
     ])
+    ou_regex = text(expected.get("computer_ou_regex"))
+    ipc0060_state = (
+        bool(ou_text.strip()) and regex_search(ou_regex, ou_text)
+        if ou_regex
+        else None
+    )
     checks["IPC0060"] = make_check(
         "IPC0060", "Rechner in der OU einsortieren",
-        bool(ou_text.strip()) and regex_search(expected.get("computer_ou_regex"), ou_text),
-        expected.get("computer_ou_regex"), domain,
-        "Initial_Valid.DomainInformation", "Semaphore: expected_computer_ou_regex",
+        ipc0060_state,
+        ou_regex or "projektspezifischer OU-Sollwert nicht konfiguriert", domain,
+        "Initial_Valid.DomainInformation",
+        "Semaphore: domain.ou_regex / expected_computer_ou_regex",
+        "Ohne projektspezifischen OU-Sollwert wird kein NOK erzeugt.",
     )
 
     # IPC0065 / IPC0066 - vorhandene UltraVNC-Evidenz ausgeben; genaue
@@ -1145,6 +1326,54 @@ def evaluate_os_server(host, expected):
         expected.get("power_plan_regex"), active_power_plan,
         "Initial_Valid.InstallationBestPractice.ActivePowerPlan",
         "Semaphore: expected_power_plan_regex",
+    )
+    # IPC0087 - Energie-Endzustand soweit der Snapshot ihn belegt.
+    expected_display = int_value(expected.get("display_timeout_ac_minutes"))
+    expected_disk = int_value(expected.get("disk_timeout_ac_minutes"))
+    display_actual = (
+        active_power_plan.get("DisplayTimeoutAcMinutes")
+        if "DisplayTimeoutAcMinutes" in active_power_plan
+        else as_dict(best_practice).get("DisplayTimeoutAcMinutes")
+    )
+    disk_actual = (
+        active_power_plan.get("DiskTimeoutAcMinutes")
+        if "DiskTimeoutAcMinutes" in active_power_plan
+        else as_dict(best_practice).get("DiskTimeoutAcMinutes")
+    )
+    plan_ok_0087 = (
+        regex_search(expected.get("power_plan_regex"), plan_name)
+        if plan_name and expected.get("power_plan_regex")
+        else None
+    )
+    timeout_states = []
+    if expected_display is not None and display_actual is not None:
+        timeout_states.append(int_value(display_actual) == expected_display)
+    if expected_disk is not None and disk_actual is not None:
+        timeout_states.append(int_value(disk_actual) == expected_disk)
+    ipc0087_state = None
+    if plan_ok_0087 is False or any(state is False for state in timeout_states):
+        ipc0087_state = False
+    elif plan_ok_0087 is True and len(timeout_states) == 2 and all(timeout_states):
+        ipc0087_state = True
+    checks["IPC0087"] = make_check(
+        "IPC0087", 'Energieoptionen auf "Höchstleistung" setzen',
+        ipc0087_state,
+        {
+            "ActivePlanNameRegex": expected.get("power_plan_regex"),
+            "DisplayTimeoutAcMinutes": expected_display,
+            "DiskTimeoutAcMinutes": expected_disk,
+        },
+        {
+            "ActivePowerPlan": active_power_plan,
+            "DisplayTimeoutAcMinutes": display_actual,
+            "DiskTimeoutAcMinutes": disk_actual,
+        },
+        "Initial_Valid.InstallationBestPractice",
+        "Semaphore: power.by_type.OS_Server",
+        (
+            "OK wird nur vergeben, wenn Plan und beide AC-Timeouts belastbar vorliegen. "
+            "Fehlende Timeout-Felder fuehren zu NICHT_PRUEFBAR statt zu einem erfundenen OK/NOK."
+        ),
     )
 
     # IPC0102 - Redundanzbus / SIMATIC Shell indirekt.
@@ -1245,12 +1474,19 @@ def evaluate_os_server(host, expected):
     )
 
     # IPC0143-0146 - lokale Zertifikat-/Binding-Evidenz.
+    # IPC0145/0146 bleiben fuer OS Server im Scope, weil ORCLA/OPC-UA auf
+    # dem OS Server betrieben wird. Ohne eindeutige Trust-Store-
+    # Normalisierung bleibt die Bewertung bewusst INFORMATION.
     cert_info = {"Certificates": certificates, "Bindings": certificate_bindings}
     for task_id in ("IPC0143", "IPC0144", "IPC0145", "IPC0146"):
         info[task_id] = make_information(
-            task_id, "Zertifikate austauschen", cert_info,
+            task_id, TASK_NAMES.get(task_id, "Zertifikate austauschen"), cert_info,
             "Certificates_Services_Drivers_Valid.Certificates/CertificateBindings",
-            "Lokale Zertifikate und Bindings werden ausgegeben; der Austausch zwischen Kommunikationspartnern ist lokal nicht vollstaendig beweisbar.",
+            (
+                "Lokale Zertifikate und Bindings werden ausgegeben. Der Austausch "
+                "zwischen Kommunikationspartnern ist aus der lokalen Snapshotquelle "
+                "nicht vollstaendig beweisbar."
+            ),
         )
 
     # IPC0150 - BitLocker Systemvolume C:.
@@ -1403,11 +1639,21 @@ def evaluate_os_server(host, expected):
     )
 
     # IPC0182 / 0183 / 0184 - BGSiVaaS.
-    bg_matches = startup_matches(autoruns, r"BGSiVaaS|BGInfo")
+    shared_tools = as_dict(as_dict(expected.get("_shared_expected")).get("tools"))
+    bgsivaas_expected = as_dict(shared_tools.get("bgsivaas"))
+    bg_pattern = bgsivaas_expected.get("startup_target_regex") or r"BGSiVaaS|BGInfo"
+    bg_matches = startup_matches(autoruns, bg_pattern)
     checks["IPC0182"] = make_check(
-        "IPC0182", "BGInfo/BGSiVaaS", bool(bg_matches),
-        "BGSiVaaS/BGInfo in Common Startup oder Autorun vorhanden", bg_matches,
-        "Firewall_SMB_Patch_Valid.Autoruns", "Aufgabenliste",
+        "IPC0182", "BGInfo/BGSiVaaS",
+        bool(bg_matches) if isinstance(autoruns, dict) else None,
+        {
+            "StartupRequired": bool_value(bgsivaas_expected.get("startup_required")) if bgsivaas_expected else True,
+            "TargetRegex": bg_pattern,
+            "ExecutablePath": bgsivaas_expected.get("executable_path"),
+        },
+        bg_matches if isinstance(autoruns, dict) else None,
+        "Firewall_SMB_Patch_Valid.Autoruns",
+        "Semaphore: tools.bgsivaas / Aufgabenliste",
     )
     info["IPC0183"] = make_information(
         "IPC0183", "BGInfo/BGSiVaaS - Als Administrator ausführen", bg_matches,
@@ -1471,11 +1717,21 @@ def evaluate_os_server(host, expected):
         "Microsoft Edge 137.0.3296.83 installiert",
     )
 
-    # IPC0234 - Pagefiles indirekt.
+    # IPC0234 - Pagefiles: Snapshot-Evidenz plus zentraler Sollwert.
+    shared_system = as_dict(as_dict(expected.get("_shared_expected")).get("system"))
+    pagefile_expected = as_dict(shared_system.get("pagefile"))
+    pagefiles_actual = as_dict(best_practice).get("PageFiles")
     info["IPC0234"] = make_information(
-        "IPC0234", "Auslagerungsdatei konfigurieren", as_dict(best_practice).get("PageFiles"),
+        "IPC0234", "Auslagerungsdatei konfigurieren",
+        {
+            "Expected": pagefile_expected,
+            "ActualPageFiles": pagefiles_actual,
+        } if (pagefile_expected or pagefiles_actual is not None) else None,
         "Initial_Valid.InstallationBestPractice.PageFiles",
-        "Aktuelle Pagefile-Pfade und Groessen; AutomaticManagedPagefile ist nicht als eigenes Snapshotfeld vorhanden.",
+        (
+            "Soll- und Istwerte werden gemeinsam ausgegeben. Automatisches OK/NOK "
+            "erst bei eindeutig normalisierten SystemManaged-/AutomaticManaged-Feldern."
+        ),
     )
 
     # IPC0235 / IPC0238 - WinCC Autostart und Service-Mode Evidenz.
@@ -1860,7 +2116,7 @@ def run_build(args):
     with library_path.open("r", encoding="utf-8-sig") as handle:
         library = json.load(handle)
     with expected_path.open("r", encoding="utf-8-sig") as handle:
-        expected = json.load(handle)
+        expected = normalize_expected_config(json.load(handle))
 
     if not isinstance(library, dict) or library.get("library_type") != "IPC_Information_Library":
         raise RuntimeError("Die Eingabedatei ist keine gueltige IPC_Information_Library von 0150.")
