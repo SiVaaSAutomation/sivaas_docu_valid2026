@@ -54,9 +54,7 @@
         msg: "nmap ist unter {{ nmap_binary }} nicht ausfuehrbar."
       when: nmap_check.rc != 0
 
-    # Zuerst werden alle von nmap als erreichbar erkannten Netzwerkteilnehmer
-    # aufgenommen. Dadurch landen auch Teilnehmer ohne offenen WinRM-Port
-    # spaeter in der Gruppe kein_zugriff.
+    # Zuerst werden alle von nmap als erreichbar erkannten Netzwerkteilnehmer aufgenommen. Dadurch landen auch Teilnehmer ohne offenen WinRM-Port später in der Gruppe kein_zugriff.
     - name: Erreichbare Netzwerkteilnehmer mit nmap erkennen
       ansible.builtin.shell: |
         set -o pipefail
@@ -71,9 +69,7 @@
       ansible.builtin.set_fact:
         discovered_reachable_hosts: "{{ discovery_reachable_scan.stdout_lines | default([]) | unique | list }}"
 
-    # Die vorhandene WinRM-nmap-Struktur bleibt erhalten. Sie ermittelt,
-    # welche der Teilnehmer Port 5985 und/oder 5986 offen haben und welche
-    # Verbindung Ansible anschliessend testen soll.
+    # Die vorhandene WinRM-nmap-Struktur bleibt erhalten. Sie ermittelt, welche der Teilnehmer Port 5985 und/oder 5986 offen haben und welche Verbindung Ansible anschliessend testen soll.
     - name: Zielnetz nach offenen WinRM-Ports scannen
       ansible.builtin.shell: |
         set -o pipefail
@@ -110,9 +106,7 @@
           - "Erreichbare IPs: {{ discovered_reachable_hosts }}"
           - "WinRM-IP-Adressen: {{ discovered_winrm_hosts | map('regex_replace', ';.*$', '') | list }}"
 
-    # Zuerst alle erreichbaren Teilnehmer aufnehmen. Ohne erkannten WinRM-Port
-    # werden sie nicht per win_ping angesprochen, sondern direkt als
-    # kein_zugriff behandelt.
+    # Zuerst alle erreichbaren Teilnehmer aufnehmen. Ohne erkannten WinRM-Port werden sie nicht per win_ping angesprochen, sondern direkt als kein_zugriff behandelt.
     - name: Alle erreichbaren Netzwerkteilnehmer temporaer aufnehmen
       ansible.builtin.add_host:
         name: "{{ item }}"
@@ -132,9 +126,7 @@
       loop: "{{ discovered_reachable_hosts }}"
       no_log: true
 
-    # Teilnehmer mit offenem WinRM-Port werden mit den vom vorhandenen Scan
-    # ermittelten Verbindungsdaten aktualisiert. Dieser Schritt nimmt auch
-    # Hosts auf, die auf Host-Discovery nicht antworten, aber WinRM offen haben.
+    # Teilnehmer mit offenem WinRM-Port werden mit den vom vorhandenen Scan ermittelten Verbindungsdaten aktualisiert. Dieser Schritt nimmt auch Hosts auf, die auf Host-Discovery nicht antworten, aber WinRM offen haben.
     - name: Teilnehmer mit offenem WinRM-Port aktualisieren
       ansible.builtin.add_host:
         name: "{{ item.split(';')[0] }}"
@@ -400,8 +392,7 @@
         path: "{{ result_dir }}"
         state: directory
         
-    # Diese Datei dient nur als interne Uebergabe an den lokalen Python-Block
-    # und wird nach der Klassifizierung wieder entfernt.
+    # Diese Datei dient nur als interne Uebergabe an den lokalen Python-Block und wird nach der Klassifizierung wieder entfernt.
     - name: Discovery-Rohdaten temporaer als JSON bereitstellen
       ansible.builtin.copy:
         dest: "{{ result_dir }}/.ipc_discovery_raw_{{ hostvars['localhost'].discovery_timestamp }}.json"
