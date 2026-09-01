@@ -1,0 +1,1633 @@
+{
+  "generated_at": "2026-08-13T11:26:09+02:00",
+  "target_network": "192.168.15.33/24",
+  "classification_version": 3,
+  "groups": {
+    "ipc_es": [
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "ES01DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC PCS 7 Tools HUP",
+            "publisher": "Siemens",
+            "version": "10.00.0101"
+          }
+        ],
+        "ip": "192.168.15.71",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "19044",
+        "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+        "os_product_type": 1,
+        "os_version": "10.0.19044",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC NET Core Server S7",
+            "name": "SIMATIC NET Core Server S7",
+            "start_mode": "Manual",
+            "state": "Stopped"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "ES",
+        "classification_confidence": "medium",
+        "classification_reason": "+6 Rechnername 'ES01DEST' passt zum ES-Muster; +2 Engineering-/S7-Dienst erkannt",
+        "classification_scores": {
+          "ES": 6,
+          "OS_Server": -2,
+          "OS_Client": 4
+        },
+        "classification_evidence": {
+          "ES": [
+            "+6 Rechnername 'ES01DEST' passt zum ES-Muster",
+            "+2 Engineering-/S7-Dienst erkannt"
+          ],
+          "OS_Server": [],
+          "OS_Client": [
+            "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+          ]
+        }
+      }
+    ],
+    "ipc_os": [
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "SRV01DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Management Agent",
+            "publisher": "Siemens Aktiengesellschaft",
+            "version": "10.00.0101"
+          }
+        ],
+        "ip": "192.168.15.72",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "20348",
+        "os_caption": "Microsoft Windows Server 2022 Standard",
+        "os_product_type": 3,
+        "os_version": "10.0.20348",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC NET Core Server FDL",
+            "name": "SIMATIC NET Core Server FDL",
+            "start_mode": "Manual",
+            "state": "Stopped"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Server",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Server",
+        "classification_scores": {
+          "ES": 1,
+          "OS_Server": 1,
+          "OS_Client": -2
+        },
+        "classification_evidence": {
+          "ES": [
+            "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+          ],
+          "OS_Server": [
+            "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+          ],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "SRV02DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Management Agent",
+            "publisher": "Siemens Aktiengesellschaft",
+            "version": "10.00.0101"
+          }
+        ],
+        "ip": "192.168.15.73",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "20348",
+        "os_caption": "Microsoft Windows Server 2022 Standard",
+        "os_product_type": 3,
+        "os_version": "10.0.20348",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC NET Core Server FDL",
+            "name": "SIMATIC NET Core Server FDL",
+            "start_mode": "Manual",
+            "state": "Stopped"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Server",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Server",
+        "classification_scores": {
+          "ES": 1,
+          "OS_Server": 1,
+          "OS_Client": -2
+        },
+        "classification_evidence": {
+          "ES": [
+            "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+          ],
+          "OS_Server": [
+            "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+          ],
+          "OS_Client": []
+        }
+      }
+    ],
+    "ipc_os_client": [
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "CL01DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Logon",
+            "publisher": "Siemens",
+            "version": "02.00.0003"
+          }
+        ],
+        "ip": "192.168.15.74",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "19044",
+        "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+        "os_product_type": 1,
+        "os_version": "10.0.19044",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC Trace Service",
+            "name": "S7TraceServiceX",
+            "start_mode": "Auto",
+            "state": "Running"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Client",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": -2,
+          "OS_Client": 4
+        },
+        "classification_evidence": {
+          "ES": [
+            "+2 Engineering-/S7-Dienst erkannt"
+          ],
+          "OS_Server": [],
+          "OS_Client": [
+            "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+          ]
+        }
+      },
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "CL02DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Logon",
+            "publisher": "Siemens",
+            "version": "02.00.0003"
+          }
+        ],
+        "ip": "192.168.15.75",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "19044",
+        "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+        "os_product_type": 1,
+        "os_version": "10.0.19044",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC Trace Service",
+            "name": "S7TraceServiceX",
+            "start_mode": "Auto",
+            "state": "Running"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Client",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": -2,
+          "OS_Client": 4
+        },
+        "classification_evidence": {
+          "ES": [
+            "+2 Engineering-/S7-Dienst erkannt"
+          ],
+          "OS_Server": [],
+          "OS_Client": [
+            "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+          ]
+        }
+      },
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "CL03DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Logon",
+            "publisher": "Siemens",
+            "version": "02.00.0003"
+          }
+        ],
+        "ip": "192.168.15.76",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "19044",
+        "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+        "os_product_type": 1,
+        "os_version": "10.0.19044",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC Trace Service",
+            "name": "S7TraceServiceX",
+            "start_mode": "Auto",
+            "state": "Running"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Client",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": -2,
+          "OS_Client": 4
+        },
+        "classification_evidence": {
+          "ES": [
+            "+2 Engineering-/S7-Dienst erkannt"
+          ],
+          "OS_Server": [],
+          "OS_Client": [
+            "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+          ]
+        }
+      },
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "CL04DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Logon",
+            "publisher": "Siemens",
+            "version": "02.00.0003"
+          }
+        ],
+        "ip": "192.168.15.77",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "19044",
+        "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+        "os_product_type": 1,
+        "os_version": "10.0.19044",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC Trace Service",
+            "name": "S7TraceServiceX",
+            "start_mode": "Auto",
+            "state": "Running"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Client",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": -2,
+          "OS_Client": 4
+        },
+        "classification_evidence": {
+          "ES": [
+            "+2 Engineering-/S7-Dienst erkannt"
+          ],
+          "OS_Server": [],
+          "OS_Client": [
+            "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+          ]
+        }
+      },
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "CL05DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Logon",
+            "publisher": "Siemens",
+            "version": "02.00.0003"
+          }
+        ],
+        "ip": "192.168.15.78",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "19044",
+        "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+        "os_product_type": 1,
+        "os_version": "10.0.19044",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC Trace Service",
+            "name": "S7TraceServiceX",
+            "start_mode": "Auto",
+            "state": "Running"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Client",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": -2,
+          "OS_Client": 4
+        },
+        "classification_evidence": {
+          "ES": [
+            "+2 Engineering-/S7-Dienst erkannt"
+          ],
+          "OS_Server": [],
+          "OS_Client": [
+            "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+          ]
+        }
+      },
+      {
+        "access_error_code": "OK",
+        "access_error_detail": "",
+        "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+        "ansible_access": true,
+        "computername": "CL06DEST",
+        "domain": "DEST-OST.local",
+        "error": null,
+        "installed_products": [
+          {
+            "name": "SIMATIC Logon",
+            "publisher": "Siemens",
+            "version": "02.00.0003"
+          }
+        ],
+        "ip": "192.168.15.79",
+        "manufacturer": "SIEMENS AG",
+        "model": "SIMATIC IPC647E",
+        "os_build_number": "19044",
+        "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+        "os_product_type": 1,
+        "os_version": "10.0.19044",
+        "part_of_domain": true,
+        "relevant_services": [
+          {
+            "display_name": "SIMATIC Trace Service",
+            "name": "S7TraceServiceX",
+            "start_mode": "Auto",
+            "state": "Running"
+          }
+        ],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "OS_Client",
+        "classification_confidence": "override",
+        "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": -2,
+          "OS_Client": 4
+        },
+        "classification_evidence": {
+          "ES": [
+            "+2 Engineering-/S7-Dienst erkannt"
+          ],
+          "OS_Server": [],
+          "OS_Client": [
+            "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+          ]
+        }
+      }
+    ],
+    "sonstige": [],
+    "kein_zugriff": [
+      {
+        "access_error_code": "WINRM_PORT_CLOSED",
+        "access_error_detail": "",
+        "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "installed_products": [],
+        "ip": "192.168.15.1",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": false,
+        "winrm_open_ports": "",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "AUTHENTICATION_FAILED",
+        "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+        "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "installed_products": [],
+        "ip": "192.168.15.32",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "WINRM_PORT_CLOSED",
+        "access_error_detail": "",
+        "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "installed_products": [],
+        "ip": "192.168.15.33",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": false,
+        "winrm_open_ports": "",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "AUTHENTICATION_FAILED",
+        "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+        "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "installed_products": [],
+        "ip": "192.168.15.70",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "AUTHENTICATION_FAILED",
+        "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+        "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "installed_products": [],
+        "ip": "192.168.15.87",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "WINRM_PORT_CLOSED",
+        "access_error_detail": "",
+        "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "installed_products": [],
+        "ip": "192.168.15.101",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": false,
+        "winrm_open_ports": "",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "WINRM_PORT_CLOSED",
+        "access_error_detail": "",
+        "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "installed_products": [],
+        "ip": "192.168.15.102",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": false,
+        "winrm_open_ports": "",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "WINRM_PORT_CLOSED",
+        "access_error_detail": "",
+        "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "installed_products": [],
+        "ip": "192.168.15.104",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": false,
+        "winrm_open_ports": "",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      },
+      {
+        "access_error_code": "AUTHENTICATION_FAILED",
+        "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+        "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "ansible_access": false,
+        "computername": "",
+        "domain": "",
+        "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "installed_products": [],
+        "ip": "192.168.15.111",
+        "manufacturer": "",
+        "model": "",
+        "os_build_number": "",
+        "os_caption": "",
+        "os_product_type": 0,
+        "os_version": "",
+        "part_of_domain": false,
+        "relevant_services": [],
+        "winrm_detected": true,
+        "winrm_open_ports": "5985",
+        "winrm_port": 5985,
+        "winrm_scheme": "http",
+        "classification": "Kein_Zugriff",
+        "classification_confidence": "none",
+        "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+        "classification_scores": {
+          "ES": 0,
+          "OS_Server": 0,
+          "OS_Client": 0
+        },
+        "classification_evidence": {
+          "ES": [],
+          "OS_Server": [],
+          "OS_Client": []
+        }
+      }
+    ]
+  },
+  "hosts": [
+    {
+      "access_error_code": "WINRM_PORT_CLOSED",
+      "access_error_detail": "",
+      "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "installed_products": [],
+      "ip": "192.168.15.1",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": false,
+      "winrm_open_ports": "",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "AUTHENTICATION_FAILED",
+      "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+      "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "installed_products": [],
+      "ip": "192.168.15.32",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "WINRM_PORT_CLOSED",
+      "access_error_detail": "",
+      "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "installed_products": [],
+      "ip": "192.168.15.33",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": false,
+      "winrm_open_ports": "",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "AUTHENTICATION_FAILED",
+      "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+      "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "installed_products": [],
+      "ip": "192.168.15.70",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "ES01DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC PCS 7 Tools HUP",
+          "publisher": "Siemens",
+          "version": "10.00.0101"
+        }
+      ],
+      "ip": "192.168.15.71",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "19044",
+      "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+      "os_product_type": 1,
+      "os_version": "10.0.19044",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC NET Core Server S7",
+          "name": "SIMATIC NET Core Server S7",
+          "start_mode": "Manual",
+          "state": "Stopped"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "ES",
+      "classification_confidence": "medium",
+      "classification_reason": "+6 Rechnername 'ES01DEST' passt zum ES-Muster; +2 Engineering-/S7-Dienst erkannt",
+      "classification_scores": {
+        "ES": 6,
+        "OS_Server": -2,
+        "OS_Client": 4
+      },
+      "classification_evidence": {
+        "ES": [
+          "+6 Rechnername 'ES01DEST' passt zum ES-Muster",
+          "+2 Engineering-/S7-Dienst erkannt"
+        ],
+        "OS_Server": [],
+        "OS_Client": [
+          "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+        ]
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "SRV01DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Management Agent",
+          "publisher": "Siemens Aktiengesellschaft",
+          "version": "10.00.0101"
+        }
+      ],
+      "ip": "192.168.15.72",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "20348",
+      "os_caption": "Microsoft Windows Server 2022 Standard",
+      "os_product_type": 3,
+      "os_version": "10.0.20348",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC NET Core Server FDL",
+          "name": "SIMATIC NET Core Server FDL",
+          "start_mode": "Manual",
+          "state": "Stopped"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Server",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Server",
+      "classification_scores": {
+        "ES": 1,
+        "OS_Server": 1,
+        "OS_Client": -2
+      },
+      "classification_evidence": {
+        "ES": [
+          "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+        ],
+        "OS_Server": [
+          "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+        ],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "SRV02DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Management Agent",
+          "publisher": "Siemens Aktiengesellschaft",
+          "version": "10.00.0101"
+        }
+      ],
+      "ip": "192.168.15.73",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "20348",
+      "os_caption": "Microsoft Windows Server 2022 Standard",
+      "os_product_type": 3,
+      "os_version": "10.0.20348",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC NET Core Server FDL",
+          "name": "SIMATIC NET Core Server FDL",
+          "start_mode": "Manual",
+          "state": "Stopped"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Server",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Server",
+      "classification_scores": {
+        "ES": 1,
+        "OS_Server": 1,
+        "OS_Client": -2
+      },
+      "classification_evidence": {
+        "ES": [
+          "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+        ],
+        "OS_Server": [
+          "+1 Windows-Server erkannt (Microsoft Windows Server 2022 Standard)"
+        ],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "CL01DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Logon",
+          "publisher": "Siemens",
+          "version": "02.00.0003"
+        }
+      ],
+      "ip": "192.168.15.74",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "19044",
+      "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+      "os_product_type": 1,
+      "os_version": "10.0.19044",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC Trace Service",
+          "name": "S7TraceServiceX",
+          "start_mode": "Auto",
+          "state": "Running"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Client",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": -2,
+        "OS_Client": 4
+      },
+      "classification_evidence": {
+        "ES": [
+          "+2 Engineering-/S7-Dienst erkannt"
+        ],
+        "OS_Server": [],
+        "OS_Client": [
+          "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+        ]
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "CL02DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Logon",
+          "publisher": "Siemens",
+          "version": "02.00.0003"
+        }
+      ],
+      "ip": "192.168.15.75",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "19044",
+      "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+      "os_product_type": 1,
+      "os_version": "10.0.19044",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC Trace Service",
+          "name": "S7TraceServiceX",
+          "start_mode": "Auto",
+          "state": "Running"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Client",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": -2,
+        "OS_Client": 4
+      },
+      "classification_evidence": {
+        "ES": [
+          "+2 Engineering-/S7-Dienst erkannt"
+        ],
+        "OS_Server": [],
+        "OS_Client": [
+          "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+        ]
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "CL03DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Logon",
+          "publisher": "Siemens",
+          "version": "02.00.0003"
+        }
+      ],
+      "ip": "192.168.15.76",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "19044",
+      "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+      "os_product_type": 1,
+      "os_version": "10.0.19044",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC Trace Service",
+          "name": "S7TraceServiceX",
+          "start_mode": "Auto",
+          "state": "Running"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Client",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": -2,
+        "OS_Client": 4
+      },
+      "classification_evidence": {
+        "ES": [
+          "+2 Engineering-/S7-Dienst erkannt"
+        ],
+        "OS_Server": [],
+        "OS_Client": [
+          "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+        ]
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "CL04DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Logon",
+          "publisher": "Siemens",
+          "version": "02.00.0003"
+        }
+      ],
+      "ip": "192.168.15.77",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "19044",
+      "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+      "os_product_type": 1,
+      "os_version": "10.0.19044",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC Trace Service",
+          "name": "S7TraceServiceX",
+          "start_mode": "Auto",
+          "state": "Running"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Client",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": -2,
+        "OS_Client": 4
+      },
+      "classification_evidence": {
+        "ES": [
+          "+2 Engineering-/S7-Dienst erkannt"
+        ],
+        "OS_Server": [],
+        "OS_Client": [
+          "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+        ]
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "CL05DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Logon",
+          "publisher": "Siemens",
+          "version": "02.00.0003"
+        }
+      ],
+      "ip": "192.168.15.78",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "19044",
+      "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+      "os_product_type": 1,
+      "os_version": "10.0.19044",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC Trace Service",
+          "name": "S7TraceServiceX",
+          "start_mode": "Auto",
+          "state": "Running"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Client",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": -2,
+        "OS_Client": 4
+      },
+      "classification_evidence": {
+        "ES": [
+          "+2 Engineering-/S7-Dienst erkannt"
+        ],
+        "OS_Server": [],
+        "OS_Client": [
+          "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+        ]
+      }
+    },
+    {
+      "access_error_code": "OK",
+      "access_error_detail": "",
+      "access_error_reason": "Ansible-/WinRM-Zugriff erfolgreich",
+      "ansible_access": true,
+      "computername": "CL06DEST",
+      "domain": "DEST-OST.local",
+      "error": null,
+      "installed_products": [
+        {
+          "name": "SIMATIC Logon",
+          "publisher": "Siemens",
+          "version": "02.00.0003"
+        }
+      ],
+      "ip": "192.168.15.79",
+      "manufacturer": "SIEMENS AG",
+      "model": "SIMATIC IPC647E",
+      "os_build_number": "19044",
+      "os_caption": "Microsoft Windows 10 IoT Enterprise LTSC",
+      "os_product_type": 1,
+      "os_version": "10.0.19044",
+      "part_of_domain": true,
+      "relevant_services": [
+        {
+          "display_name": "SIMATIC Trace Service",
+          "name": "S7TraceServiceX",
+          "start_mode": "Auto",
+          "state": "Running"
+        }
+      ],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "OS_Client",
+      "classification_confidence": "override",
+      "classification_reason": "Manuelle Zuordnung ueber ipc_role_overrides: OS_Client",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": -2,
+        "OS_Client": 4
+      },
+      "classification_evidence": {
+        "ES": [
+          "+2 Engineering-/S7-Dienst erkannt"
+        ],
+        "OS_Server": [],
+        "OS_Client": [
+          "+4 Windows-Workstation erkannt (Microsoft Windows 10 IoT Enterprise LTSC)"
+        ]
+      }
+    },
+    {
+      "access_error_code": "AUTHENTICATION_FAILED",
+      "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+      "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "installed_products": [],
+      "ip": "192.168.15.87",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "WINRM_PORT_CLOSED",
+      "access_error_detail": "",
+      "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "installed_products": [],
+      "ip": "192.168.15.101",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": false,
+      "winrm_open_ports": "",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "WINRM_PORT_CLOSED",
+      "access_error_detail": "",
+      "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "installed_products": [],
+      "ip": "192.168.15.102",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": false,
+      "winrm_open_ports": "",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "WINRM_PORT_CLOSED",
+      "access_error_detail": "",
+      "access_error_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "installed_products": [],
+      "ip": "192.168.15.104",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": false,
+      "winrm_open_ports": "",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "Kein offener WinRM-Port 5985/5986 durch nmap erkannt",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    },
+    {
+      "access_error_code": "AUTHENTICATION_FAILED",
+      "access_error_detail": "Task failed: ntlm: the specified credentials were rejected by the server",
+      "access_error_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "ansible_access": false,
+      "computername": "",
+      "domain": "",
+      "error": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "installed_products": [],
+      "ip": "192.168.15.111",
+      "manufacturer": "",
+      "model": "",
+      "os_build_number": "",
+      "os_caption": "",
+      "os_product_type": 0,
+      "os_version": "",
+      "part_of_domain": false,
+      "relevant_services": [],
+      "winrm_detected": true,
+      "winrm_open_ports": "5985",
+      "winrm_port": 5985,
+      "winrm_scheme": "http",
+      "classification": "Kein_Zugriff",
+      "classification_confidence": "none",
+      "classification_reason": "WinRM erreichbar, aber Anmeldung bzw. Authentifizierung fehlgeschlagen",
+      "classification_scores": {
+        "ES": 0,
+        "OS_Server": 0,
+        "OS_Client": 0
+      },
+      "classification_evidence": {
+        "ES": [],
+        "OS_Server": [],
+        "OS_Client": []
+      }
+    }
+  ],
+  "summary": {
+    "ipc_es": 1,
+    "ipc_os": 2,
+    "ipc_os_client": 6,
+    "sonstige": 0,
+    "kein_zugriff": 9
+  },
+  "kein_zugriff_summary": {
+    "WINRM_PORT_CLOSED": 5,
+    "AUTHENTICATION_FAILED": 4
+  }
+}

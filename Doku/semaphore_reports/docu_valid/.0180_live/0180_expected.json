@@ -1,0 +1,735 @@
+{
+    "builtin_admin": {
+        "password_expires": false
+    },
+    "chipset": {
+        "regex": "SW480_480M22",
+        "release_date": "2022-10-12"
+    },
+    "desktop": {
+        "pointer_scheme_regex": "(?i)(Windows\\s*(Schwarz|Black).*(sehr\\s*(gro\u00df|gross)|extra\\s*large))",
+        "screen_saver_by_type": {
+            "ES": {
+                "enabled": true,
+                "password_protected": true,
+                "timeout_seconds": 1800
+            },
+            "OS_Client": {
+                "enabled": false,
+                "password_protected": true,
+                "timeout_seconds": 1800
+            },
+            "OS_Server": {
+                "enabled": true,
+                "password_protected": true,
+                "timeout_seconds": 1800
+            }
+        }
+    },
+    "domain": {
+        "name": "KUNDE.local"
+    },
+    "filesystem": {
+        "name_resolution_files": {
+            "hosts_path": "C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "lmhosts_path": "C:\\Windows\\System32\\drivers\\etc\\lmhosts",
+            "require_hosts": true,
+            "require_lmhosts": true
+        },
+        "project_share": {
+            "ntfs_permissions": [
+                {
+                    "identity_regex": "(?i)(^|\\\\)(Authenticated Users|Authentifizierte Benutzer)$",
+                    "required_rights": [
+                        "Modify"
+                    ]
+                },
+                {
+                    "identity_regex": "(?i)(^|\\\\)(SYSTEM|NT AUTHORITY\\\\SYSTEM)$",
+                    "required_rights": [
+                        "FullControl"
+                    ]
+                },
+                {
+                    "identity_regex": "(?i)(^|\\\\)SIMATIC HMI$",
+                    "required_rights": [
+                        "FullControl"
+                    ]
+                },
+                {
+                    "identity_regex": "(?i)(^|\\\\)SIMATIC HMI CS$",
+                    "required_rights": [
+                        "FullControl"
+                    ]
+                },
+                {
+                    "identity_regex": "(?i)(^|\\\\)(Administrators|Administratoren)$",
+                    "required_rights": [
+                        "FullControl"
+                    ]
+                },
+                {
+                    "identity_regex": "(?i)(^|\\\\)(Users|Benutzer)$",
+                    "required_rights": [
+                        "ReadAndExecute"
+                    ]
+                }
+            ],
+            "path": "D:\\Projekt",
+            "share_name": "Projekt",
+            "share_permissions": [
+                {
+                    "access_right": "Full",
+                    "identity_regex": "(?i)(^|\\\\)(Administrators|Administratoren)$"
+                },
+                {
+                    "access_right": "Full",
+                    "identity_regex": "(?i)(^|\\\\)SIMATIC HMI$"
+                },
+                {
+                    "access_right": "Read",
+                    "identity_regex": "(?i)(^|\\\\)SIMATIC HMI VIEWER$"
+                }
+            ]
+        }
+    },
+    "firmware": {
+        "bios_checks": {
+            "IPC0263": {
+                "expected_value_regex": "(?i)\\b(Disabled|Disable|Off)\\b",
+                "forbidden_value_regex": "(?i)\\b(Enabled|Enable|On)\\b",
+                "label_regex": "(?i)(USB.*Boot|Boot.*USB)",
+                "minimum_matches": 1
+            },
+            "IPC0264": {
+                "expected_value_regex": "(?i)\\b(Disabled|Disable|Off)\\b",
+                "forbidden_value_regex": "(?i)\\b(Enabled|Enable|On)\\b",
+                "label_regex": "(?i)(MiniCard.*Mode|WLAN|Wireless)",
+                "minimum_matches": 1
+            },
+            "IPC0265": {
+                "expected_value_regex": "(?i)\\b(Disabled|Disable|Off)\\b",
+                "forbidden_value_regex": "(?i)\\b(Enabled|Enable|On)\\b",
+                "label_regex": "(?i)(Super\\s*IO|Serial\\s*Port|COM\\s*[123]|Parallel\\s*Port|LPT)",
+                "minimum_matches": 3
+            },
+            "IPC0267": {
+                "admin_password_status_expected": 1,
+                "expected_value_regex": "(?i)\\bStandard\\b",
+                "label_regex": "(?i)Password\\s*Severity",
+                "minimum_matches": 1
+            },
+            "IPC0268": {
+                "expected_value_regex": "(?i)Previous\\s*State",
+                "label_regex": "(?i)Power\\s*Failure\\s*Recovery",
+                "minimum_matches": 1
+            },
+            "IPC0269": {
+                "expected_value_regex": "(?i)\\b(Disabled|Disable|Off)\\b",
+                "forbidden_value_regex": "(?i)\\b(Enabled|Enable|On)\\b",
+                "label_regex": "(?i)(Wake[- ]?Up.*LAN|Wake.*LAN)",
+                "minimum_matches": 1
+            },
+            "IPC0270": {
+                "expected_value_regex": "(?i)\\b(On|Enabled|Enable)\\b",
+                "forbidden_value_regex": "(?i)\\b(Off|Disabled|Disable)\\b",
+                "label_regex": "(?i)(Bootup\\s*NumLock\\s*State|NumLock)",
+                "minimum_matches": 1
+            },
+            "IPC0271": {
+                "expected_value_regex": "(?i)(Hard\\s*Disk|HDD|SSD|NVMe|Windows\\s*Boot\\s*Manager)",
+                "label_regex": "(?i)(Boot\\s*Option\\s*(#?\\s*1|1)|First\\s*Boot|Boot\\s*Priority.*1)",
+                "minimum_matches": 1
+            }
+        }
+    },
+    "hardening": {
+        "bitlocker": {
+            "system_drive": {
+                "expected_enabled": true,
+                "minimum_encryption_percentage": 100
+            }
+        },
+        "defender": {
+            "maps_reporting": 0,
+            "required_status_true": [
+                "AMServiceEnabled",
+                "AntivirusEnabled",
+                "AntispywareEnabled",
+                "BehaviorMonitorEnabled",
+                "IoavProtectionEnabled",
+                "NISEnabled",
+                "OnAccessProtectionEnabled",
+                "RealTimeProtectionEnabled"
+            ],
+            "submit_samples_consent": 2
+        },
+        "firewall": {
+            "active_network_category": "Private",
+            "required_profiles_enabled": [
+                "Domain",
+                "Private",
+                "Public"
+            ],
+            "vnc_viewer_rule_name_regex": "(?i)(VNC.*Viewer|UltraVNC.*Viewer)"
+        },
+        "privacy": {
+            "registry_expectations": []
+        },
+        "rdp": {
+            "allow_remote_connections": false
+        },
+        "services": {
+            "disabled": [
+                {
+                    "description": "Bluetooth-Audiogateway-Dienst",
+                    "name_regex": "^(BTAGService)$|Bluetooth.*Audio.*Gateway"
+                },
+                {
+                    "description": "Bluetooth-Unterst\u00fctzungsdienst",
+                    "name_regex": "^(bthserv)$|Bluetooth.*Support|Bluetooth-Unterst"
+                },
+                {
+                    "description": "Bluetooth-Unterst\u00fctzungsdienst f\u00fcr Benutzer",
+                    "name_regex": "^BluetoothUserService(_.*)?$|Bluetooth.*User.*Support"
+                },
+                {
+                    "description": "Diagnosediensthost",
+                    "name_regex": "^(WdiServiceHost)$|Diagnostic Service Host|Diagnosediensthost"
+                },
+                {
+                    "description": "Diagnoserichtliniendienst",
+                    "name_regex": "^(DPS)$|Diagnostic Policy|Diagnoserichtlinien"
+                },
+                {
+                    "description": "Funkverwaltungsdienst",
+                    "name_regex": "^(RmSvc)$|Radio Management|Funkverwaltung"
+                },
+                {
+                    "description": "Geolocation-Dienst",
+                    "name_regex": "^(lfsvc)$|Geolocation"
+                },
+                {
+                    "description": "Leistungsprotokolle und -warnungen",
+                    "name_regex": "^(pla)$|Performance Logs|Leistungsprotokolle"
+                },
+                {
+                    "description": "Manager f\u00fcr heruntergeladene Karten",
+                    "name_regex": "^(MapsBroker)$|Downloaded Maps|heruntergeladene Karten"
+                },
+                {
+                    "description": "Siemens Telemetry Connector Service",
+                    "name_regex": "(?i)Siemens.*Telemetry.*Connector"
+                },
+                {
+                    "description": "Telefondienst",
+                    "name_regex": "^(PhoneSvc|TapiSrv)$|Phone Service|Telephony|Telefondienst"
+                },
+                {
+                    "description": "WalletService",
+                    "name_regex": "^(WalletService)$"
+                },
+                {
+                    "description": "Windows Media Player-Netzwerkfreigabedienst",
+                    "name_regex": "^(WMPNetworkSvc)$|Media Player.*Network|Netzwerkfreigabe"
+                },
+                {
+                    "description": "Windows Presentation Foundation-Schriftartcache",
+                    "name_regex": "^(FontCache3\\.0\\.0\\.0)$|Presentation Foundation.*Font|Schriftartcache"
+                },
+                {
+                    "description": "Windows-Dienst f\u00fcr mobile Hotspots",
+                    "name_regex": "^(icssvc)$|Mobile Hotspot|mobile Hotspots"
+                },
+                {
+                    "description": "Windows-Farbsystem",
+                    "name_regex": "^(WcsPlugInService)$|Windows Color System|Windows-Farbsystem"
+                },
+                {
+                    "description": "Windows-Insider-Dienst",
+                    "name_regex": "^(wisvc)$|Windows Insider"
+                },
+                {
+                    "description": "Windows-Sofortverbindung - Konfigurationsregistrierungsstelle",
+                    "name_regex": "^(Wcncsvc)$|Windows Connect Now|Windows-Sofortverbindung"
+                },
+                {
+                    "description": "Xbox Accessory Management Service",
+                    "name_regex": "^(XboxGipSvc)$|Xbox Accessory"
+                },
+                {
+                    "description": "Xbox Live Authentifizierungs-Manager",
+                    "name_regex": "^(XblAuthManager)$|Xbox Live.*Auth"
+                },
+                {
+                    "description": "Xbox Live-Netzwerkservice",
+                    "name_regex": "^(XboxNetApiSvc)$|Xbox Live.*Network|Xbox Live-Netzwerk"
+                },
+                {
+                    "description": "Xbox Live-Spiele speichern",
+                    "name_regex": "^(XblGameSave)$|Xbox Live.*Game Save|Xbox Live-Spiele"
+                },
+                {
+                    "description": "Zahlungs- und NFC/SE-Manager",
+                    "name_regex": "^(SEMgrSvc)$|Payments|NFC|SE-Manager|Zahlungs"
+                },
+                {
+                    "description": "Zertifikatverteilung",
+                    "name_regex": "^(CertPropSvc)$|Certificate Propagation|Zertifikatverteilung"
+                }
+            ]
+        },
+        "smb": {
+            "encryption": {
+                "server_encrypt_data": true
+            },
+            "signing": {
+                "client_require_security_signature": true,
+                "server_enable_security_signature": true,
+                "server_require_security_signature": true
+            }
+        },
+        "system_restore": {
+            "expected_disabled": true,
+            "windows10_only": false
+        },
+        "telemetry": {
+            "allowed_level": 0
+        },
+        "tls": {
+            "allowed_cipher_suites": [
+                "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_DHE_RSA_WITH_AES_128_CBC_SHA256",
+                "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256",
+                "TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",
+                "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+            ],
+            "disabled_cipher_suites": [
+                "TLS_AES_256_GCM_SHA384",
+                "TLS_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+                "TLS_RSA_WITH_NULL_SHA256",
+                "TLS_RSA_WITH_NULL_SHA",
+                "TLS_PSK_WITH_AES_256_GCM_SHA384",
+                "TLS_PSK_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+                "TLS_PSK_WITH_AES_256_CBC_SHA384",
+                "TLS_PSK_WITH_AES_128_CBC_SHA256",
+                "TLS_PSK_WITH_NULL_SHA384",
+                "TLS_PSK_WITH_NULL_SHA256"
+            ],
+            "enforce_allowed_cipher_suite_only": true,
+            "protocols": {
+                "SSL 2.0": {
+                    "disabled_by_default": true,
+                    "enabled": false
+                },
+                "SSL 3.0": {
+                    "disabled_by_default": true,
+                    "enabled": false
+                },
+                "TLS 1.0": {
+                    "disabled_by_default": true,
+                    "enabled": false
+                },
+                "TLS 1.1": {
+                    "disabled_by_default": true,
+                    "enabled": false
+                },
+                "TLS 1.2": {
+                    "disabled_by_default": false,
+                    "enabled": true
+                }
+            }
+        },
+        "windows_features": {
+            "disabled_name_regexes": []
+        }
+    },
+    "keyboard": {
+        "allowed_layout_ids": [
+            "00000407"
+        ],
+        "exact_layout_count": 1
+    },
+    "language": {
+        "tag": "de-DE"
+    },
+    "local_account_token_filter_policy": 1,
+    "network": {
+        "adapter_policy": {
+            "allowed_name_regexes": [],
+            "allowed_names": [
+                "Terminalbus",
+                "Anlagenbus",
+                "Redundanzbus"
+            ],
+            "max_enabled_physical_adapters": 2,
+            "max_enabled_physical_adapters_by_type": {
+                "ES": 2,
+                "OS_Client": 2,
+                "OS_Server": 3
+            },
+            "required_disabled_name_regexes": []
+        },
+        "anlagenbus": {
+            "ipv4_regex": "^192\\.168\\.220\\.",
+            "name_regex": "^Anlagenbus$"
+        },
+        "redundanzbus": {
+            "name_regex": "^Redundanzbus$"
+        },
+        "terminalbus": {
+            "dns_servers": [
+                "192.168.210.91",
+                "192.168.210.92",
+                "192.168.210.93",
+                "192.168.210.94"
+            ],
+            "gateway": "192.168.210.254",
+            "name_regex": "^Terminalbus$",
+            "wins_servers": [
+                "192.168.210.91",
+                "192.168.210.92",
+                "192.168.210.93",
+                "192.168.210.94"
+            ]
+        }
+    },
+    "power": {
+        "by_type": {
+            "ES": {
+                "active_plan_name_regex": "^SIMATIC IPC$",
+                "disk_timeout_ac_minutes": 0,
+                "display_timeout_ac_minutes": 0
+            },
+            "OS_Client": {
+                "active_plan_name_regex": "(?i)^(High performance|H\u00f6chstleistung|Hochleistung)$",
+                "disk_timeout_ac_minutes": 0,
+                "display_timeout_ac_minutes": 0
+            },
+            "OS_Server": {
+                "active_plan_guid": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+                "active_plan_name_regex": "(?i)^(High performance|H\u00f6chstleistung|Hochleistung)$",
+                "disk_timeout_ac_minutes": 0,
+                "display_timeout_ac_minutes": 0
+            }
+        }
+    },
+    "region": {
+        "iso": "DE"
+    },
+    "software": {
+        "edge": {
+            "expected_installed": true,
+            "name_regex": "(?i)^Microsoft\\s*Edge(?:\\s|$)",
+            "version_regex": "(?i)^137\\.0\\.3296\\.83(?:\\D|$)"
+        },
+        "greenshot": {
+            "expected_installed": true,
+            "name_regex": "(?i)^Greenshot(?:\\s|$)",
+            "version_regex": "(?i)^1\\.2\\.10\\.6(?:\\D|$)"
+        },
+        "hup": {
+            "expected_installed": true,
+            "expected_name_regexes": [
+                "(?i)(?:\\bHUP\\b|Hotfix\\s*Update\\s*Package)"
+            ]
+        },
+        "office_2019": {
+            "expected_installed": true,
+            "product_name_regex": "(?i)(Microsoft.*Office.*2019|Office.*2019)",
+            "required_executables": [
+                "WINWORD.EXE",
+                "EXCEL.EXE"
+            ]
+        },
+        "orcla": {
+            "certificate_expectations": {
+                "wincc_client_subject_regexes_on_ipc": [
+                    "(?i)(Siemens.*OPC.*UA.*Client.*WinCC|WinCC.*OPC.*UA.*Client)"
+                ]
+            },
+            "expected_installed": true,
+            "maintenance_functions": {
+                "evidence_regex": "(?i)(PCS\\s*7.*Maintenance|Maintenance\\s*Station|Maintenance.*OS)",
+                "expected_installed": true
+            },
+            "name_regex": "(?i)(SIMATIC\\s*IPC\\s*)?ORCLA",
+            "opcua_service_name": "OrclaOpcUaServerService",
+            "version_regex": "",
+            "watchdog_service_regex": "(?i)(ORCLA.*Watchdog|Watchdog.*ORCLA)"
+        },
+        "pcs7_addons": {
+            "drive_es_pcs7_apl_v10": {
+                "component_id": "DRIVE_ES_PCS7_APL_V10",
+                "expected_installed": true
+            },
+            "industry_library_v10": {
+                "component_id": "INDUSTRY_LIBRARY_V10",
+                "expected_installed": true
+            },
+            "industry_library_v10_upd1": {
+                "expected_installed": true,
+                "name_regex": "(?i)Industry\\s*Library.*V?10(?:\\.0)?.*(Upd|Update)\\s*1",
+                "version_regex": ""
+            },
+            "loher_dynavert_pcs7_v10": {
+                "expected_installed": true,
+                "name_regex": "(?i)(Loher.*Dynavert|Dynavert.*PCS)",
+                "version_regex": ""
+            },
+            "loher_dynavert_toolset": {
+                "expected_installed": true,
+                "required_name_regexes": [
+                    "(?i)(Loher.*Dynavert|Dynavert.*PCS)",
+                    "(?i)modbus[-_\\s]*master318",
+                    "(?i)CP[_\\s-]*Ptp[_\\s-]*Param.*V?5\\.1\\.15"
+                ]
+            },
+            "pcs7_basis_library_v10_sp1_upd1": {
+                "expected_installed": true,
+                "name_regex": "(?i)(PCS\\s*7|SIMATIC).*Basis\\s*Library.*V?10(?:\\.0)?.*SP\\s*1.*(Upd|Update)\\s*1",
+                "version_regex": ""
+            },
+            "pcs7_v10_sp1": {
+                "expected_installed": true,
+                "name_regex": "(?i)(SIMATIC\\s*PCS\\s*7|PCS\\s*7).*V?10(?:\\.0)?.*SP\\s*1",
+                "version_regex": ""
+            },
+            "powercontrol_v91": {
+                "component_id": "POWERCONTROL_V91",
+                "expected_installed": true
+            },
+            "powercontrol_v91_upd1": {
+                "component_id": "POWERCONTROL_V91_UPD1",
+                "expected_installed": true
+            },
+            "s7_f_systems_v64_sp1": {
+                "component_id": "S7_F_SYSTEMS_64_SP1",
+                "expected_installed": true
+            },
+            "safety_matrix_v63_sp1": {
+                "component_id": "SAFETY_MATRIX_63_SP1",
+                "expected_installed": true
+            },
+            "sentron_3wl_3vl_v10": {
+                "component_id": "SENTRON_3WL_3VL_V10",
+                "expected_installed": true
+            },
+            "sentron_3wl_3vl_v10_sp1": {
+                "expected_installed": true,
+                "forbidden_name_regexes": [
+                    "(?i)^(?=.*SENTRON)(?=.*(?:3WL.*3VL|3WLVL))(?=.*V?10(?:\\.0)?)(?!.*SP\\s*1).*$"
+                ],
+                "name_regex": "(?i)SENTRON.*(3WL.*3VL|3WLVL).*V?10(?:\\.0)?.*SP\\s*1",
+                "version_regex": ""
+            },
+            "sentron_pac_v10": {
+                "component_id": "SENTRON_PAC_V10",
+                "expected_installed": true
+            },
+            "sentron_pac_v10_sp1": {
+                "expected_installed": true,
+                "forbidden_name_regexes": [
+                    "(?i)^(?=.*SENTRON)(?=.*PAC)(?=.*V?10(?:\\.0)?)(?!.*SP\\s*1).*$"
+                ],
+                "name_regex": "(?i)SENTRON.*PAC.*V?10(?:\\.0)?.*SP\\s*1",
+                "version_regex": ""
+            },
+            "simocode_migration_legacy_v10": {
+                "component_id": "SIMOCODE_MIGRATION_LEGACY_V10",
+                "expected_installed": true
+            },
+            "simocode_migration_legacy_v10_sp1": {
+                "expected_installed": true,
+                "forbidden_name_regexes": [
+                    "(?i)^(?=.*SIMOCODE)(?=.*Migration)(?=.*Legacy)(?=.*V?10(?:\\.0)?)(?!.*SP\\s*1).*$"
+                ],
+                "name_regex": "(?i)SIMOCODE.*Migration.*Legacy.*V?10(?:\\.0)?.*SP\\s*1",
+                "version_regex": ""
+            },
+            "simocode_pro_v10": {
+                "component_id": "SIMOCODE_PRO_V10",
+                "expected_installed": true
+            },
+            "simocode_pro_v10_sp1": {
+                "expected_installed": true,
+                "name_regex": "(?i)SIMOCODE\\s*pro.*V?10(?:\\.0)?.*SP\\s*1",
+                "version_regex": ""
+            },
+            "sitop_pcs7_apl_v40": {
+                "component_id": "SITOP_PCS7_APL_V40",
+                "expected_installed": true
+            }
+        },
+        "pcs7_basis_library_v10": {
+            "expected_installed": true,
+            "name_regex": "(?i)(SIMATIC\\s*)?PCS\\s*7.*(Basis|Base)\\s*Library.*V?10([\\._ ]?0)?",
+            "version_regex": ""
+        },
+        "pcs7_engineering": {
+            "expected_installed": true,
+            "required_component_ids": [
+                "PCS7_V10",
+                "SIMATIC_LOGON",
+                "SYSTEM_HARDENING",
+                "VERSIONTRAIL"
+            ]
+        },
+        "pcs7_faceplates_v71_sp3_upd1": {
+            "expected_installed": true,
+            "name_regex": "(?i)(SIMATIC\\s*)?PCS\\s*7.*Faceplates?.*V?7[\\._ ]?1.*SP3.*(Upd|Update)?\\s*1",
+            "version_regex": ""
+        },
+        "pcs7_library_v71_sp3_upd4": {
+            "component_id": "PCS7_LIB_V71_SP3_UPD4",
+            "expected_installed": true
+        },
+        "pdf_xchange_editor": {
+            "expected_installed": true,
+            "forbidden_name_regexes": [
+                "(?i)PDF[- ]?XChange.*Updater",
+                "(?i)Tracker.*Updater"
+            ],
+            "name_regex": "(?i)PDF[- ]?XChange.*Editor",
+            "version_regex": "(?i)^10(?:\\.|$)"
+        },
+        "pm_logon": {
+            "configurator_name_regex": "(?i)PM[- ]?Logon.*(Configurator|Konfigurator)",
+            "configurator_required_hostname_regexes": [
+                "(?i).*ES02$"
+            ],
+            "expected_installed": true,
+            "name_regex": "(?i)PM[- ]?Logon",
+            "version_regex": "(?i)(2[\\._ ]?6.*(Upd|Update)[\\s._-]*4|2\\.6(?:\\.\\d+)*\\.4)"
+        },
+        "prerequisites": {
+            "visual_cpp_2010_x86": {
+                "expected_installed": true
+            }
+        },
+        "seven_zip": {
+            "expected_installed": true,
+            "name_regex": "(?i)^7-?Zip",
+            "version_regex": "^24\\.09(?:\\D|$)"
+        },
+        "simatic_logon": {
+            "base_version_regex": "(?i)^2\\.0(?:\\.|$)",
+            "expected_installed": true,
+            "name_regex": "(?i)SIMATIC\\s*Logon",
+            "update1_name_regex": "(?i)SIMATIC\\s*Logon.*(Upd|Update)\\s*1",
+            "update1_version_regex": "(?i)^2\\.0(?:\\.\\d+)*\\.1(?:\\D|$)"
+        },
+        "simatic_shell": {
+            "expected_proxy_stations": [
+                "ES02",
+                "ES03"
+            ]
+        },
+        "ssms": {
+            "expected_installed": true,
+            "name_regex": "(?i)(SQL\\s*Server\\s*Management\\s*Studio|SSMS)",
+            "version_regex": "(?i)^20\\.2\\.1(?:\\D|$)"
+        },
+        "step7": {
+            "expected_installed": true,
+            "name_regex": "(?i)(SIMATIC\\s*)?STEP\\s*7",
+            "version_regex": "(?i)(V?5[\\._ ]?7.*SP2.*(Upd|Update)?\\s*2|5\\.7\\.2(?:\\D|$))"
+        },
+        "ultravnc_server": {
+            "expected_installed": true,
+            "name_regex": "(UltraVNC|uvnc)",
+            "version_regex": "^1\\.4\\.3\\.6(?:\\D|$)"
+        },
+        "ultravnc_viewer": {
+            "expected_installed": true,
+            "file_association_required": true,
+            "version_regex": "^1\\.4\\.3\\.6(?:\\D|$)"
+        },
+        "wincc_opc_server": {
+            "expected_installed": true,
+            "name_regex": "(?i)(WinCC.*OPC|OPC.*Server)",
+            "version_regex": "(?i)(3[\\._ ]?9.*(?:SP|[\\._ ])?12.*(?:Upd|Update|[\\._ ])?5|3\\.9\\.12\\.5(?:\\D|$))"
+        },
+        "winscp": {
+            "expected_installed": true,
+            "name_regex": "(?i)^WinSCP(?:\\s|$)",
+            "version_regex": "(?i)^6\\.5(?:\\.|$)"
+        }
+    },
+    "storage": {
+        "data_drive": {
+            "expected_size_gb_by_type": {
+                "ES": 764,
+                "OS_Client": 764,
+                "OS_Server": 764
+            },
+            "letter": "D:",
+            "tolerance_gb": 5
+        },
+        "system_drive": {
+            "letter": "C:",
+            "minimum_size_gb": 100
+        }
+    },
+    "system": {
+        "pagefile": {
+            "accept_global_automatic_management": true,
+            "required_drives": [
+                "C:",
+                "D:"
+            ],
+            "system_managed": true
+        }
+    },
+    "tools": {
+        "bgsivaas": {
+            "executable_path": "C:\\Programme\\Siemens\\BGSiVaaS\\BGSiVaas.exe",
+            "install_path": "C:\\Programme\\Siemens\\BGSiVaaS",
+            "run_as_administrator": true,
+            "startup_required": true,
+            "startup_target_regex": "(?i)BGSiVaaS"
+        },
+        "wsus_client_manager": {
+            "expected_exists": true,
+            "path": "C:\\Programme\\WSUSClientManager"
+        }
+    },
+    "updates": {
+        "required_kbs_by_id": {
+            "IPC0222": "KB5055518",
+            "IPC0223": "KB5050416",
+            "IPC0224": "KB5055526",
+            "IPC0225": "KB5050187",
+            "IPC0226": "KB5046860",
+            "IPC0227": "KB5054833",
+            "IPC0232": "KB5058385",
+            "IPC0233": "KB5046859"
+        }
+    },
+    "vnc_firewall": {
+        "rules": [
+            {
+                "local_port": "5800",
+                "name_regex": "VNC.*5800"
+            },
+            {
+                "local_port": "5900",
+                "name_regex": "VNC.*5900"
+            }
+        ]
+    },
+    "workgroup": {
+        "expected_name": "WORKGROUP"
+    }
+}
